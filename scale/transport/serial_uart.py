@@ -10,13 +10,10 @@ class SerialUART(BaseUART):
         if not self.ser.is_open:
             self.ser.open()
 
-    def send(self, data):
+    def send(self, data, newLine):
+        if newLine:
+            data = data + "\n"
         self.ser.write(data.encode('utf-8'))
-
-    def receive(self):
-        if self.ser.in_waiting:
-            return self.ser.readline().decode('utf-8').strip()
-        return ""
 
     def close(self):
         self.ser.close()
@@ -24,3 +21,23 @@ class SerialUART(BaseUART):
     def stream(self):
         while True:
             yield self.receive()
+
+    def receive(self):
+        if self.ser.in_waiting:
+            return self.ser.readline().decode('utf-8').strip()
+        return ""
+
+
+
+#    def receive(self):
+#        if self.ser.in_waiting:
+#            return self.ser.read(self.ser.in_waiting)
+#        return b''
+
+#    def receive(self):
+#        if self.ser.in_waiting:
+#            try:
+#                return self.ser.readline()
+#            except Exception as e:
+#                print("readline() 오류:", e)
+#        return b''
