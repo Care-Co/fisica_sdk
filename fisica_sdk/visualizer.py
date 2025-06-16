@@ -7,6 +7,12 @@ from .analyzer import decode_raw, preprocess_grid_data, pca_bounding_box_dimensi
 
 logger = logging.getLogger(__name__)
 
+# def visualize(hex_data: str, mode: str = 'BLUR', scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
+#     vis = Visualizer()
+#     vis.scale(scale)
+#     image = vis.visualize(hex_data, mode)
+#     cv2.imshow("test",image)
+#     cv2.waitKey()
 def visualize(hex_data: str, mode: str = 'BLUR', scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
     vis = Visualizer()
     vis.scale(scale)

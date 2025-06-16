@@ -3,8 +3,13 @@ import cv2
 import time
 
 def test(data):
+    sdk.visualize(data)
+    
+    
+    print(f"data : {data}")
     image = sdk.visualize(data)
     cv2.imshow("as",image)
+    cv2.waitKey()
 
 sdk = FisicaSDK(debug=True)
 

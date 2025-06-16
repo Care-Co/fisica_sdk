@@ -53,8 +53,8 @@ class SerialHandler:
                     self.handler_count += 1
                     if self.ser.in_waiting:
                         data = self.ser.read(self.ser.in_waiting)
-                        self._log(f"[DEBUG] data read: {data}")
-                        self._log(f"[DEBUG] data read: {data}")
+                        # self._log(f"[DEBUG] data read: {data}")
+                        self._log(f"data read")
                         self.buffer += data
 
                         # \n 기준으로 명령어/로그 분리
@@ -66,17 +66,17 @@ class SerialHandler:
                                 self._handle_text_line(line)
                             else:
                                 self._handle_binary_line(line)
-                        self._log(f"[DEBUG] buffer snapshot: {self.buffer.hex()[-100:]}")
+                        # self._log(f"[DEBUG] buffer snapshot: {self.buffer.hex()[-100:]}")
                         while len(self.buffer) >= 645:
                             footer_index = self.buffer.rfind(b'\xf0\x0f')
-                            self._log(f"[DEBUG] buffer len: {len(self.buffer)}, footer_index: {footer_index}")
+                            # self._log(f"[DEBUG] buffer len: {len(self.buffer)}, footer_index: {footer_index}")
                             if footer_index != -1:
                                 packet_start = footer_index - 643
-                                self._log(f"[DEBUG] packet_start: {packet_start}")
-                                self._log(f"[DEBUG] computed packet_start: {packet_start}")
+                                # self._log(f"[DEBUG] packet_start: {packet_start}")
+                                # self._log(f"[DEBUG] computed packet_start: {packet_start}")
                                 if packet_start >= 0 and len(self.buffer) >= packet_start + 645:
                                     packet = self.buffer[packet_start:packet_start + 645]
-                                    self._log("[DEBUG] valid packet detected, calling _handle_sensor_packet")
+                                    # self._log("[DEBUG] valid packet detected, calling _handle_sensor_packet")
                                     self._log(f"[DEBUG] Calling _handle_sensor_packet()")
                                     self.buffer = self.buffer[packet_start + 645:]
                                     self._handle_sensor_packet(packet)
@@ -166,23 +166,24 @@ class SerialHandler:
             return
 
         try:
-            self._log("trying")
-            weight = f"{packet[640]}.{packet[641]}"
-            battery = str(packet[642])
-            data_list = [val for val in packet[:638] if val != 0]
+            # self._log("trying")
+            # weight = f"{packet[640]}.{packet[641]}"
+            # battery = str(packet[642])
+            # data_list = [val for val in packet[:638] if val != 0]
 
-            stats = {
-                "min": min(data_list) if data_list else 0,
-                "max": max(data_list) if data_list else 0,
-                "avg": int(sum(data_list) / len(data_list)) if data_list else 0,
-                "count": len(data_list),
-                "weight": weight,
-                "battery": battery,
-                "heatmap": packet.hex(),
-                "duration_ms": int((time.time() - self.stopwatch_start) * 1000)
-            }
+            # stats = {
+            #     "min": min(data_list) if data_list else 0,
+            #     "max": max(data_list) if data_list else 0,
+            #     "avg": int(sum(data_list) / len(data_list)) if data_list else 0,
+            #     "count": len(data_list),
+            #     "weight": weight,
+            #     "battery": battery,
+            #     "heatmap": packet.hex(),
+            #     "duration_ms": int((time.time() - self.stopwatch_start) * 1000)
+            # }
 
             self._log("[센서 데이터 수신 완료]")
+            stats = packet.hex()
             self.stopwatch_start = time.time()
             self.data_queue.put(stats)
 
