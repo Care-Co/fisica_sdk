@@ -2,7 +2,7 @@
 from setuptools import setup, find_packages
 
 setup(
-    name='carenco',
+    name='fisica_sdk',
     version='0.1.0',
     description='Care&Co Foot pressure analysis and visualization SDK',
     author='Care&Co',
@@ -21,6 +21,7 @@ setup(
     python_requires='>=3.8',
     classifiers=[
         'Programming Language :: Python :: 3.8',
-        'License :: OSI Approved :: MIT License',
+        'License :: Care&Co. Inc',
+        'Operating System :: OS Independent',
     ],
 )
