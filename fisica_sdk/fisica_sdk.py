@@ -65,10 +65,9 @@ class FisicaSDK:
 
     def _handle_frame(self, frame):
         self._frames.append(frame)
+        self._log("Frame received:", frame)
         if self._callback:
             self._callback(frame)
-        self._log("Frame received:", frame)
-
     # async def _receive_loop(self):
     #     self._log("Receive loop started.")
     #     while self._connected:

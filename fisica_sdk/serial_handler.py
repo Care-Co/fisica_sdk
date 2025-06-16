@@ -16,6 +16,7 @@ class SerialHandler:
         self.listening = False
         self.listen_thread = None
         self.last_heartbeat = time.time()
+        self.handler_count = 0
 
     def _log(self, *args):
         if self.debug:
@@ -47,8 +48,9 @@ class SerialHandler:
             while self.listening:
                 self.last_heartbeat = time.time()
                 try:
-                    # self._log(f"[DEBUG] loop active, in_waiting: {self.ser.in_waiting}")
-
+                    if not self.handler_count % 24:
+                        self._log(f"[DEBUG] loop active, in_waiting: {self.ser.in_waiting}")
+                    self.handler_count += 1
                     if self.ser.in_waiting:
                         data = self.ser.read(self.ser.in_waiting)
                         self._log(f"[DEBUG] data read: {data}")
