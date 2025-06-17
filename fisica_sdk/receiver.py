@@ -17,9 +17,6 @@ class Receiver:
         self.uart = None
         self.handler = None
 
-    def start(self):
-        self._stop_event.clear()
-
         if self.device_id in find_bluetooth_com_ports():
             self.uart = BluetoothUART(baudrate=115200)
         else:
@@ -27,6 +24,10 @@ class Receiver:
 
         self.uart.connect()
         self.handler = SerialHandler(self.uart, debug=self.debug)
+
+    def start(self):
+        self._stop_event.clear()
+
         self.handler.start_listening()
         if not self.heartbeat:
             self.heartbeat = True
@@ -54,7 +55,7 @@ class Receiver:
 
     def _read_loop(self):
         while not self._stop_event.is_set():
-            time.sleep(0.125)
+            time.sleep(0.25)
             if self.handler:
                 try:
                     data = self.handler.data_queue.get(block=False)
@@ -69,7 +70,7 @@ class Receiver:
             alive = self.handler.listen_thread and self.handler.listen_thread.is_alive()
             age = time.time() - self.handler.last_heartbeat
             # print(f"[HEALTH] Thread alive: {alive}, heartbeat age: {age:.2f}s", flush=True)
-            if alive and age > 5:
+            if alive and age > 2:
                 # print("[WARNING] 쓰레드는 살아있지만 작업이 중단된 것 같습니다!", flush=True)
                 # print("[ACTION] listen_loop 재시작 시도 중...", flush=True)
                 self.stop()

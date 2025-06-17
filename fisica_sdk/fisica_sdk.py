@@ -68,15 +68,6 @@ class FisicaSDK:
         self._log("Frame received:", frame)
         if self._callback:
             self._callback(frame)
-    # async def _receive_loop(self):
-    #     self._log("Receive loop started.")
-    #     while self._connected:
-    #         await asyncio.sleep(0.125)  # simulate data wait
-    #         # time.sleep(0.125)  # simulate data wait
-    #         # data = {"frame": "fake_data"}  # replace with real frame
-    #         # self._frames.append(data)
-    #         # if self._callback:
-    #         #     self._callback(data)
 
     async def _start_with_timeout(self, duration):
         await self._start_async()
@@ -91,7 +82,6 @@ class FisicaSDK:
         if self._receiver:
             self._log("Initializing async data receiving loop...")
             self._receiver.start()
-        # self._receive_task = asyncio.create_task(self._receive_loop())
         self._log("Measurement started.")
 
     async def _stop_async(self):

@@ -1,16 +1,17 @@
+import os
+
 from fisica_sdk import FisicaSDK, VisualOptions
 import cv2
 import time
 
-def test(data):
-    sdk.visualize(data)
-    
-    
-    print(f"data : {data}")
-    image = sdk.visualize(data)
-    cv2.imshow("as",image)
-    cv2.waitKey()
+print(os.getcwd())
+INDEX = 0
 
+def test(data):
+    global INDEX
+    image = sdk.visualize(data)
+    cv2.imwrite(f'{INDEX}.png', image)
+    INDEX += 1
 sdk = FisicaSDK(debug=True)
 
 
@@ -19,7 +20,7 @@ devices = sdk.scan_devices()
 # print(devices)
 sdk.connect(devices[0])  # 첫 번째 장비에 연결
 sdk.start_measurement()
-# sdk.on_data(test)
+sdk.on_data(test)
 
 # time.sleep(10)
 # sdk.stop_measurement()

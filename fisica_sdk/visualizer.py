@@ -82,7 +82,14 @@ class Visualizer:
             raise ValueError
 
         grid_data = preprocess_grid_data(grid_data)
-        grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
+        try:
+            grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
+        except Exception as e:
+            logger.error(
+                "\n\nFisica SDK\n"
+                "   The device detected that no one is standing on it.\n"
+            )
+            raise e
         img = cv2.resize(cv2.applyColorMap(grid_norm, cv2.COLORMAP_JET), (456, 512), interpolation=cv2.INTER_NEAREST)
 
         scale = self._scale
