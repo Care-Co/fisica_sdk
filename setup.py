@@ -17,6 +17,7 @@ setup(
         'Pillow>=8.0',
         'pyserial>=3.5',
         'importlib-metadata>=4.0; python_version<"3.8"',  # 하위 호환
+        'PyQt5>=5.15',
     ],
     python_requires='>=3.8',
     classifiers=[

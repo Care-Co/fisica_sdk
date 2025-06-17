@@ -166,25 +166,3 @@ def pca_bounding_box_dimensions(pts: np.ndarray, cell_w: float, cell_h: float) -
     half_len = (half_len + diag) * 1.025
     half_wid = (half_wid + diag) * 1.025
     return half_wid * 2, half_len * 2, center[0], center[1]
-
-# def pca_bounding_box_dimensions(pts: np.ndarray, cell_w: float, cell_h: float) -> tuple[float, float, float, float]:
-#     import math
-#     center = pts.mean(axis=0)
-#     center[1] += cell_h * 0.7  # Move center slightly downward
-#     cov = np.cov(pts, rowvar=False)
-#     eigvals, eigvecs = np.linalg.eigh(cov)
-#     secondary = eigvecs[:, eigvals.argmin()]
-#     # Determine left/right foot by mean x position
-#     is_left = pts[:, 0].mean() < (cell_w * 11)
-#     offset_dir = 1 if is_left else -1  # Outward direction
-#     center += secondary * offset_dir * cell_w * 0.15  # Move slightly outward
-#     principal = eigvecs[:, eigvals.argmax()]
-#     disp = pts - center
-#     proj_pr = disp.dot(principal)
-#     proj_sec = disp.dot(secondary)
-#     half_len = (proj_pr.max() - proj_pr.min()) / 2
-#     half_wid = (proj_sec.max() - proj_sec.min()) / 2
-#     diag = math.hypot(cell_w, cell_h) / 2
-#     half_len = (half_len + diag) * 1.025
-#     half_wid = (half_wid + diag) * 1.025
-#     return half_wid * 2, half_len * 2, center[0], center[1]

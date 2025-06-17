@@ -7,29 +7,23 @@ from .analyzer import decode_raw, preprocess_grid_data, pca_bounding_box_dimensi
 
 logger = logging.getLogger(__name__)
 
-# def visualize(hex_data: str, mode: str = 'BLUR', scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
-#     vis = Visualizer()
-#     vis.scale(scale)
-#     image = vis.visualize(hex_data, mode)
-#     cv2.imshow("test",image)
-#     cv2.waitKey()
-def visualize(hex_data: str, mode: str = 'BLUR', scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
+
+def render(hex_data: str, mode: str = 'BLUR', scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
     vis = Visualizer()
     vis.scale(scale)
-    return vis.visualize(hex_data, mode)
+    return vis.render(hex_data, mode)
 
 class VisualOptions:
     """
     Fisica SDK : VisualOptions
-        Available visualization modes FisicaSDK.visualize():
-            - PIXEL: Color-mapped pixel visualization
-            - BLUR: Smoothly rendered visualization
+        Available rendering modes FisicaSDK.render():
+            - PIXEL: Color-mapped pixel
+            - BLUR: Smoothly rendered
             - BINARY: Text grid of values
             - BINARY_NONZERO: Text grid hiding zero values
             - BBOX: Bounding box based on PCA
             - CONTOUR: Contour outline of foot shape
-            - ALL: Return all visualizations in a list.
-                   To display each visualization, use a for-loop to iterate over the list of images.
+            - ALL: Return all in a list.
     """
     ALL    = 'ALL'
     PIXEL  = 'PIXEL'
@@ -46,10 +40,10 @@ class Visualizer:
     def scale(self, factor: float):
         self._scale = factor
 
-    def _visualize_with_transparency(self, hex_data: str) -> np.ndarray:
+    def _render_with_transparency(self, hex_data: str) -> np.ndarray:
         grid_data = decode_raw(hex_data)
         if grid_data is None:
-            logger.error("Failed to visualize: could not decode hex_data.")
+            logger.error("Failed to render: could not decode hex_data.")
             raise ValueError
 
         grid_data = preprocess_grid_data(grid_data)
@@ -75,10 +69,10 @@ class Visualizer:
         # retval, buffer = cv2.imencode('.png', rgba)
         # return buffer.tobytes()
 
-    def _visualize_pixel(self, hex_data: str) -> np.ndarray:
+    def _render_pixel(self, hex_data: str) -> np.ndarray:
         grid_data = decode_raw(hex_data)
         if grid_data is None:
-            logger.error("Failed to visualize: could not decode hex_data.")
+            logger.error("Failed to render: could not decode hex_data.")
             raise ValueError
 
         grid_data = preprocess_grid_data(grid_data)
@@ -98,10 +92,10 @@ class Visualizer:
 
         return img_resized
 
-    def _visualize_binary(self, hex_data: str, hide_zeros: bool = False) -> np.ndarray:
+    def _render_binary(self, hex_data: str, hide_zeros: bool = False) -> np.ndarray:
         grid_data = decode_raw(hex_data)
         if grid_data is None:
-            logger.error("Failed to visualize: could not decode hex_data.")
+            logger.error("Failed to render: could not decode hex_data.")
             raise ValueError
 
         grid_data = preprocess_grid_data(grid_data)
@@ -141,9 +135,9 @@ class Visualizer:
 
         return cv2.cvtColor(np.array(image_resized), cv2.COLOR_RGB2BGR)
 
-    def _visualize_bbox(self, hex_data: str) -> np.ndarray:
+    def _render_bbox(self, hex_data: str) -> np.ndarray:
         import math
-        img = self._visualize_pixel(hex_data)
+        img = self._render_pixel(hex_data)
         grid = decode_raw(hex_data)
         grid = preprocess_grid_data(grid)
         rows, cols = grid.shape
@@ -186,8 +180,8 @@ class Visualizer:
         return img
 
 
-    def _visualize_contour(self, hex_data: str) -> np.ndarray:
-        img = self._visualize_pixel(hex_data)
+    def _render_contour(self, hex_data: str) -> np.ndarray:
+        img = self._render_pixel(hex_data)
         grid = decode_raw(hex_data)
         grid = preprocess_grid_data(grid)
         mask = (grid > 0).astype(np.uint8) * 255
@@ -197,27 +191,39 @@ class Visualizer:
         cv2.drawContours(img, contours, -1, (0,0,255), 2)
         return img
 
-    def visualize(self, hex_data: str, mode: str) -> Union[np.ndarray, bytes, list]:
+    def render(self, hex_data: str, mode: str) -> Union[np.ndarray, bytes, list]:
         if mode == VisualOptions.PIXEL:
-            return self._visualize_pixel(hex_data)
+            return self._render_pixel(hex_data)
         elif mode == VisualOptions.BLUR:
-            return self._visualize_with_transparency(hex_data)
+            return self._render_with_transparency(hex_data)
         elif mode == VisualOptions.BINARY:
-            return self._visualize_binary(hex_data)
+            return self._render_binary(hex_data)
         elif mode == VisualOptions.BINARY_NONZERO:
-            return self._visualize_binary(hex_data, hide_zeros=True)
+            return self._render_binary(hex_data, hide_zeros=True)
         elif mode == VisualOptions.BBOX:
-            return self._visualize_bbox(hex_data)
+            return self._render_bbox(hex_data)
         elif mode == VisualOptions.CONTOUR:
-            return self._visualize_contour(hex_data)
+            return self._render_contour(hex_data)
         elif mode == VisualOptions.ALL:
             return [
-                self._visualize_pixel(hex_data),
-                self._visualize_with_transparency(hex_data),
-                self._visualize_binary(hex_data),
-                self._visualize_binary(hex_data, hide_zeros=True),
-                self._visualize_bbox(hex_data),
-                self._visualize_contour(hex_data)
+                self._render_pixel(hex_data),
+                self._render_with_transparency(hex_data),
+                self._render_binary(hex_data),
+                self._render_binary(hex_data, hide_zeros=True),
+                self._render_bbox(hex_data),
+                self._render_contour(hex_data)
             ]
         else:
-            raise ValueError(f"Unsupported visualize mode: {mode}")
+            raise ValueError(f"Unsupported rendering mode: {mode}")
+
+    def update(self, image: np.ndarray):
+        from.gui_viewer import update_gui
+        dummy = np.zeros((512, 456, 3), dtype=np.uint8)
+        dummy[:, :, 2] = 255  # 빨간색
+
+        update_gui(image)
+
+    def run(self, scale=1.0):
+        from .gui_viewer import sys, setup_gui
+        app = setup_gui(scale=1.0)
+        sys.exit(app.exec_())

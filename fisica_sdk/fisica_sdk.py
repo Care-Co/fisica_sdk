@@ -1,11 +1,14 @@
 import asyncio
 import logging
-from fisica_sdk.port_scanner import find_serial_com_ports, find_bluetooth_com_ports
-from .receiver import Receiver
-from .visualizer import visualize as global_visualizer
-from .analyzer import analyze as global_analyzer
-from typing import Optional
 import time
+import threading
+from typing import Optional
+from .port_scanner import find_serial_com_ports, find_bluetooth_com_ports
+from .receiver import Receiver
+from .visualizer import render as global_render
+from .analyzer import analyze as global_analyzer
+from .session import SessionReport
+
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +52,6 @@ class FisicaSDK:
         self._receiver = None
         self.available_devices = None
         self.connected_device = None
-        self.metadata = None
         self.debug = debug
         self._receive_task = None
         self._callback = None
@@ -57,6 +59,8 @@ class FisicaSDK:
         self._reports = []
         self._current_report = None
         self._connected = False
+        self.session_report = None
+        self._sleeping = False
 
     def _log(self, *args):
         if self.debug:
@@ -71,13 +75,16 @@ class FisicaSDK:
 
     async def _start_with_timeout(self, duration):
         await self._start_async()
-        await asyncio.sleep(duration)
-        # time.sleep(duration)
-        await self._stop_async()
+        self.sleep(duration, after=lambda: asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop))
 
     async def _start_async(self):
         if not self._connected:
             raise RuntimeError("Not connected to a device.")
+
+        from .session import SessionReport
+        if self.session_report is None or self.session_report.is_frozen():
+            self.session_report = SessionReport()
+
         self._frames.clear()
         if self._receiver:
             self._log("Initializing async data receiving loop...")
@@ -90,13 +97,37 @@ class FisicaSDK:
             self._receiver.stop()
         if self._receive_task:
             await self._receive_task
+
+        if self.session_report:
+            self.session_report.add_frames(self._frames)  # ✅ 누적된 frame 저장
+            self.session_report.freeze()
+            self._reports.append(self.session_report)  # ✅ 세션 리스트에 추가
+
         self._log("Measurement stopped and session frozen.")
+
+    def sleep(self, seconds: float, after: Optional[callable] = None):
+        """
+    Fisica SDK: sleep
+
+        Parameters:
+            seconds (float): Duration to wait in seconds.
+            after (callable, optional): Function to call after sleep ends.
+        """
+        def _delayed():
+            self._sleeping = True
+            time.sleep(seconds)
+            if after:
+                after()
+            self._sleeping = False
+        threading.Thread(target=_delayed, daemon=True).start()
 
     def set_metadata(self, **kwargs):
         """
         :param device:
         :return:
         """
+        if self.session_report is None or self.session_report.is_frozen():
+            self.session_report = SessionReport()
         default_metadata = {
             'id': None,
             'name': None,
@@ -109,8 +140,9 @@ class FisicaSDK:
                 raise ValueError(f"Unexpected metadata field: {key}")
             default_metadata[key] = kwargs[key]
 
-        self.metadata = default_metadata
-        self._log("Metadata set to:", self.metadata)
+        self.session_report.metadata = default_metadata
+        self.session_report.set_metadata(default_metadata)
+        self._log("Metadata set to:", self.session_report.metadata)
 
     def scan_devices(self):
         """
@@ -180,18 +212,32 @@ class FisicaSDK:
         """
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        if duration:
-            loop.run_until_complete(self._start_with_timeout(duration))
-        else:
-            loop.run_until_complete(self._start_async())
+        loop.create_task(self._start_async())
         self._loop = loop
+
+        if duration:
+            self.sleep(duration, after=lambda: asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop))
+
+        threading.Thread(target=loop.run_forever, daemon=True).start()
 
     def stop_measurement(self):
         """
         :return:
         """
-        if hasattr(self, "_loop"):
-            self._loop.run_until_complete(self._stop_async())
+        if getattr(self, "_sleeping", False):
+            self._log("Stop requested during sleep; deferring stop.")
+
+            def _wait_and_stop():
+                while getattr(self, "_sleeping", False):
+                    time.sleep(0.1)
+                asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
+
+            threading.Thread(target=_wait_and_stop, daemon=True).start()
+            return
+
+        # sleep 중이 아니면 즉시 종료
+        if hasattr(self, "_loop") and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
 
     def on_data(self, callback):
         """
@@ -266,9 +312,9 @@ class FisicaSDK:
             raise ValueError("Check Paramater")
         return global_analyzer(hex_data)
 
-    def visualize(self, hex_data: Optional[str] = None, mode: str = "BBOX", scale: float = 1.0):
+    def render(self, hex_data: Optional[str] = None, mode: str = "BBOX", scale: float = 1.0):
         """
-    Fisica SDK : visualize
+    Fisica SDK : render
         Parameters:
             hex_data (str): Hexadecimal string from the sensor (645 bytes).
             mode (str): Visualization mode. You can import VisualOptions and use
@@ -277,17 +323,15 @@ class FisicaSDK:
                            and the image will be scaled up proportionally.
 
         Returns:
-            np.ndarray: The visualized image as a NumPy array.
+            np.ndarray: The rendered image data as a NumPy array.
                         To display it on the screen, use OpenCV functions like:
                             cv2.imshow("Preview", image)
                             cv2.waitKey(0)
                             cv2.destroyAllWindows()
 
         Example:
-            image = FisicaSDK.visualize(hex_data="000000...", mode=VisualOptions.BLUR, scale=1.0)
-            cv2.imshow("Preview", image)
-            cv2.waitKey(0)
-            cv2.destroyAllWindows()
+            image = FisicaSDK.render(hex_data="000000...", mode=VisualOptions.BLUR, scale=1.0)
+            # Implement your own logic using the image data
         """
         if hex_data is None:
             logger.error(
@@ -299,4 +343,4 @@ class FisicaSDK:
 
             )
             raise ValueError("Check Paramater")
-        return global_visualizer(hex_data, mode, scale=scale)
+        return global_render(hex_data, mode, scale=scale)
