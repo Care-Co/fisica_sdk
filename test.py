@@ -17,16 +17,16 @@ devices = sdk.scan_devices()
 sdk.connect(devices[0])  # 첫 번째 장비에 연결
 sdk.on_data(test)
 sdk.start_measurement()
-sdk.sleep(10)
+# sdk.sleep(10)
 # time.sleep(10)
-sdk.stop_measurement()
+# sdk.stop_measurement()
 # report = sdk.analyze()
 # print(report)
 # sdk.export_report(format="json", filename="heejung_session")
 
 
-# vis = Visualizer()
-# vis.run(scale=2.0)
+vis = Visualizer()
+vis.run(scale=2.0)
 
 
 # 3. 분석 단계
