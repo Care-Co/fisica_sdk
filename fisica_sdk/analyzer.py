@@ -1,123 +1,62 @@
 import numpy as np
-import time
-import logging
-from typing import Optional, Tuple, Union, Any
+from typing import Tuple, List, Optional
+from .utils import log
+from .models import MeasurementFrame
 
-from numpy import ndarray, dtype
 
-logger = logging.getLogger(__name__)
-
-ALL = "ALL"
-DIMENSION = "DIMENSION"
-LENGTH = "LENGTH"
-WEIGHT = "WEIGHT"
-TIMER = "TIMER"
-
-def analyze(hex_data: str, args: str = ALL) -> Union[
-    dict[str, float], dict[str, np.ndarray], dict[str, Union[float, str, None, dict[str, float], np.ndarray]], dict[
-        str, float], dict[str, dict[str, float]], None]:
-
-    start = time.time()
-    grid_data, weight, battery = _decode_hex(hex_data)
-    left_width, left_height, right_width, right_height = _calculate_foot_size(hex_data)
-    elapsed = round((time.time() - start) * 1000, 3)  # ms 단위
-    if grid_data is None:
-        logger.error("Failed to decode plantar pressure data: input length mismatch or malformed data.")
-        raise ValueError
-
-    processed_grid = preprocess_grid_data(grid_data)
-
-    # 반환
-    if args == ALL:
-        return {
-            "dimension": processed_grid,
-            "weight": float(weight),
-            "battery": battery,
-            "size": {
-                "left_width": left_width,
-                "left_height": left_height,
-                "right_width": right_width,
-                "right_height": right_height
-            },
-            # "extra1": extra1,
-            # "extra2": extra2,
-            "timer(ms)": elapsed
-        }
-    elif args == DIMENSION:
-        return {"dimension": processed_grid}
-    elif args == WEIGHT:
-        return {"weight": float(weight)}
-    elif args == TIMER:
-        return {"timer(ms)": elapsed}
-    elif args == LENGTH:
-        return { "size": {
-            "left_width": left_width,
-            "left_height": left_height,
-            "right_width": right_width,
-            "right_height": right_height
-        }
-    }
-    else:
+def analyze(frames: Optional[List[MeasurementFrame]]):
+    if not frames:
+        log.debug("No frame data provided for analysis.")
         return None
 
-def _decode_hex(hex_data: str) -> tuple[ndarray[Any, dtype[Any]], str, str]:
-    try:
-        data_int = [int(hex_data[i:i+2], 16) for i in range(0, len(hex_data), 2)]
-    except ValueError:
-        logger.warning("Hex decoding failed due to invalid characters.")
-        raise ValueError
+    STABILITY_THRESHOLD = 0.5  # kg
+    STABLE_COUNT_MIN = 10
 
-    rawData = np.array(data_int)
+    stable_frames = []
+    for i in range(1, len(frames)):
+        prev_weight = frames[i - 1].weight
+        curr_weight = frames[i].weight
+        if abs(curr_weight - prev_weight) <= STABILITY_THRESHOLD:
+            stable_frames.append(frames[i])
+        else:
+            stable_frames.clear()
 
-    if len(rawData) != 645:
-        logger.error(f"Invalid data length: expected 645, got {len(rawData)}")
-        raise ValueError
+        if len(stable_frames) >= STABLE_COUNT_MIN:
+            break
 
-    weight = f"{rawData[640]}.{rawData[641]}"
-    battery = str(rawData[642])
-    grid_data = rawData[:638].reshape((29, 22))
+    if not stable_frames:
+        log.warning("No stable weight region found.")
+        return None
 
-    return grid_data, weight, battery
+    import numpy as np
 
-def preprocess_grid_data(grid_data: np.ndarray) -> np.ndarray:
-    """
-    센서 데이터 전처리 수행
-    """
-    # Step 1: 각 열의 0이 아닌 값 개수로 보정
-    non_zero_counts = np.count_nonzero(grid_data, axis=0)
-    grid_data = np.where(grid_data != 0, grid_data * non_zero_counts, grid_data)
+    # 평균 weight 계산
+    avg_weight = round(np.mean([f.weight for f in stable_frames]), 2)
 
-    # Step 2: 구간화
-    non_zero_values = grid_data[grid_data != 0]
-    if non_zero_values.size == 0:
-        return grid_data  # 모두 0인 경우는 그대로 반환
+    # sensor_matrix 평균 계산 (IQR 기반 필터 포함)
+    matrices = np.array([f.sensor_matrix for f in stable_frames])
+    matrices = np.array(matrices, dtype=np.float32)  # shape: (n, h, w)
 
-    mean_value = np.mean(non_zero_values)
-    bins = np.linspace(0, 2 * mean_value, 11)
-    bin_midpoints = (bins[:-1] + bins[1:]) / 2
+    # IQR 필터 적용 후 평균
+    def iqr_filtered_mean(stack):
+        q1 = np.percentile(stack, 25, axis=0)
+        q3 = np.percentile(stack, 75, axis=0)
+        iqr = q3 - q1
+        lower = q1 - 1.5 * iqr
+        upper = q3 + 1.5 * iqr
+        mask = (stack >= lower) & (stack <= upper)
+        filtered = np.where(mask, stack, np.nan)
+        return np.nanmean(filtered, axis=0)
 
-    def assign_to_nearest_bin(value):
-        if value == 0:
-            return 0
-        bin_idx = min(np.digitize(value, bins) - 1, len(bin_midpoints) - 1)
-        return bin_midpoints[bin_idx]
+    matrix = iqr_filtered_mean(matrices).tolist()
+    # Calculate foot sizes
+    lw, ll, rw, rl = _calculate_foot_size(np.array(matrix))
+    return avg_weight, lw, ll, rw, rl
+    # return matrix, avg_weight, lw, ll, rw, rl
 
-    grid_data = np.vectorize(assign_to_nearest_bin)(grid_data)
 
-    # Step 3: 255로 스케일링
-    max_value = np.max(grid_data)
-    if max_value > 255:
-        scale_factor = 255 / max_value
-        grid_data = (grid_data * scale_factor).astype(int)
-
-    return grid_data
-
-def decode_raw(hex_data: str) -> Optional[np.ndarray]:
-    grid_data, *_ = _decode_hex(hex_data)
-    return grid_data
-
-def _find_foot_dimensions_oriented(foot_data: np.ndarray, cell_w_cm: float, cell_h_cm: float) -> Tuple[float, float]:
-    indices = np.argwhere(foot_data > 0)
+def _find_foot_dimensions_oriented(grid_data: np.ndarray, cell_w_cm: float, cell_h_cm: float) -> Tuple[float, float]:
+    indices = np.argwhere(grid_data > 0)
     if indices.size == 0:
         return 0.0, 0.0
     pts = np.stack([
@@ -127,22 +66,21 @@ def _find_foot_dimensions_oriented(foot_data: np.ndarray, cell_w_cm: float, cell
     width, length, _, _ = pca_bounding_box_dimensions(pts, cell_w_cm, cell_h_cm)
     return width, length
 
-def _calculate_foot_size(hex_data: str, grid_width_cm: float = 300.0, grid_height_cm: float = 150.0) -> Tuple[float, float, float, float]:
+
+def _calculate_foot_size(grid_data: np.ndarray) -> Tuple[float, float, float, float]:
     # decode and preprocess
-    grid = decode_raw(hex_data)
-    if grid is None:
+    if grid_data is None:
         raise ValueError("Invalid hex_data")
-    grid = preprocess_grid_data(grid)
-    rows, cols = grid.shape
+    rows, cols = grid_data.shape
     # cell_width_cm = grid_width_cm / cols
-    # cell_height_cm = grid_height_cm / rows
+    # cell_length_cm = grid_length_cm / rows
     cell_width_cm = 1.0
-    cell_height_cm = 1.0
-    left = grid[:, :cols // 2]
-    right = grid[:, cols // 2 :]
-    lw, lh = _find_foot_dimensions_oriented(left, cell_width_cm, cell_height_cm)
-    rw, rh = _find_foot_dimensions_oriented(right, cell_width_cm, cell_height_cm)
-    return lw, lh, rw, rh
+    cell_length_cm = 1.0
+    left = grid_data[:, :cols // 2]
+    right = grid_data[:, cols // 2 :]
+    lw, ll = _find_foot_dimensions_oriented(left, cell_width_cm, cell_length_cm)
+    rw, rl = _find_foot_dimensions_oriented(right, cell_width_cm, cell_length_cm)
+    return lw, ll, rw, rl
 
 def pca_bounding_box_dimensions(pts: np.ndarray, cell_w: float, cell_h: float) -> tuple[float, float, float, float]:
     import math
@@ -166,3 +104,29 @@ def pca_bounding_box_dimensions(pts: np.ndarray, cell_w: float, cell_h: float) -
     half_len = (half_len + diag) * 1.025
     half_wid = (half_wid + diag) * 1.025
     return half_wid * 2, half_len * 2, center[0], center[1]
+
+def compute_cop(grid: np.ndarray, cell_w: float = 1.0, cell_h: float = 1.0) -> tuple[float, float]:
+    """
+    Compute the center of pressure (weighted center) from a pressure matrix.
+    Args:
+        grid (np.ndarray): 2D pressure values (e.g., sensor_matrix).
+        cell_w (float): Width of each cell in cm.
+        cell_h (float): Height of each cell in cm.
+    Returns:
+        Tuple of (x_center, y_center) in cm.
+    """
+    total_weight = np.sum(grid)
+    if total_weight == 0:
+        return 0.0, 0.0
+
+    rows, cols = grid.shape
+    y_indices = np.arange(rows).reshape(-1, 1) * cell_h + cell_h / 2
+    x_indices = np.arange(cols).reshape(1, -1) * cell_w + cell_w / 2
+
+    x_weighted_sum = np.sum(grid * x_indices)
+    y_weighted_sum = np.sum(grid * y_indices)
+
+    x_center = x_weighted_sum / total_weight
+    y_center = y_weighted_sum / total_weight
+
+    return x_center, y_center

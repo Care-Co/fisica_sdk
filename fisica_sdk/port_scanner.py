@@ -5,14 +5,12 @@ def find_serial_com_ports():
     return [
         p.device for p in serial.tools.list_ports.comports()
         if (('USB' in p.description or 'usb' in p.device.lower() or 'usbserial' in p.device.lower()) and p.vid is not None and p.vid == 4292)
-        #if ('USB' in p.description or 'usb' in p.device.lower() or 'usbserial' in p.device.lower())
     ]
 
 def find_bluetooth_com_ports():
     return [
         p.device for p in serial.tools.list_ports.comports()
         if (('Bluetooth' in p.description or 'bluetooth' in p.device.lower() or 'tty.Bluetooth' in p.device) and p.vid is not None and p.vid == 4292)
-        #if ('Bluetooth' in p.description or 'bluetooth' in p.device.lower() or 'tty.Bluetooth' in p.device and p.vid is not None and p.vid == "4292")
     ]
 
 def print_all_com_port_details():

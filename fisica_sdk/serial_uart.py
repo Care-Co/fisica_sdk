@@ -26,18 +26,3 @@ class SerialUART(BaseUART):
         if self.ser.in_waiting:
             return self.ser.readline().decode('utf-8').strip()
         return ""
-
-
-
-#    def receive(self):
-#        if self.ser.in_waiting:
-#            return self.ser.read(self.ser.in_waiting)
-#        return b''
-
-#    def receive(self):
-#        if self.ser.in_waiting:
-#            try:
-#                return self.ser.readline()
-#            except Exception as e:
-#                print("readline() 오류:", e)
-#        return b''

@@ -3,15 +3,16 @@ import numpy as np
 import logging
 from typing import Union
 from PIL import Image, ImageDraw, ImageFont
-from .analyzer import decode_raw, preprocess_grid_data, pca_bounding_box_dimensions
+from .analyzer import pca_bounding_box_dimensions
+
 
 logger = logging.getLogger(__name__)
 
 
-def render(hex_data: str, mode: str = 'BLUR', scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
+def render(grid_data: np.ndarray, mode: str = 'BLUR', scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
     vis = Visualizer()
     vis.scale(scale)
-    return vis.render(hex_data, mode)
+    return vis.render(grid_data, mode)
 
 class VisualOptions:
     """
@@ -40,13 +41,8 @@ class Visualizer:
     def scale(self, factor: float):
         self._scale = factor
 
-    def _render_with_transparency(self, hex_data: str) -> np.ndarray:
-        grid_data = decode_raw(hex_data)
-        if grid_data is None:
-            logger.error("Failed to render: could not decode hex_data.")
-            raise ValueError
+    def _render_with_transparency(self, grid_data: np.ndarray) -> np.ndarray:
 
-        grid_data = preprocess_grid_data(grid_data)
         grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         heatmap = cv2.resize(grid_norm, (456, 512), interpolation=cv2.INTER_LINEAR)
         heatmap_blurred = cv2.GaussianBlur(heatmap, (21, 21), 0)
@@ -69,19 +65,19 @@ class Visualizer:
         # retval, buffer = cv2.imencode('.png', rgba)
         # return buffer.tobytes()
 
-    def _render_pixel(self, hex_data: str) -> np.ndarray:
-        grid_data = decode_raw(hex_data)
-        if grid_data is None:
-            logger.error("Failed to render: could not decode hex_data.")
-            raise ValueError
+    def _render_pixel(self, grid_data: np.ndarray) -> np.ndarray:
+        # grid_data = decode_raw(hex_data)
+        # if grid_data is None:
+        #     logger.error("Failed to render: could not decode hex_data.")
+        #     raise ValueError
 
-        grid_data = preprocess_grid_data(grid_data)
+        # grid_data = preprocess_grid_data(grid_data)
         try:
             grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         except Exception as e:
-            logger.error(
+            logger.critical(
                 "\n\nFisica SDK\n"
-                "   The device detected that no one is standing on it.\n"
+                f"   There seems to be a problem with processing the matrix: {e}\n"
             )
             raise e
         img = cv2.resize(cv2.applyColorMap(grid_norm, cv2.COLORMAP_JET), (456, 512), interpolation=cv2.INTER_NEAREST)
@@ -92,13 +88,13 @@ class Visualizer:
 
         return img_resized
 
-    def _render_binary(self, hex_data: str, hide_zeros: bool = False) -> np.ndarray:
-        grid_data = decode_raw(hex_data)
-        if grid_data is None:
-            logger.error("Failed to render: could not decode hex_data.")
-            raise ValueError
+    def _render_binary(self, grid_data: np.ndarray, hide_zeros: bool = False) -> np.ndarray:
+        # grid_data = decode_raw(hex_data)
+        # if grid_data is None:
+        #     logger.error("Failed to render: could not decode hex_data.")
+        #     raise ValueError
 
-        grid_data = preprocess_grid_data(grid_data)
+        # grid_data = preprocess_grid_data(grid_data)
         rows, cols = grid_data.shape
         base_w, base_h = 456, 512
         cell_w = base_w // cols
@@ -135,12 +131,12 @@ class Visualizer:
 
         return cv2.cvtColor(np.array(image_resized), cv2.COLOR_RGB2BGR)
 
-    def _render_bbox(self, hex_data: str) -> np.ndarray:
+    def _render_bbox(self, grid_data: np.ndarray) -> np.ndarray:
         import math
-        img = self._render_pixel(hex_data)
-        grid = decode_raw(hex_data)
-        grid = preprocess_grid_data(grid)
-        rows, cols = grid.shape
+        img = self._render_pixel(grid_data)
+        # grid = decode_raw(grid_data)
+        # grid = preprocess_grid_data(grid)
+        rows, cols = grid_data.shape
         h, w = img.shape[:2]
         cell_w = w / cols
         cell_h = h / rows
@@ -173,45 +169,43 @@ class Visualizer:
 
         mid = cols // 2
         # left foot in green
-        draw_pca_box(grid[:, :mid], 0, (0,255,0))
+        draw_pca_box(grid_data[:, :mid], 0, (0,255,0))
         # right foot in blue
-        draw_pca_box(grid[:, mid:], mid, (255,0,0))
+        draw_pca_box(grid_data[:, mid:], mid, (255,0,0))
 
         return img
 
 
-    def _render_contour(self, hex_data: str) -> np.ndarray:
-        img = self._render_pixel(hex_data)
-        grid = decode_raw(hex_data)
-        grid = preprocess_grid_data(grid)
-        mask = (grid > 0).astype(np.uint8) * 255
+    def _render_contour(self, grid_data: np.ndarray) -> np.ndarray:
+        img = self._render_pixel(grid_data)
+        mask = (grid_data > 0).astype(np.uint8) * 255
         h, w = img.shape[:2]
         mask_resized = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
         contours, _ = cv2.findContours(mask_resized, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(img, contours, -1, (0,0,255), 2)
         return img
 
-    def render(self, hex_data: str, mode: str) -> Union[np.ndarray, bytes, list]:
+    def render(self, grid_data: np.ndarray, mode: str) -> Union[np.ndarray, bytes, list]:
         if mode == VisualOptions.PIXEL:
-            return self._render_pixel(hex_data)
+            return self._render_pixel(grid_data)
         elif mode == VisualOptions.BLUR:
-            return self._render_with_transparency(hex_data)
+            return self._render_with_transparency(grid_data)
         elif mode == VisualOptions.BINARY:
-            return self._render_binary(hex_data)
+            return self._render_binary(grid_data)
         elif mode == VisualOptions.BINARY_NONZERO:
-            return self._render_binary(hex_data, hide_zeros=True)
+            return self._render_binary(grid_data, hide_zeros=True)
         elif mode == VisualOptions.BBOX:
-            return self._render_bbox(hex_data)
+            return self._render_bbox(grid_data)
         elif mode == VisualOptions.CONTOUR:
-            return self._render_contour(hex_data)
+            return self._render_contour(grid_data)
         elif mode == VisualOptions.ALL:
             return [
-                self._render_pixel(hex_data),
-                self._render_with_transparency(hex_data),
-                self._render_binary(hex_data),
-                self._render_binary(hex_data, hide_zeros=True),
-                self._render_bbox(hex_data),
-                self._render_contour(hex_data)
+                self._render_pixel(grid_data),
+                self._render_with_transparency(grid_data),
+                self._render_binary(grid_data),
+                self._render_binary(grid_data, hide_zeros=True),
+                self._render_bbox(grid_data),
+                self._render_contour(grid_data)
             ]
         else:
             raise ValueError(f"Unsupported rendering mode: {mode}")
@@ -225,5 +219,5 @@ class Visualizer:
 
     def run(self, scale=1.0):
         from .gui_viewer import sys, setup_gui
-        app = setup_gui(scale=1.0)
+        app = setup_gui(scale)
         sys.exit(app.exec_())

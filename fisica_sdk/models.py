@@ -17,10 +17,10 @@ class MeasurementSession:
 @dataclass
 class SessionReport:
     session_id: str
-    name : str
-    foot_length: float        # cm
-    foot_width: float         # cm
-    total_frame:List[MeasurementFrame]
+    name: str
+    foot_length: Dict[str, float]   # e.g., {'left': 23.1, 'right': 24.5}
+    foot_width: Dict[str, float]    # e.g., {'left': 9.8, 'right': 10.2}
+    total_frame: List[MeasurementFrame]
     frame_count: int
     duration_sec: float
     weight: Optional[float] = None

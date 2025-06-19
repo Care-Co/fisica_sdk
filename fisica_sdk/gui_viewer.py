@@ -1,7 +1,5 @@
 import sys
-import threading
 import numpy as np
-import cv2
 from PyQt5.QtWidgets import QApplication, QLabel, QMainWindow
 from PyQt5.QtGui import QPixmap, QImage
 
@@ -45,11 +43,9 @@ class ImageWindow(QMainWindow):
             qimage = QImage(image.data, w, h, ch * w, QImage.Format_RGBA8888)
         else:
             raise ValueError("Unsupported image format.")
-        print("2")
         pixmap = QPixmap.fromImage(qimage)
         self.label.setPixmap(pixmap)
         self.label.setAlignment(Qt.AlignCenter)
-        print("3")
 
 _window = None
 

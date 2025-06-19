@@ -1,15 +1,13 @@
-import os
+import logging
 
 from fisica_sdk import FisicaSDK, VisualOptions, Visualizer
-import cv2
-import time
 
 
 def test(data):
-    image = sdk.render(data)
+    image = sdk.render(data,mode=VisualOptions.BBOX)
     vis.update(image)
 
-sdk = FisicaSDK(debug=True)
+sdk = FisicaSDK(debug=logging.DEBUG)
 
 
 sdk.set_metadata(name="test")
@@ -17,10 +15,11 @@ devices = sdk.scan_devices()
 sdk.connect(devices[0])  # 첫 번째 장비에 연결
 sdk.on_data(test)
 sdk.start_measurement()
-# sdk.sleep(10)
-# time.sleep(10)
-# sdk.stop_measurement()
-# report = sdk.analyze()
+sdk.sleep(8)
+sdk.stop_measurement()
+# sdk.wait()
+report = sdk.analyze()
+print(report)
 # print(report)
 # sdk.export_report(format="json", filename="heejung_session")
 
