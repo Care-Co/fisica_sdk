@@ -85,7 +85,7 @@ def parse_frame_from_chunk(chunk: str) -> Optional[MeasurementFrame]:
         return None
     matrix, weight, battery = data
     return MeasurementFrame(
-        timestamp=datetime.now().isoformat(),
+        timestamp=datetime.now().replace(microsecond=0).isoformat(),
         sensor_matrix=matrix,
         weight=float(weight),
         battery=float(battery)

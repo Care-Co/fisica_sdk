@@ -1,6 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
-import sys
+import sys, os, datetime
 
 _levelToName = {
     logging.CRITICAL: 'CRITICAL',
@@ -62,4 +62,25 @@ class LogWrapper:
     def level(self, value):
         self.logger.setLevel(value)
 
+
+def resolve_output_path(output: str) -> str:
+    if not output:
+        filename = f"session_report_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+        return os.path.join(os.getcwd(), filename)
+
+    output = os.path.abspath(output)
+
+    if os.path.isdir(output):
+        filename = f"session_report_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+        return os.path.join(output, filename)
+
+    if not os.path.exists(output):
+        if not os.path.splitext(output)[1]:
+            output += ".json"
+        return output
+
+    return output
+
 log = LogWrapper(logging.getLogger(__name__))
+
+

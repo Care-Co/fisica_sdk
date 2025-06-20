@@ -4,6 +4,7 @@ import logging
 from typing import Union
 from PIL import Image, ImageDraw, ImageFont
 from .analyzer import pca_bounding_box_dimensions
+from .gui_viewer import update_gui
 
 
 logger = logging.getLogger(__name__)
@@ -211,10 +212,6 @@ class Visualizer:
             raise ValueError(f"Unsupported rendering mode: {mode}")
 
     def update(self, image: np.ndarray):
-        from.gui_viewer import update_gui
-        dummy = np.zeros((512, 456, 3), dtype=np.uint8)
-        dummy[:, :, 2] = 255  # 빨간색
-
         update_gui(image)
 
     def run(self, scale=1.0):

@@ -2,7 +2,7 @@ from fisica_sdk import FisicaSDK, Visualizer  # Import SDK and visualization too
 
 # Define a function to visualize incoming data
 def visualize(data):
-    image = sdk.render(data)  # Render image from incoming data
+    image = sdk.render(frame=data,scale=2.0)  # Render image from incoming data
     vis.update(image)         # Update visualizer with new image
 
 # Initialize the SDK

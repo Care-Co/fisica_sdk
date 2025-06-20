@@ -23,14 +23,14 @@ def check_for_update():
         return
 
     try:
-        resp = requests.get("https://pypi.org/pypi/carenco/json", timeout=2)
+        resp = requests.get("https://pypi.org/pypi/fisica_sdk/json", timeout=2)
         resp.raise_for_status()
         latest = resp.json().get("info", {}).get("version")
         if latest and version.parse(installed) < version.parse(latest):
             msg = (
-                f"carenco {installed} is out of date; latest is {latest}.\n"
+                f"fisica_sdk {installed} is out of date; latest is {latest}.\n"
                 "Please upgrade via:\n"
-                "    pip install --upgrade carenco"
+                "    pip install --upgrade fisica_sdk"
             )
             warnings.warn(msg, UserWarning, stacklevel=3)
             logger.warning(msg)

@@ -1,16 +1,15 @@
 import asyncio
-import logging
 import time
 import threading
 import numpy as np
-from typing import Optional, Union
 
-from .device import *
-from .receiver import Receiver
-from .visualizer import render as global_render
 from .analyzer import analyze as global_analyzer
-from .utils import log
-from .models import MeasurementSession, MeasurementFrame, SessionReport
+from .visualizer import render as global_render
+from .receiver import Receiver
+from .exporter import *
+from .models import *
+from .device import *
+from .utils import *
 
 logger = logging.getLogger(__name__)
 
@@ -21,36 +20,30 @@ class FisicaSDK:
     FisicaSDK - Main interface for interacting with the scale device.
 
     Available Methods:
+        - set_metadata(**kwargs): Set custom metadata for the current measurement session (e.g., id, name).
         - scan_devices(): Scan for available serial and Bluetooth devices.
-        - connect(device): Connect to a selected device from scan_devices().
-        - start_measurement(duration=None): Begin data collection.
-        - stop_measurement(): Stop data collection.
-        - on_data(callback): Register a callback to receive real-time data.
-        - analyze(): Analyze the collected data.
-        - get_report(): Retrieve the most recent report.
-        - get_all_reports(): Get all previous analysis reports.
-        - export_report(filename): Save the current report to a file.
-        - reset_session(): Clear current session data.
-        - reset_reports(): Clear all stored reports.
-        - render(MeasurementFrame, grid_data, mode, scale): Render rawData as an image data.
-
-    Example:
-        from fisica_sdk import FisicaSDK
-        import time
-
-        sdk = FisicaSDK()
-        devices = sdk.scan_devices()
-        sdk.connect(devices[0])
-        sdk.start_measurement()
-        # sdk.sleep(5)
-        time.sleep(30)
-        sdk.stop_measurement()
+        - connect(device: dict): Connect to a selected device from scan_devices().
+        - disconnect(): Disconnect from the currently connected device.
+        - start_measurement(duration: Optional[float] = None): Begin data collection. Optionally stop after a given duration.
+        - stop_measurement(): Stop ongoing data collection.
+        - on_data(callback: Callable): Register a callback function to receive real-time frame data.
+        - sleep(seconds: float, after: Optional[Callable]): Non-blocking delay with optional callback after delay.
+        - analyze(): Analyze collected session frames and generate a session report.
+        - get_session_frames(): Retrieve serialized raw frames from the current session.
+        - get_report(): Retrieve the most recent analysis report.
+        - get_all_reports(): Retrieve all previous session reports stored in memory.
+        - export_report(report: Optional[Union[SessionReport, list]], output: Optional[str]): Save the current or specified report(s) to a JSON file.
+        - reset_session(): Clear the current session's metadata and frame data.
+        - reset_reports(): Clear all stored reports in memory.
+        - render(frame: Optional[MeasurementFrame], grid_data: Optional[np.ndarray], mode: Optional[str], scale: Optional[float]): Render a visualization image from raw sensor data.
 
     Note:
         time.sleep() pauses the main thread, which may block further execution.
         If you are running code that requires the main thread (e.g., GUI applications),
         avoid using time.sleep() between start_measurement() and stop_measurement().
         Instead, use sdk.sleep() or pass the duration parameter to start_measurement().
+        start_measurement()에 `duration` 파라미터를 전달하는 경우, stop_measurement()가 내부적으로 실행되므로,
+        메인 스레드에서 별도로 stop_measurement()를 호출하지 않는 것을 권장합니다.
 
     For more information:
         Append .__doc__ to the method name and call print to view the documentation.
@@ -58,6 +51,7 @@ class FisicaSDK:
     """
 
     def __init__(self, debug=logging.INFO):
+        # self._np_ready = threading.Event()
         self._disconnecting = False
         self._connected = False
         self._sleeping = False
@@ -74,8 +68,10 @@ class FisicaSDK:
         self._loop = None
         self._reports = []
         self._frames = []
+        self._counter = 0
         self._debug = debug
         log.level = self._debug
+        # self._np_ready.set()
 
     def _set_metadata(self, **kwargs):
         default_metadata = {
@@ -133,6 +129,8 @@ class FisicaSDK:
                 f"  Unknown error occurred while stopping measurement : {e}"
             )
             raise RuntimeError
+        finally:
+            self._np_ready.set()
 
     def sleep(self, seconds: float, after: Optional[callable] = None):
         """
@@ -287,7 +285,7 @@ class FisicaSDK:
 
     def get_session_frames(self):
         if self._session:
-            return self._session.frames
+            return serialize_session_frame(self._session.frames)
         else:
             log.info("It seems there is no active session.")
 
@@ -295,53 +293,47 @@ class FisicaSDK:
         """
         :return:
         """
-        return self._current_report
+        try:
+            if not self._current_report:
+                raise
+            return serialize_session_report(self._current_report)
+        except Exception as e:
+            log.info(
+                "\nFisica SDK\n"
+                "   It seems that analyze has not been run."
+                "   Please make sure to call analyze before calling get_report."
+                "   For general information about the Fisica SDK, call `print(FisicaSDK.__doc__)`.\n"
+                "   For guidance on device scanning and connection, use:\n"
+                "   `print(FisicaSDK.analyze.__doc__)` and `print(FisicaSDK.get_report.__doc__)`.\n"
+            )
+
 
     def get_all_reports(self):
         """
         :return:
         """
-        return self._reports
+        return [serialize_session_report(r) for r in self._reports]
 
-    def export_report(self, reports: 'Union[SessionReport, list[SessionReport]]' = None, format: str = None, filename: str = None, output_dir:str = None):
+
+    def export_report(self, report: Optional[Union['SessionReport', list]] = None, output: str = None):
         """
-        Export one or more session reports to a file.
+        Save the report(s) to a JSON file.
 
-        Parameters:
-            reports (SessionReport or list of SessionReport): Report(s) to export. If None, exports current report.
-            format (str, optional): Format to export, default is JSON.
-            filename (str, optional): Output file name. For multiple reports, filename will be used as prefix.
+        :param report: A single SessionReport or a list of SessionReport objects.
+                       If None, export the most recent session report.
+        :param output: Output can be a directory, a filename, or a full file path.
         """
-        import json
-        if reports is None:
-            reports = self._current_report
-
-        if isinstance(reports, list):
-            for i, report in enumerate(reports):
-                # Try to get a unique identifier for filename if possible
-                unique_id = getattr(reports, 'session_id', None) or getattr(reports, 'id', None) or str(i)
-                fname = filename or f"report_{unique_id}.json"
-                # If filename is provided, append index or report id
-                if filename and len(reports) > 1:
-                    split = filename.rsplit('.', 1)
-                    if len(split) == 2:
-                        fname = f"{split[0]}_{unique_id}.{split[1]}"
-                    else:
-                        fname = f"{filename}_{unique_id}"
-                if isinstance(reports, SessionReport):
-                    with open(fname, 'w') as f:
-                        json.dump(reports.to_dict(), f, indent=2)
-                    log.info(f"Report exported to {fname}.")
-                else:
-                    log.warning(f"Invalid report at index {i}, skipping.")
-        else:
-            if isinstance(reports, SessionReport):
-                fname = filename or "report.json"
-                with open(fname, 'w') as f:
-                    json.dump(reports.to_dict(), f, indent=2)
-                log.info(f"Report exported to {fname}.")
-            else:
-                log.warning("Invalid report object. Export skipped.")
+        try:
+            if report is None:
+                report = serialize_session_report(self._current_report)
+            output_path = resolve_output_path(output)
+            return export_session_reports_to_json(report, output_path)
+        except Exception as e:
+            log.error(
+                "\nFisica SDK\n"
+                "Export failed due to an invalid parameter format or an error occurred during processing."
+            )
+            raise e
 
     def reset_session(self):
         """

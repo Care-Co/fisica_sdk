@@ -4,10 +4,10 @@ from fisica_sdk import FisicaSDK, VisualOptions, Visualizer
 
 
 def test(data):
-    image = sdk.render(data,mode=VisualOptions.BBOX)
+    image = sdk.render(frame=data, mode=VisualOptions.BBOX,scale=2.0)
     vis.update(image)
 
-sdk = FisicaSDK(debug=logging.DEBUG)
+sdk = FisicaSDK(debug=logging.ERROR)
 
 
 sdk.set_metadata(name="test")

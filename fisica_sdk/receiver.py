@@ -40,6 +40,12 @@ class Receiver:
         self._uart.send("AT+AUTO", newLine=True)
 
     def stop(self):
+        if self._check_stop_event:
+            self._check_stop_event.set()
+        if self.check_thread and self.check_thread.is_alive():
+            if threading.current_thread() != self.check_thread:
+                self.check_thread.join()
+                self.heartbeat = False
         if self.loop_alive:
             if self._handler:
                 self._handler.stop_listening()
@@ -48,16 +54,11 @@ class Receiver:
         self._stop_event.set()
         if self._thread:
             self._thread.join()
-        if self._check_stop_event:
-            self._check_stop_event.set()
-        if self.check_thread and self.check_thread.is_alive():
-            if threading.current_thread() != self.check_thread:
-                self.check_thread.join()
         log.debug("Receiver stopped.")
 
     def _read_loop(self):
         while not self._stop_event.is_set():
-            time.sleep(0.05)
+            time.sleep(0.1)
             if self._handler:
                 try:
                     data = self._handler.data_queue.get(block=False)
@@ -92,6 +93,7 @@ class Receiver:
                     time.sleep(0.5)
                     self.start()
             time.sleep(1)
+        self.heartbeat = False
 
     def conn(self):
         if self._device_id in find_bluetooth_com_ports():

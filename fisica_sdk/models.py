@@ -18,10 +18,10 @@ class MeasurementSession:
 class SessionReport:
     session_id: str
     name: str
-    foot_length: Dict[str, float]   # e.g., {'left': 23.1, 'right': 24.5}
-    foot_width: Dict[str, float]    # e.g., {'left': 9.8, 'right': 10.2}
+    foot_length: Dict[str, float]
+    foot_width: Dict[str, float]
     total_frame: List[MeasurementFrame]
     frame_count: int
     duration_sec: float
-    weight: Optional[float] = None
-    battery: Optional[float] = None
+    weight: Optional[float] = 0.0
+    battery: Optional[float] = 0.0
