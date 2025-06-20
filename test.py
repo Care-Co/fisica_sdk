@@ -1,87 +1,73 @@
-import logging
+from fisica_sdk import FisicaSDK
 
-from fisica_sdk import FisicaSDK, VisualOptions, Visualizer
+sdk = FisicaSDK(debug=10)
 
-
-def test(data):
-    image = sdk.render(frame=data, mode=VisualOptions.BBOX,scale=2.0)
-    vis.update(image)
-
-sdk = FisicaSDK(debug=logging.ERROR)
-
-
-sdk.set_metadata(name="test")
 devices = sdk.scan_devices()
-sdk.connect(devices[0])  # 첫 번째 장비에 연결
-sdk.on_data(test)
+
+sdk.connect(devices[0])
+
+
+# Set metadata
+# Start measurement
 sdk.start_measurement()
+
+# Measure for 8 seconds
 sdk.sleep(8)
+
+# Stop measurement
 sdk.stop_measurement()
-# sdk.wait()
-report = sdk.analyze()
-print(report)
-# print(report)
-# sdk.export_report(format="json", filename="heejung_session")
 
+# Wait for the completion of measurement, stop, disconnect, or sleep operations.
+# Not recommended for use with measurement methods that do not have a specified duration.
+sdk.wait()
 
-vis = Visualizer()
-vis.run(scale=2.0)
+# Analyze measurement record
+report1 = sdk.analyze()
 
+# Print analysis result
+print(report1)
 
-# 3. 분석 단계
-# 2.3 측정 종료
-# stop_measurement()
-#
-# → 데이터 수신을 종료하고 세션이 고정됨
-# 3.1 분석 실행
-# analyze()
-#
-# → 누적된 프레임들을 기반으로
-#
-# → 발길이, 발볼을 계산하고 SessionReport 생성
-#
-# ※ 체중 정보는 프레임 내에서 추출됨
-#
-#
-#
-# 3.2 분석 결과 확인
-# get_report()
-#
-# → analyze()에서 생성된 분석 결과를 반환
-#
-# → 여기에는 측정 프레임 수, 측정 시간, 대표 프레임 등이 포함됨
-#
-#
-#
-# 3.3 전체 분석 결과 확인
-#
-# get_all_reports()
-#
-# 지금 까지 저장된 분석 결과
-# 4. 결과 저장 단계
-# 결과물 파일 출력/ 저장
-# export_report(filename)
-#
-# → 발길이/발볼 등의 요약 수치를 테이블로 저장
-# 5. 다음 참가자 측정 준비
-# 5.1 세션 초기화
-# reset_session()
-# → 누적 데이터 초기화
-# → 다음 참가자 정보 등록 → 반복 측정 가능
-# 5.2 전체 결과물 초기화
-# reset_reports()
-# → 전체 데이터 초기화
+# Repeat measurement with same metadata
+sdk.start_measurement()
 
+# Measure for 8 seconds
+sdk.sleep(8)
 
-# hex_data = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000004227c19280000000000002630008e1200000000000033a6100c2b000000000032e600001e008800000000940000003c58000000000000d2000000000f280000c10000243c002e000000000000366ab94047006a0000002de2aaf9255c0000000000008e640b8da03f0000363867bad66fcf16000000000097e1a5b796cbe8420000788594d13272290000000000008d075debabca1100149eaf8f5cb288e1000000000000b469bb4579b02376a2ba7154101d16000000000000000066e6739e8391293a568416000000000000000000000000000035731500001702000000000000000000000000000000002f9b00000012000000000000000000000000000000009c9f00000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000250000000000000000000000000000000000000000000000040000000000000000000000000000000000000000106a0000000000000024030000000000000000000016114f10000000000000242400000000000000000600050c50ac0000000000041912000000000000000000000000732a0000000000000600000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000f00f380253f00f"
-# # 내부에서 일어나야함.
-# result = sdk.analyze(hex_data)
-# print(result)
-# image = sdk.visualize(hex_data, VisualOptions.BBOX)
-# # for image in images:
-# cv2.imshow("as",image)
-# cv2.waitKey()
+# Stop measurement
+sdk.stop_measurement()
 
+# Wait for disconnection (it blocks main thread)
+sdk.wait()
 
-# print(VisualOptions.__doc__)
-# print(FisicaSDK.visualize.__doc__)
+# Analyze measurement record
+sdk.analyze()
+
+# Reset session
+sdk.reset_session()
+
+# Set metadata
+sdk.set_metadata(name="donggil")
+
+# Start measurement
+sdk.start_measurement()
+
+# Measure for 5 seconds
+sdk.sleep(5)
+
+# Stop measurement
+sdk.stop_measurement()
+
+# Wait for disconnection (it blocks main thread)
+sdk.wait()
+
+# Analyze measurement record
+sdk.analyze()
+
+# Retrieve all metadata records
+all_report=sdk.get_all_reports()
+
+# Export analysis results to file
+sdk.export_report(all_report)
+
+# Reset all measurement records
+sdk.reset_reports()

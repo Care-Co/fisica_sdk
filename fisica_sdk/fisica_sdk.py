@@ -51,10 +51,10 @@ class FisicaSDK:
     """
 
     def __init__(self, debug=logging.INFO):
-        # self._np_ready = threading.Event()
         self._disconnecting = False
         self._connected = False
         self._sleeping = False
+        self._starting = False
         self._stopping = False
         self._available_devices = None
         self._connected_device = None
@@ -71,7 +71,6 @@ class FisicaSDK:
         self._counter = 0
         self._debug = debug
         log.level = self._debug
-        # self._np_ready.set()
 
     def _set_metadata(self, **kwargs):
         default_metadata = {
@@ -111,6 +110,7 @@ class FisicaSDK:
             self._frames.clear()
             self._receiver.start()
             self._working = True
+            self._starting = False
         log.info("Measurement started.")
 
     async def _stop_async(self):
@@ -129,8 +129,6 @@ class FisicaSDK:
                 f"  Unknown error occurred while stopping measurement : {e}"
             )
             raise RuntimeError
-        finally:
-            self._np_ready.set()
 
     def sleep(self, seconds: float, after: Optional[callable] = None):
         """
@@ -236,6 +234,7 @@ class FisicaSDK:
             - When duration is specified, there is no need to call stop_measurement() manually.
             - Make sure to call scan_devices() and connect() before using this method to establish a device connection.
         """
+        self._starting = True
         if not self._connected:
             log.error(
                 "\nFisica SDK\n"
@@ -245,6 +244,7 @@ class FisicaSDK:
                 "   For guidance on device scanning and connection, use:\n"
                 "   `print(FisicaSDK.scan_devices.__doc__)` and `print(FisicaSDK.connect.__doc__)`.\n"
             )
+            self._starting = False
             raise RuntimeError("Not connected to a device.")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -262,7 +262,7 @@ class FisicaSDK:
         """
         self._stopping = True
         if getattr(self, "_sleeping", False):
-            log.info("Stop requested during sleep; deferring stop.")
+            log.debug("Stop requested during sleep; deferring stop.")
 
             def _wait_and_stop():
                 while getattr(self, "_sleeping", False):
@@ -379,8 +379,8 @@ class FisicaSDK:
         self._current_report = SessionReport(
             session_id=metadata.get("id", "unknown"),
             name=metadata.get("name", "unknown"),
-            foot_length={"left": ll, "right": rl},
-            foot_width={"left": lw, "right": rw},
+            foot_length={"left": round(ll,2), "right": round(rl,2)},
+            foot_width={"left": round(lw,2), "right": round(rw,2)},
             total_frame=frames,
             frame_count=len(frames),
             duration_sec=round(self._duration, 2),
@@ -389,7 +389,7 @@ class FisicaSDK:
         )
 
         self._reports.append(self._current_report)
-
+        self._session.frames = []
         return self._current_report
 
     def render(self, frame: Optional[MeasurementFrame] = None, grid_data: Optional[np.ndarray] = None, mode: str = "BLUR", scale: float = 1.0):
@@ -436,5 +436,5 @@ class FisicaSDK:
         return global_render(grid_data, mode, scale=scale)
 
     def wait(self):
-        while self._stopping or self._working or self._sleeping or self._disconnecting:
+        while self._stopping or self._working or self._sleeping or self._starting or self._disconnecting:
             time.sleep(0.1)
