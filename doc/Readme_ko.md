@@ -472,7 +472,7 @@ sdk.wait()
 ```python
 import logging
 
-sdk = fisica.FisicaSDK(level=logging.DEBUG)
+sdk = fisica.FisicaSDK(debug=logging.DEBUG)
 ```
 
 ## 📚 API 레퍼런스
@@ -485,8 +485,8 @@ sdk = fisica.FisicaSDK(level=logging.DEBUG)
 현재 측정 세션에 대한 메타데이터를 설정합니다.
 
 **Parameters**:
-- `id` (Any, Optional): 사용자 또는 세션 식별자입니다.
-- `name` (str, Optional): 사용자 또는 세션 식별자입니다.
+- `id` (Any, optional): 사용자 또는 세션 식별자입니다.
+- `name` (str, optional): 사용자 또는 세션 식별자입니다.
 
 **Returns**:  
 없음
@@ -534,7 +534,7 @@ sdk = fisica.FisicaSDK(level=logging.DEBUG)
 
 ---
 
-### `start_measurement(duration: int = None)`
+### `start_measurement(duration: Optional[float])`
 
 **Description**:  
 측정 데이터 수집을 시작합니다. `duration`이 주어지면 해당 시간(초) 후에 자동으로 측정을 중지합니다.  
@@ -544,7 +544,7 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 또는 GUI 기반 애플리케이션을 개발하여 `duration` 경과 후 자동으로 측정을 종료하도록 하거나, `stop_measurement()` 트리거를 설정하는 방식을 사용할 수 있습니다.
 
 **Parameters**:
-- `duration` (int, Optional): 측정 시간(초)입니다.
+- `duration` (float, optional): 측정 시간(초)입니다.
 
 **Returns**:  
 없음
@@ -577,7 +577,7 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 
 ---
 
-### `sleep(seconds: float, after: Optional[callable] = None)`
+### `sleep(seconds: float, after: Optional[callable])`
 
 **Description**:  
 메인 스레드를 차단하지 않고 비동기적으로 지정한 시간 동안 대기합니다.  
@@ -585,7 +585,7 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 
 **Parameters**:
 - `seconds` (float): 대기 시간(초)입니다.
-- `after` (callable, Optional): 대기 후 실행할 함수입니다.
+- `after` (callable, optional): 대기 후 실행할 함수입니다.
 
 **Returns**:  
 없음
@@ -665,7 +665,7 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 
 ---
 
-### `export_report(output: str)`
+### `export_report(report: Optional[Union['SessionReport', list]], output: Optional[str])`
 
 **Description**:  
 지정된 출력 경로, 파일명 또는 디렉토리에 모든 레포트를 JSON 파일로 내보냅니다.  
@@ -675,6 +675,8 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 예: result 폴더가 존재하지 않는 경우 "output/sample/result"는 "output/sample/result.json"이 됩니다.
 
 **Parameters**:
+
+- `report` (SessionReport, optional): `get_all_reports()` 혹은 `get_all_reports()`를 통해 얻은 데이터. 제공되지 않는 경우 가장 최근의 SessionReport를 기준으로 출력됨.
 - `output` (str): 내보낼 파일 경로나 디렉토리입니다.
 
 **Returns**:  
@@ -708,7 +710,7 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 
 ---
 
-### `render(frame: Optional[MeasurementFrame] = None, grid_data: Optional[np.ndarray] = None, mode: str = "BLUR", scale: float = 1.0)`
+### `render(frame: Optional[MeasurementFrame], grid_data: Optional[np.ndarray], mode: Optional[str], scale: Optional[float])`
 
 **Description**:  
 프레임 또는 센서 그리드 데이터를 이미지로 렌더링합니다.  
@@ -716,10 +718,10 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 `frame`은 `on_data`에 콜백함수를 등록했을 때 인자로 전달되는 변수입니다.
 
 **Parameters**:
-- `frame` (MeasurementFrame, Optional): 센서 매트릭스를 포함하는 데이터 클래스 인스턴스입니다.
-- `grid_data` (np.ndarray, Optional): 2차원 NumPy 배열 형태의 센서 그리드 데이터입니다.
-- `mode` (str): 시각화 스타일(예: "BLUR")입니다. 자세한 내용은 아래 VisualOption 섹션을 참조하세요.
-- `scale` (float): 이미지 크기 배율입니다.
+- `frame` (MeasurementFrame, optional): 센서 매트릭스를 포함하는 데이터 클래스 인스턴스입니다.
+- `grid_data` (np.ndarray, optional): 2차원 NumPy 배열 형태의 센서 그리드 데이터입니다.
+- `mode` (str, optional): 시각화 스타일(예: "BLUR")입니다. 자세한 내용은 아래 VisualOption 섹션을 참조하세요. `기본:VisualOptions.BLUR`
+- `scale` (float, optional): 이미지 크기 배율입니다. `기본 1.0`
 
 **Returns**:
 - `np.ndarray`: 렌더링된 이미지가 담긴 NumPy 배열입니다.
@@ -741,13 +743,13 @@ VisualOptions 클래스는 FisicaSDK.render()에서 사용할 수 있는 렌더�
 
 ---
 
-### `run(scale: float = 1.0)`
+### `run(scale: Optional[float])`
 
 **Description**:  
 실시간 시각화를 위한 GUI 뷰어를 지정한 배율로 실행합니다.
 
 **Parameters**:
-- `scale` (float): GUI 창의 크기 배율입니다.
+- `scale` (float, optional): GUI 창의 크기 배율입니다. `기본 1.0`
 
 **Returns**:  
 없음

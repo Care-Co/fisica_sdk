@@ -537,7 +537,7 @@ None
 
 ---
 
-### `start_measurement(duration: int = None)`
+### `start_measurement(duration: Optional[float])`
 
 **Description**:  
 Begins capturing measurement data. If `duration` is given, it stops automatically after the duration (in seconds).  
@@ -548,7 +548,7 @@ and then call `stop_measurement()` to end the measurement. The SDK's built-in sl
 Alternatively, you can develop a GUI-based application to automatically end the measurement by `duration` or set up a trigger for `stop_measurement()`.  
 
 **Parameters**:
-- `duration` (int, optional): Duration of the measurement in seconds.
+- `duration` (float, optional): Duration of the measurement in seconds.
 
 **Returns**:  
 None
@@ -581,7 +581,7 @@ None
 
 ---
 
-### `sleep(seconds: float, after: Optional[callable] = None)`
+### `sleep(seconds: float, after: Optional[callable])`
 
 **Description**:  
 Asynchronously sleeps for the given time without blocking the main thread. An optional callback can be executed afterward.
@@ -668,7 +668,7 @@ None
 
 ---
 
-### `export_report(output: Optional[str])`
+### `export_report(report: Optional[Union['SessionReport', list]], output: Optional[str])`
 
 **Description**:  
 Exports all reports to a JSON file at the specified output path, filename, or directory.  
@@ -677,7 +677,9 @@ If target is an existing directory, generates filename using predefined naming r
 
 e.g., "output/sample/result" becomes "output/sample/result.json" if result folder doesn't exist.
 
-**Parameters**:
+**Parameters**:  
+
+- `report` (SessionReport, optional): Data obtained through `get_all_reports()` or `get_reports()`. If not provided, outputs based on the most recent SessionReport.
 - `output` (str, optional): File path or directory for export.
 
 **Returns**:  
@@ -711,7 +713,7 @@ None
 
 ---
 
-### `render(frame: Optional[MeasurementFrame] = None, grid_data: Optional[np.ndarray] = None, mode: str = "BLUR", scale: float = 1.0)`
+### `render(frame: Optional[MeasurementFrame], grid_data: Optional[np.ndarray], mode: Optional[str], scale: Optional[float])`
 
 **Description**:  
 Renders a sensor grid (from a frame or raw grid data) into an image using the specified visualization mode and scale.
@@ -720,8 +722,8 @@ Renders a sensor grid (from a frame or raw grid data) into an image using the sp
 **Parameters**:
 - `frame` (MeasurementFrame, optional): A dataclass instance containing the sensor matrix.
 - `grid_data` (np.ndarray, optional): A 2D NumPy array representing the sensor grid.
-- `mode` (str): Visualization style (e.g., "BLUR"). For more details, refer to the VisualOption section below.
-- `scale` (float): Scale factor for the image size.
+- `mode` (str, optional): Visualization style (e.g., "BLUR"). For more details, refer to the VisualOption section below. `default:VisualOptions.BLUR`
+- `scale` (float, optional): Scale factor for the image size. `default:1.0`
 
 **Returns**:
 - `np.ndarray`: Rendered image as a NumPy array.
@@ -743,13 +745,13 @@ Rendering modes:
 
 ---
 
-### `run(scale: float = 1.0)`
+### `run(scale: Optional[float])`
 
 **Description**:  
 Launches the GUI viewer for real-time visualizations with the specified scale.
 
 **Parameters**:
-- `scale` (float): Scale factor for the GUI window.
+- `scale` (float, optional): Scale factor for the GUI window. `default:1.0`
 
 **Returns**:  
 None

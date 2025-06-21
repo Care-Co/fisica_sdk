@@ -303,7 +303,7 @@ class FisicaSDK:
         try:
             if not self._current_report:
                 raise
-            return serialize_session_report(self._current_report)
+            return [serialize_session_report(self._current_report)]
         except Exception as e:
             log.error(
                 "\nFisica SDK\n"
