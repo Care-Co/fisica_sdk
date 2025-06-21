@@ -1,0 +1,13 @@
+Metadata-Version: 1.2
+Name: carenco
+Version: 0.1.0
+Summary: Care&Co Foot pressure analysis and visualization SDK
+Home-page: https://github.com/Care-Co/
+Author: Care&Co
+Author-email: carencoinc@carenco.kr
+License: UNKNOWN
+Description: UNKNOWN
+Platform: UNKNOWN
+Classifier: Programming Language :: Python :: 3.8
+Classifier: License :: OSI Approved :: MIT License
+Requires-Python: >=3.8
