@@ -1,6 +1,14 @@
+
+
+
 # Fisica SDK - Python Interface
 
-This SDK provides a Python interface to communicate with the Fisica scale device for plantar pressure and foot measurement analysis.
+This SDK provides a Python interface to communicate with the Fisica scale device for plantar pressure measurement analysis.
+
+
+###  [한국어 버전(Korean Version)](doc/Readme_ko.md)
+
+
 
 ## 📦 Key Functions
 
@@ -14,8 +22,8 @@ Sets metadata for the current measurement session.
 **Parameters**:
 - `id` (Any, optional): Identifier for the user/session.
 - `name` (str, optional): Identifier for the user/session.
-**Returns**:  
-None
+  **Returns**:  
+  None
 
 ---
 
@@ -78,7 +86,7 @@ None
 ### `stop_measurement()`
 
 **Description**:  
-Stops the current measurement and finalizes the session data.
+Stops the current measurement.
 
 **Parameters**:  
 None
@@ -94,7 +102,7 @@ None
 Registers a callback function that will be called in real-time as measurement frames are received.
 
 **Parameters**:
-- `callback` (callable): A function that takes a single argument of type `MeasurementFrame`.
+- `callback` (callable): You can register a function that takes a single argument of type `MeasurementFrame`.
 
 **Returns**:  
 None
@@ -154,9 +162,12 @@ None
 ### `get_session_frames()`
 
 **Description**:  
-Returns the current session's raw frame data in a serializable format.
+Returns the frame data of the current session in serialized format.
 
-**Returns**:  
+**Parameters**:  
+None
+
+**Returns**:
 - `List[Dict]`: Serialized frames from the current session.
 
 ---
@@ -231,6 +242,7 @@ None
 
 **Description**:  
 Renders a sensor grid (from a frame or raw grid data) into an image using the specified visualization mode and scale.
+`frame` is the variable passed as an argument when a callback function is registered to `on_data`.
 
 **Parameters**:
 - `frame` (MeasurementFrame, optional): A dataclass instance containing the sensor matrix.
@@ -247,14 +259,14 @@ Renders a sensor grid (from a frame or raw grid data) into an image using the sp
 
 The VisualOptions class defines available rendering modes for visualizing sensor data using FisicaSDK.render().
 
-Rendering Modes:
-- PIXEL: Color-mapped pixel grid.
-- BLUR: Smooth and continuous heatmap rendering.
-- BINARY: ASCII-style grid displaying all raw values.
-- BINARY_NONZERO: ASCII-style grid omitting zero values.
-- BBOX: Draws the bounding box based on PCA of the activated region.
-- CONTOUR: Extracts and overlays the contour of the foot shape.
-- ALL: Returns all rendering results in a list.
+Rendering modes:
+- PIXEL: Pixel heatmap rendering
+- BLUR: Smooth heatmap rendering
+- BINARY: Binary grid rendering
+- BINARY_NONZERO: Binary grid rendering excluding zero values
+- BBOX: Bounding box rendering based on BLUR and Principal Component Analysis (PCA)
+- CONTOUR: Pixel-based contour rendering
+- ALL: Returns all rendering results in list format
 
 ---
 
