@@ -1,6 +1,0 @@
-setup.py
-carenco.egg-info/PKG-INFO
-carenco.egg-info/SOURCES.txt
-carenco.egg-info/dependency_links.txt
-carenco.egg-info/requires.txt
-carenco.egg-info/top_level.txt
