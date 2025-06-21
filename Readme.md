@@ -6,14 +6,14 @@ This SDK provides a Python interface to communicate with the Fisica scale device
 
 ---
 
-### `set_metadata(name: str)`
+### `set_metadata(**kwargs)`
 
 **Description**:  
 Sets metadata for the current measurement session.
 
 **Parameters**:
+- `id` (Any, optional): Identifier for the user/session.
 - `name` (str, optional): Identifier for the user/session.
-
 **Returns**:  
 None
 
@@ -101,6 +101,7 @@ None
 
 ---
 
+
 ### `sleep(seconds: float, after: Optional[callable] = None)`
 
 **Description**:  
@@ -114,6 +115,25 @@ Asynchronously sleeps for the given time without blocking the main thread. An op
 None
 
 ---
+
+### `wait()`
+
+**Description**:  
+Waits until all asynchronous operations (e.g., `start_measurement()`, `stop_measurement()`, `sleep()`, `disconnect()`) are completed.
+
+This ensures that all SDK operations that run in the background are fully finished before proceeding to the next step, such as data processing or visualization.
+
+⚠️ It **blocks the main thread** while waiting.
+
+**Parameters**:  
+None
+
+**Returns**:  
+None
+
+---
+
+
 
 ### `analyze()`
 
@@ -223,7 +243,44 @@ Renders a sensor grid (from a frame or raw grid data) into an image using the sp
 
 ---
 
-## 📝 Notes
-- `start_measurement()` and `stop_measurement()` can be used manually or with a timed duration.
-- Internally, sensor data is collected via a serial connection and processed to form a pressure matrix.
-- All analysis results follow a common dictionary format suitable for post-processing or visualization.
+**🖼️ VisualOptions**
+
+The VisualOptions class defines available rendering modes for visualizing sensor data using FisicaSDK.render().
+
+Rendering Modes:
+- PIXEL: Color-mapped pixel grid.
+- BLUR: Smooth and continuous heatmap rendering.
+- BINARY: ASCII-style grid displaying all raw values.
+- BINARY_NONZERO: ASCII-style grid omitting zero values.
+- BBOX: Draws the bounding box based on PCA of the activated region.
+- CONTOUR: Extracts and overlays the contour of the foot shape.
+- ALL: Returns all rendering results in a list.
+
+---
+
+### `run(scale: float = 1.0)`
+
+**Description**:  
+Launches the GUI viewer for real-time visualizations with the specified scale.
+
+**Parameters**:
+- `scale` (float): Scale factor for the GUI window.
+
+**Returns**:  
+None
+
+---
+
+
+### `update(image: np.ndarray)`
+
+**Description**:  
+Updates the GUI viewer with the given rendered image.
+
+**Parameters**:
+- `image` (np.ndarray): The rendered image to display.
+
+**Returns**:
+None
+
+---

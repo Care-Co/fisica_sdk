@@ -1,13 +1,10 @@
 import cv2
 import numpy as np
-import logging
 from typing import Union
 from PIL import Image, ImageDraw, ImageFont
 from .analyzer import pca_bounding_box_dimensions
 from .gui_viewer import update_gui
-
-
-logger = logging.getLogger(__name__)
+from .utils import log
 
 
 def render(grid_data: np.ndarray, mode: str = 'BLUR', scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
@@ -76,7 +73,7 @@ class Visualizer:
         try:
             grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         except Exception as e:
-            logger.critical(
+            log.critical(
                 "\n\nFisica SDK\n"
                 f"   There seems to be a problem with processing the matrix: {e}\n"
             )
@@ -109,7 +106,7 @@ class Visualizer:
             font_size = int(min(cell_w, cell_h) * 0.8)
             font = ImageFont.truetype("SansSerif.ttf", font_size)
         except IOError:
-            logger.warning("TrueType font not found. Falling back to default font.")
+            log.warning("TrueType font not found. Falling back to default font.")
             font = ImageFont.load_default()
 
         for i in range(rows):
@@ -133,10 +130,7 @@ class Visualizer:
         return cv2.cvtColor(np.array(image_resized), cv2.COLOR_RGB2BGR)
 
     def _render_bbox(self, grid_data: np.ndarray) -> np.ndarray:
-        import math
         img = self._render_pixel(grid_data)
-        # grid = decode_raw(grid_data)
-        # grid = preprocess_grid_data(grid)
         rows, cols = grid_data.shape
         h, w = img.shape[:2]
         cell_w = w / cols
@@ -169,9 +163,7 @@ class Visualizer:
             cv2.polylines(img, [corners], True, color, 2)
 
         mid = cols // 2
-        # left foot in green
         draw_pca_box(grid_data[:, :mid], 0, (0,255,0))
-        # right foot in blue
         draw_pca_box(grid_data[:, mid:], mid, (255,0,0))
 
         return img

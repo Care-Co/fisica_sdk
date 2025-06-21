@@ -28,6 +28,7 @@ class FisicaSDK:
         - stop_measurement(): Stop ongoing data collection.
         - on_data(callback: Callable): Register a callback function to receive real-time frame data.
         - sleep(seconds: float, after: Optional[Callable]): Non-blocking delay with optional callback after delay.
+        - wait(): Wait until all internal states (starting, stopping, working, sleeping, disconnecting) are cleared.
         - analyze(): Analyze collected session frames and generate a session report.
         - get_session_frames(): Retrieve serialized raw frames from the current session.
         - get_report(): Retrieve the most recent analysis report.
@@ -260,18 +261,21 @@ class FisicaSDK:
         """
         :return:
         """
-        self._stopping = True
         if getattr(self, "_sleeping", False):
             log.debug("Stop requested during sleep; deferring stop.")
 
             def _wait_and_stop():
                 while getattr(self, "_sleeping", False):
+                    self._counter = (self._counter + 1) % 25
+                    if not self._counter:
+                        log.debug("sleep in the stop_measurement()")
                     time.sleep(0.1)
                 asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
 
             threading.Thread(target=_wait_and_stop, daemon=True).start()
             return
 
+        self._stopping = True
         # sleep 중이 아니면 즉시 종료
         if hasattr(self, "_loop") and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
@@ -377,8 +381,8 @@ class FisicaSDK:
         weight, lw, ll, rw, rl = result
 
         self._current_report = SessionReport(
-            session_id=metadata.get("id", "unknown"),
-            name=metadata.get("name", "unknown"),
+            session_id=metadata.get("id"),
+            name=metadata.get("name"),
             foot_length={"left": round(ll,2), "right": round(rl,2)},
             foot_width={"left": round(lw,2), "right": round(rw,2)},
             total_frame=frames,
@@ -437,4 +441,14 @@ class FisicaSDK:
 
     def wait(self):
         while self._stopping or self._working or self._sleeping or self._starting or self._disconnecting:
+            self._counter = (self._counter + 1) % 25
+            if not self._counter:
+                log.debug(
+                    "wait for..\n"
+                    f"starting ? > {self._starting}\n"
+                    f"stopping ? > {self._stopping}\n"
+                    f"working ? > {self._working}\n"
+                    f"sleeping? > {self._sleeping}\n"
+                    f"disconnecting? > {self._disconnecting}"
+                )
             time.sleep(0.1)

@@ -9,7 +9,7 @@ sdk.connect(devices[0])
 
 # Set metadata
 # Start measurement
-sdk.start_measurement()
+sdk.start_measurement(20)
 
 # Measure for 8 seconds
 sdk.sleep(8)
