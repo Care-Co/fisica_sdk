@@ -66,6 +66,7 @@ class LogWrapper:
 def resolve_output_path(output: str) -> str:
     if not output:
         filename = f"session_report_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+        log.debug(f"filename set to {filename}")
         return os.path.join(os.getcwd(), filename)
 
     output = os.path.abspath(output)

@@ -72,14 +72,19 @@ def export_session_reports_to_json(
         reports: A list of results returned from serialize_session_report.
         output_path: Full path (including filename) where the JSON file will be saved.
     """
+    log.debug(reports)
+
     if not os.path.splitext(output_path)[1]:
         output_path += ".json"
     try:
         output_path = os.path.abspath(output_path)
+        log.debug(f"output_path : {output_path}")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         for report in reports:
-            if "total_frame" in report:
-                for frame in report["total_frame"]:
+            log.debug(f"individual report : {report}")
+            if 'total_frame' in report:
+                for frame in report['total_frame']:
+                    log.debug(f"frame : {frame}")
                     if "sensor_matrix" in frame:
                         # Reshape and convert to pretty string before serialization
                         reshape_sensor_matrix({"sensor_matrix": frame["sensor_matrix"]}, 22, 11)
@@ -90,3 +95,4 @@ def export_session_reports_to_json(
         log.info(f"JSON file successfully saved to '{output_path}'.")
     except Exception as e:
         log.error(f"Error occurred while saving JSON file: {e}")
+        raise e

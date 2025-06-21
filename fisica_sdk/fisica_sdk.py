@@ -83,7 +83,7 @@ class FisicaSDK:
             if key not in default_metadata:
                 raise ValueError(f"Unexpected metadata field: {key}")
             default_metadata[key] = kwargs[key]
-        if not default_metadata["id"]:
+        if default_metadata["id"] is None:
             import datetime
             default_metadata["id"] = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 
@@ -172,17 +172,20 @@ class FisicaSDK:
             if not isinstance(device, dict):
                 raise TypeError("Device must be a dictionary returned from scan_devices().")
 
-            device_id = device.get("id")
+            # device_id = device.get("id")
             log.info(f"Attempting to connect to device: {device}")
 
             if not hasattr(self, '_available_devices') or not self._available_devices:
                 raise RuntimeError("No devices scanned. Call scan_devices() first.")
-            if not any(d["id"] == device_id for d in self._available_devices):
-                raise ValueError(f"Device ID {device_id} not found in scanned list.")
+            # if not any(d["id"] == device_id for d in self._available_devices):
+            #     raise ValueError(f"Device ID {device_id} not found in scanned list.")
 
-            self._connected_device = device_id
+            self._connected_device = device.get('id')
             self._connected = True
-            self._receiver = Receiver(device_id, self._handle_frame)
+            # self._connected_device = device_id
+            # self._connected = True
+            self._receiver = Receiver(device, self._handle_frame)
+            # self._receiver = Receiver(device_id, self._handle_frame)
             self._receiver.conn()
 
         except Exception as e:
@@ -289,7 +292,7 @@ class FisicaSDK:
 
     def get_session_frames(self):
         if self._session:
-            return serialize_session_frame(self._session.frames)
+            return serialize_session_frame(self._session)
         else:
             log.info("It seems there is no active session.")
 
@@ -302,7 +305,7 @@ class FisicaSDK:
                 raise
             return serialize_session_report(self._current_report)
         except Exception as e:
-            log.info(
+            log.error(
                 "\nFisica SDK\n"
                 "   It seems that analyze has not been run."
                 "   Please make sure to call analyze before calling get_report."
@@ -329,9 +332,19 @@ class FisicaSDK:
         """
         try:
             if report is None:
-                report = serialize_session_report(self._current_report)
-            output_path = resolve_output_path(output)
-            return export_session_reports_to_json(report, output_path)
+                if not self._current_report:
+                    log.error(
+                        "\nFisica SDK\n"
+                        "   It seems that analyze has not been run."
+                        "   Please make sure to call analyze before calling export_report."
+                        "   For general information about the Fisica SDK, call `print(FisicaSDK.__doc__)`.\n"
+                        "   For guidance on device scanning and connection, use:\n"
+                        "   `print(FisicaSDK.analyze.__doc__)` and `print(FisicaSDK.export_report.__doc__)`.\n"
+                    )
+                else:
+                    report = [serialize_session_report(self._current_report)]
+                    output_path = resolve_output_path(output)
+                    return export_session_reports_to_json(report, output_path)
         except Exception as e:
             log.error(
                 "\nFisica SDK\n"
