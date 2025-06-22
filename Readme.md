@@ -2,7 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20|%20macOS%20|%20Linux-lightgrey.svg)](https://github.com/fisica/fisica_sdk)
+[![Platform](https://img.shields.io/badge/platform-Windows%20|%20macOS%20-lightgrey.svg)](https://github.com/fisica/fisica_sdk)
 
 
 ### [[Readme_ko (한국어 버전)]](doc/Readme_ko.md)
@@ -16,7 +16,7 @@ This SDK provides a Python interface to communicate with the Fisica scale device
 ### Requirements
 
 - Python 3.8 or higher
-- Operating System: Windows 10/11, macOS 10.15+, or Linux
+- Operating System: Windows 10/11 or macOS 10.15+
 
 ### Install via pip
 
@@ -168,10 +168,6 @@ For Bluetooth(BLE) devices:
 
 1. **Windows**: Ensure Bluetooth is enabled
 2. **macOS**: Grant Bluetooth permissions when prompted
-3. **Linux**: May require additional setup:
-   ```bash
-   sudo apt-get install bluetooth bluez libbluetooth-dev
-   sudo usermod -a -G dialout $USER  # Add user to dialout group
    ```
 
 ## 📊 Data Analysis
@@ -464,9 +460,8 @@ sdk.wait()
        print("No devices found. Check connection and permissions.")
    ```
 
-2. **Bluetooth permissions (macOS/Linux)**
+2. **Bluetooth permissions (macOS)**
     - Grant Bluetooth access when prompted
-    - On Linux, ensure user is in `dialout` group
 
 ### Debugging
 

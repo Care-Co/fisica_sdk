@@ -2,7 +2,7 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20|%20macOS%20|%20Linux-lightgrey.svg)](https://github.com/fisica/fisica_sdk)
+[![Platform](https://img.shields.io/badge/platform-Windows%20|%20macOS%20-lightgrey.svg)](https://github.com/fisica/fisica_sdk)
 
 이 SDK는 족저압 분석을 위한 Fisica Scale 장치와 통신할 수 있는 Python 인터페이스를 제공합니다.
 
@@ -12,7 +12,7 @@
 ### 시스템 요구사항
 
 - Python 3.8 이상
-- 운영체제: Windows 10/11, macOS 10.15+, 또는 Linux
+- 운영체제: Windows 10/11 또는 macOS 10.15+
 
 ### pip로 설치
 
@@ -165,10 +165,6 @@ SDK는 USB로 연결된 Fisica 기기를 자동으로 감지합니다.
 
 1. **Windows**: 블루투스가 활성화되어 있는지 확인
 2. **macOS**: 메시지가 나타나면 블루투스 권한 허용
-3. **Linux**: 추가 설정이 필요할 수 있습니다:
-   ```bash
-   sudo apt-get install bluetooth bluez libbluetooth-dev
-   sudo usermod -a -G dialout $USER  # 사용자를 dialout 그룹에 추가
    ```
 
 ## 📊 데이터 분석
@@ -461,9 +457,8 @@ sdk.wait()
        print("기기를 찾을 수 없습니다. 연결과 권한을 확인하세요.")
    ```
 
-2**블루투스 권한 (macOS/Linux)**
+2**블루투스 권한 (macOS)**
 - 메시지가 나타나면 블루투스 액세스 허용
-- Linux에서는 사용자가 `dialout` 그룹에 있는지 확인
 
 ### 디버깅
 
