@@ -39,12 +39,12 @@ class FisicaSDK:
         - render(frame: Optional[MeasurementFrame], grid_data: Optional[np.ndarray], mode: Optional[str], scale: Optional[float]): Render a visualization image from raw sensor data.
 
     Note:
-        time.sleep() pauses the main thread, which may block further execution.
+        `time.sleep()` pauses the main thread, which may block further execution.
         If you are running code that requires the main thread (e.g., GUI applications),
-        avoid using time.sleep() between start_measurement() and stop_measurement().
-        Instead, use sdk.sleep() or pass the duration parameter to start_measurement().
-        start_measurement()에 `duration` 파라미터를 전달하는 경우, stop_measurement()가 내부적으로 실행되므로,
-        메인 스레드에서 별도로 stop_measurement()를 호출하지 않는 것을 권장합니다.
+        avoid using `time.sleep()` between `start_measurement()` and `stop_measurement()`.
+        Instead, use `sdk.sleep()` or pass the duration parameter to `start_measurement()`.
+        When passing a `duration` parameter to `start_measurement()`, `stop_measurement()` is automatically executed,
+        so there's no need to call `stop_measurement()` separately in the main thread.
 
     For more information:
         Append .__doc__ to the method name and call print to view the documentation.
@@ -138,6 +138,19 @@ class FisicaSDK:
         Parameters:
             seconds (float): Duration to wait in seconds.
             after (callable, optional): Function to call after sleep ends.
+
+        Notes:
+           This function is used as an alternative to `time.sleep()` for controlling the measurement interval
+           between `start_measurement()` and `stop_measurement()` when executing tasks that should not block
+           the main thread (such as GUI programs).
+
+           Since this applies only to these two functions and not to other Fisica SDK features, please use
+           the built-in sleep function with caution.
+
+           Since `stop_measurement()` also executes asynchronously, if you need to ensure that
+           `stop_measurement()` has completed execution, please call the built-in `wait()` function,
+           which will block the main thread.
+
         """
         def _delayed():
             self._sleeping = True
@@ -149,24 +162,60 @@ class FisicaSDK:
 
     def set_metadata(self, **kwargs):
         """
-        :param device:
-        :return:
+    Fisica SDK: set_metadata
+
+        Parameters:
+            id (Any, optional): Identifier for the metadata.
+            name (Any, optional): Name for the metadata.
+
+        Notes:
+            The id is automatically generated based on the current time if not specified.
+            The name defaults to None if not specified.
+            While no specific format is required, it is recommended to use numeric
+            or string formats for both parameters.
         """
         self._set_metadata(**kwargs)
 
     def scan_devices(self):
+        """
+    Fisica SDK: scan_devices
+
+        Returns:
+            list: List of available Scale devices
+
+        Notes:
+            Scans for Scale devices connected via Bluetooth or wired connection.
+            If a wired Scale device is available, only that device information is returned.
+            If no wired Scale device is found, searches for Bluetooth devices.
+            Before connecting a device with `connect()`, you must pass the device obtained
+            through `scan_devices()` as an argument.
+            The return value is in list format, so use array indexing like `device[0]`
+            to attempt connection with a specific device.
+        """
         log.info("Scanning for available devices...")
         devices = scan()
         if not devices:
-            log.error("There's not connected device.")
+            log.error(
+                "\nFisica SDK\n"
+                "   No devices found. Please check if the device is powered on.\n"
+                "   For comprehensive information about Fisica SDK, please refer to the Readme or call `print(FisicaSDK.__doc__)`.\n"
+                "   For further operation details, call `print(FisicaSDK.connect.__doc__)`.\n"
+            )
             raise RuntimeError
         self._available_devices = devices
         return devices
 
     def connect(self, device):
         """
-        :param device:
-        :return:
+    Fisica SDK: connect
+
+        Parameters:
+            device: Device object obtained from scan_devices()
+
+        Notes:
+            Attempts to connect to a specific Scale device.
+            Use the return value from `scan_devices()` for the device parameter.
+            For detailed information, print `FisicaSDK.scan_devices.__doc__`.
         """
         try:
             if not isinstance(device, dict):
@@ -195,6 +244,22 @@ class FisicaSDK:
             )
             raise e
     def disconnect(self):
+        """
+    Fisica SDK: disconnect
+
+        Notes:
+            Disconnects from the currently connected Scale device.
+            This method does not block the main thread execution.
+            If you need to ensure completion before executing subsequent methods
+            like `analyze()` or `get_report()`, call the built-in `wait()` function.
+
+            After disconnection, you must call `connect()` again to execute
+            measurement processes on the scale. Use this method when you need to
+            change device connections after initially connecting to a scale.
+
+            Attempting to connect to another device without disconnecting first
+            may cause unintended behavior and is not recommended.
+        """
         def _disconnect():
             while self._working or self._stopping:
                 time.sleep(0.1)
@@ -219,7 +284,6 @@ class FisicaSDK:
         threading.Thread(target=_disconnect, daemon=True).start()
 
     def start_measurement(self, duration=None):
-
         """
     Fisica SDK: start_measurement
 
@@ -257,7 +321,15 @@ class FisicaSDK:
 
     def stop_measurement(self):
         """
-        :return:
+    Fisica SDK: stop_measurement
+
+        Notes:
+            Stops the measurement process. This method does not block the main thread,
+            which may cause unintended errors in subsequent methods like `analyze()`
+            that should be executed after measurement completion.
+
+            To ensure the measurement stop operation is completed, use the built-in
+            `wait()` function. Note that this will block the main thread execution.
         """
         if getattr(self, "_sleeping", False):
             log.debug("Stop requested during sleep; deferring stop.")
@@ -279,13 +351,31 @@ class FisicaSDK:
             asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
     def on_data(self, callback):
         """
-        :param callback:
-        :return:
+    Fisica SDK: on_data
+
+        Parameters:
+            callback (function): User-defined callback function to handle plantar pressure data
+
+        Notes:
+            Registers a user-defined function as a callback through this `on_data()` method.
+            When plantar pressure data is received from the Scale, this function calls
+            the registered callback function with the plantar pressure data as an argument.
         """
         self._callback = callback
         log.debug("Callback for real-time data set.")
 
     def get_session_frames(self):
+        """
+    Fisica SDK: get_session_frames
+
+        Returns:
+            Serialized plantar pressure frame data from the current session
+
+        Notes:
+            Returns serialized plantar pressure frame data from the current session.
+            Note that this must be called after measurement has stopped.
+        """
+
         if self._session:
             return serialize_session_frame(self._session)
         else:
@@ -293,7 +383,15 @@ class FisicaSDK:
 
     def get_report(self):
         """
-        :return:
+    Fisica SDK: get_report
+
+        Returns:
+            Serialized SessionReport information from the most recent analysis
+
+        Notes:
+            Returns serialized SessionReport information from the most recently
+            executed `analyze()`. Note that this function must be called after
+            the current session measurement has ended and `analyze()` has been executed.
         """
         try:
             if not self._current_report:
@@ -312,18 +410,31 @@ class FisicaSDK:
 
     def get_all_reports(self):
         """
-        :return:
+    Fisica SDK: get_all_reports
+
+        Returns:
+           list: Serialized list of all analyzed SessionReport objects
+
         """
         return [serialize_session_report(r) for r in self._reports]
 
 
-    def export_report(self, report: Optional[Union['SessionReport', list]] = None, output: str = None):
+    def export_report(self, report: Optional[Union['SessionReport', list]] = None, output: Optional[str] = None):
         """
+    Fisica SDK: export_report
+
         Save the report(s) to a JSON file.
 
-        :param report: A single SessionReport or a list of SessionReport objects.
+        Parameters:
+            report (Optional[Union['SessionReport', list]]): A single SessionReport or a list of SessionReport objects.
                        If None, export the most recent session report.
-        :param output: Output can be a directory, a filename, or a full file path.
+
+            output (Optional[str]): Output can be a directory, a filename, or a full file path.
+
+        Notes:
+           If no argument is provided for report, exports information from the most
+           recently analyzed SessionReport. Calling this method without having
+           performed `analyze()` may result in an error.
         """
         try:
             if report is None:
@@ -349,22 +460,46 @@ class FisicaSDK:
 
     def reset_session(self):
         """
-        :return:
+    Fisica SDK: reset_session
+
+        Notes:
+            Resets the current session. You must call `analyze()` before performing this operation
+            to ensure the current session is properly reflected when performing subsequent operations like export.
         """
+
         self._session = None
         self._current_report = None
-        log.info("Session reset for next participant.")
+        log.info("Session reset for next measurement.")
 
     def reset_reports(self):
         """
-        :return:
+    Fisica SDK: reset_reports
+
+        Notes:
+           Clears all SessionReport objects obtained through `analyze()`.
+           It is recommended to save all necessary information, such as using
+           `export_report()`, before calling this method.
         """
         self._reports.clear()
         log.info("All reports reset.")
 
     def analyze(self):
         """
+    Fisica SDK: analyze
 
+        Returns:
+            SessionReport: Generated report based on current session data
+
+        Notes:
+            Generates a SessionReport based on the plantar pressure frame data
+            stored in the current session. While this function returns the
+            SessionReport on first execution, it clears the plantar pressure
+            data (excluding metadata) from the current session to allow for
+            re-measurement.
+
+            Calling this function again on the same session without re-measurement
+            may cause unexpected errors. Use `get_report()` to retrieve the
+            SessionReport instead.
         """
         if not self._session or not self._session.frames:
             log.warning("It seems that measurement was not performed or data was not collected. Analyze will be skipped.")
@@ -428,9 +563,11 @@ class FisicaSDK:
         Returns:
             np.ndarray: It returns image data as a NumPy array.
                         Implement your own logic using the image data.
-                        If you need to display image data in real time during scale measurement,
-                        you can use the built-in visualize function provided by the Fisica SDK.
-                        Refer to callback_visualize.py in the examples directory.
+
+        Notes:
+            If you need to display image data in real time during scale measurement,
+            you can use the built-in visualize function provided by the Fisica SDK.
+            Refer to builtin_visualizer.py in the examples directory.
         """
         if frame is None and grid_data is None:
             log.error(
@@ -448,6 +585,14 @@ class FisicaSDK:
         return global_render(grid_data, mode, scale=scale)
 
     def wait(self):
+        """
+    Fisica SDK: wait
+
+        Notes:
+            Used to safely complete asynchronous operations such as `start_measurement()`,
+            `stop_measurement()`, and `disconnect()`.
+            This method blocks the main thread execution.
+        """
         while self._stopping or self._working or self._sleeping or self._starting or self._disconnecting:
             self._counter = (self._counter + 1) % 25
             if not self._counter:
