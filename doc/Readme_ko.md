@@ -663,11 +663,14 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 ### `export_report(report: Optional[Union['SessionReport', list]], output: Optional[str])`
 
 **Description**:  
-지정된 출력 경로, 파일명 또는 디렉토리에 모든 레포트를 JSON 파일로 내보냅니다.  
-누락된 디렉토리를 자동으로 생성하고 확장자가 제공되지 않은 경우 .json 확장자를 추가합니다.  
-대상이 기존 디렉토리인 경우, 미리 정의된 명명 규칙을 사용하여 파일명을 생성합니다.
-
+지정된 출력 경로, 파일명 또는 디렉토리에 모든 보고서를 JSON 파일로 내보냅니다.  
+누락된 디렉토리를 자동으로 생성하고, .json 확장자가 제공되지 않은 경우 자동으로 추가합니다.  
+대상이 기존 디렉토리인 경우, 미리 정의된 명명 규칙을 사용하여 파일명을 생성합니다.  
 예: result 폴더가 존재하지 않는 경우 "output/sample/result"는 "output/sample/result.json"이 됩니다.
+
+report에 인자가 없는 경우, 가장 최근에 `analyze()`된 SessionReport의 정보를 내보냅니다.  
+`analyze()`를 수행하지 않고 이 메소드를 호출하는 경우 오류가 발생할 수 있습니다.  
+
 
 **Parameters**:
 

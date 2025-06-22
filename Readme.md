@@ -669,8 +669,11 @@ None
 Exports all reports to a JSON file at the specified output path, filename, or directory.  
 Creates missing directories automatically and appends .json extension if not provided   
 If target is an existing directory, generates filename using predefined naming rules.  
+e.g., "output/sample/result" becomes "output/sample/result.json" if result folder doesn't exist.  
 
-e.g., "output/sample/result" becomes "output/sample/result.json" if result folder doesn't exist.
+If no argument is provided for report exports information from the most recently analyzed SessionReport.  
+Calling this method without having performed `analyze()` may result in an error.  
+
 
 **Parameters**:  
 
