@@ -3,6 +3,7 @@ import time
 from .serial_uart import SerialUART
 from .bluetooth_uart import BluetoothUART
 from .serial_handler import SerialHandler
+from .bluetooth_handler import BluetoothHandler
 from .device import *
 from .port_scanner import find_bluetooth_com_ports
 from .utils import log
@@ -106,6 +107,7 @@ class Receiver:
     #         self._handler = SerialHandler(self._uart)
     #     self._handler.set_uart(self._uart)
     #     log.info(f"Connected to device: {self._device_id}")
+
     def conn(self):
         if self._device.get('type') == "serial":
             self._uart = SerialUART(self._device_id, baudrate=115200)
@@ -114,8 +116,12 @@ class Receiver:
                 self._handler = SerialHandler(self._uart)
             self._handler.set_uart(self._uart)
             log.info(f"Connected to device: {self._device_id}")
+
         if self._device.get('type') == "bluetooth":
             pass
+
+
+
     def discon(self):
         if self._uart:
             self._uart.close()

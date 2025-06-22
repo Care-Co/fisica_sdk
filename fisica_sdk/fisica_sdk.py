@@ -177,15 +177,10 @@ class FisicaSDK:
 
             if not hasattr(self, '_available_devices') or not self._available_devices:
                 raise RuntimeError("No devices scanned. Call scan_devices() first.")
-            # if not any(d["id"] == device_id for d in self._available_devices):
-            #     raise ValueError(f"Device ID {device_id} not found in scanned list.")
 
             self._connected_device = device.get('id')
             self._connected = True
-            # self._connected_device = device_id
-            # self._connected = True
             self._receiver = Receiver(device, self._handle_frame)
-            # self._receiver = Receiver(device_id, self._handle_frame)
             self._receiver.conn()
 
         except Exception as e:

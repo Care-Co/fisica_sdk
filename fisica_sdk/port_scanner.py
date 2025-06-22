@@ -24,21 +24,69 @@ def find_bluetooth_com_ports(timeout=10.0) -> List[Dict]:
             return asyncio.new_event_loop()
 
     async def _scan_bluetooth():
-        """블루투스 기기 스캔"""
+        """블루투스 기기 스캔 (deprecation warning 해결)"""
+        try:
+            # BleakScanner.discover() 대신 callback 방식 사용
+            fisica_devices = []
+
+            def detection_callback(device, advertisement_data):
+                device_name = device.name or 'Unknown'
+                # Fisica Scale 기기 필터링
+                if 'fisica scale' in device_name.lower():
+                    fisica_devices.append({
+                        'id': device.address,
+                        'name': device_name,
+                        'type': 'bluetooth',
+                        'address': device.address,
+                        'rssi': advertisement_data.rssi  # AdvertisementData에서 rssi 가져오기
+                    })
+
+            # 스캐너 시작
+            scanner = BleakScanner(detection_callback)
+            await scanner.start()
+            await asyncio.sleep(timeout)
+            await scanner.stop()
+
+            return fisica_devices
+
+        except Exception as e:
+            log.debug(f"Bluetooth scan error: {e}")
+            return []
+
+    try:
+        loop = _get_or_create_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_scan_bluetooth())
+    except Exception as e:
+        log.debug(f"Bluetooth scan failed: {e}")
+        return []
+
+def find_bluetooth_com_ports_simple(timeout=10.0) -> List[Dict]:
+    """간단한 버전 - rssi 없이 (경고 완전 제거)"""
+
+    def _get_or_create_loop():
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_closed():
+                raise RuntimeError("Loop is closed")
+            return loop
+        except RuntimeError:
+            return asyncio.new_event_loop()
+
+    async def _scan_bluetooth():
         try:
             devices = await BleakScanner.discover(timeout=timeout)
             fisica_devices = []
 
             for device in devices:
                 device_name = device.name or 'Unknown'
-                # Fisica Scale 기기 필터링
                 if 'fisica scale' in device_name.lower():
                     fisica_devices.append({
-                        'id': device.address,  # 시리얼과 동일한 키 이름 사용
+                        'id': device.address,
                         'name': device_name,
                         'type': 'bluetooth',
-                        'address': device.address,  # 추가 정보
-                        'rssi': getattr(device, 'rssi', None)
+                        'address': device.address,
+                        # rssi 완전 제거로 경고 없앰
                     })
 
             return fisica_devices
@@ -55,10 +103,10 @@ def find_bluetooth_com_ports(timeout=10.0) -> List[Dict]:
         log.debug(f"Bluetooth scan failed: {e}")
         return []
 
-def find_all_com_ports(timeout=10.0) -> List[Dict]:
-
+def find_all_com_ports(timeout=8.0) -> List[Dict]:
     all_devices = []
 
+    # 1. 시리얼 포트 기기 찾기
     try:
         serial_ports = find_serial_com_ports()
         for port in serial_ports:
@@ -73,8 +121,9 @@ def find_all_com_ports(timeout=10.0) -> List[Dict]:
     except Exception as e:
         log.debug(f"Serial scan error: {e}")
 
-    # 2. 블루투스 기기 찾기
+    # 2. 블루투스 기기 찾기 (경고 없는 버전 사용)
     try:
+        # bluetooth_devices = find_bluetooth_com_ports_simple(timeout)
         bluetooth_devices = find_bluetooth_com_ports(timeout)
         all_devices.extend(bluetooth_devices)
     except Exception as e:
