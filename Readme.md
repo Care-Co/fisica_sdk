@@ -784,7 +784,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Issues**: [GitHub Issues](https://github.com/care-co/fisica_sdk/issues)
 - **Email**: carencoinc@carenco.kr
-- **Website**: [https://carenco.kr](https://carenco.kr)
+- **Website**: [https://carenco.kr](https://carenco.kr/en)
 
 ## 🔄 Changelog
 
