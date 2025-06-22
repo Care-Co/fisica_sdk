@@ -21,7 +21,7 @@ This SDK provides a Python interface to communicate with the Fisica scale device
 ### Install via pip
 
 ```bash
-  pip install fisica-sdk
+  pip install fisica_sdk
 ```
 
 ### Install from source
