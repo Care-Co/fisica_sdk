@@ -199,7 +199,7 @@ class FisicaSDK:
                 "\nFisica SDK\n"
                 "   No devices found. Please check if the device is powered on.\n"
                 "   For comprehensive information about Fisica SDK, please refer to the Readme or call `print(FisicaSDK.__doc__)`.\n"
-                "   For further operation details, call `print(FisicaSDK.connect.__doc__)`.\n"
+                "   For further operation details, call `print(FisicaSDK.scan_devices.__doc__)`.\n"
             )
             raise RuntimeError
         self._available_devices = devices

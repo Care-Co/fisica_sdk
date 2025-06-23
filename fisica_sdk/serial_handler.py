@@ -110,13 +110,8 @@ class SerialHandler:
 
             handlers = {
                 "AT+AUTO": lambda v: log.debug(f"Auto : {v}"),
-                "AT+WEIGHT=": lambda v: log.debug(f"Weight : {v}"),
-                "AT+SCALE=": lambda v: log.debug(f"Scale : {v}"),
-                "AT+UNIT=": lambda v: log.debug(f"Unit : {v}"),
-                "AT+POWEROFF=": lambda v: log.debug(f"Runtime : {v}"),
-                "AT+UPSENS=": lambda v: log.debug(f"Wakeup Threshold : {v}"),
-                "AT+HMMAX=": lambda v: log.debug(f"Max Pressure:", int(v)) if v.isdigit() else log.debug("[Warning] Parsing AT+HMMAX failed"),
-                "AT+BATGAUGE=": lambda v: log.debug(f"Battery Level : {v}")
+                "AT+STOP": lambda v: log.debug(f"Stop : {v}"),
+                "AT+MODE=1": lambda v: log.debug(f"Stop : {v}"),
             }
 
             for prefix, action in handlers.items():
