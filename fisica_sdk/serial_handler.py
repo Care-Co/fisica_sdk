@@ -29,6 +29,14 @@ class SerialHandler:
         self.listen_thread = threading.Thread(target=self.listen_loop, daemon=True)
         self.listen_thread.start()
 
+
+        # self._uart.send("AT+STOP", newLine=True)
+        # self._uart.send("AT+AUTO", newLine=True)
+        # self._uart.send("AT+UPSENS=5", newLine=True)
+        # self._uart.send("AT+BATGAUGE", newLine=True)
+        # self._uart.send("AT+SCALE", newLine=True)
+        # self._uart.send("AT+WEIGHT", newLine=True)
+
     def stop_listening(self):
         self._listening = False
         if self.listen_thread:

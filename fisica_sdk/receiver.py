@@ -1,18 +1,14 @@
 import threading
 import time
 from .serial_uart import SerialUART
-from .bluetooth_uart import BluetoothUART
 from .serial_handler import SerialHandler
 from .bluetooth_handler import BluetoothHandler
-from .device import *
-from .port_scanner import find_bluetooth_com_ports
 from .utils import log
+from .device import scan
 
 class Receiver:
     def __init__(self, device, callback):
-        # def __init__(self, device_id, callback):
         self._notice_recovery = True
-        self._device_alive = False
         self.loop_alive = False
         self.heartbeat = False
         self.check_thread = None
@@ -40,7 +36,13 @@ class Receiver:
         self._thread.start()
 
         log.debug("Receiver started.")
+        # self._uart.send("AT+STOP", newLine=True)
         self._uart.send("AT+AUTO", newLine=True)
+        # self._uart.send("AT+UPSENS=5", newLine=True)
+        # self._uart.send("AT+BATGAUGE", newLine=True)
+        # self._uart.send("AT+SCALE", newLine=True)
+        # self._uart.send("AT+WEIGHT", newLine=True)
+
 
     def stop(self):
         if self._check_stop_event:
@@ -84,10 +86,18 @@ class Receiver:
                 log.debug("[ACTION] Restart thread completed.")
                 self._handler.last_heartbeat = time.time()
             elif not self.loop_alive:
+                if not self._device:
+                    devices = scan()
+                    if devices:
+                        self._device = devices[0]
+                        self._device_id = self._device.get('id')
+                        log.info(f"device detected. : {devices}")
                 if self._notice_recovery:
                     log.info("Waiting for the device to reconnect...")
+                    self._device = None
+                    self._uart = None
+                    self._device_id = None
                     self._notice_recovery = False
-                # devices = scan()
                 if self._device:
                     log.info("Attempting to connect to the first available device...")
                     self.conn()
@@ -97,17 +107,6 @@ class Receiver:
             time.sleep(1)
         self.heartbeat = False
 
-    # def conn(self):
-    #     if self._device_id in find_bluetooth_com_ports():
-    #         self._uart = BluetoothUART(baudrate=115200)
-    #     else:
-    #         self._uart = SerialUART(self._device_id, baudrate=115200)
-    #     self._uart.connect()
-    #     if not self._handler:
-    #         self._handler = SerialHandler(self._uart)
-    #     self._handler.set_uart(self._uart)
-    #     log.info(f"Connected to device: {self._device_id}")
-
     def conn(self):
         if self._device.get('type') == "serial":
             self._uart = SerialUART(self._device_id, baudrate=115200)
@@ -116,6 +115,7 @@ class Receiver:
                 self._handler = SerialHandler(self._uart)
             self._handler.set_uart(self._uart)
             log.info(f"Connected to device: {self._device_id}")
+            self._notice_recovery = True
 
         if self._device.get('type') == "bluetooth":
             pass
