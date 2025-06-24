@@ -26,13 +26,15 @@ def _decode_hex(hex_data: str) -> tuple[ndarray[Any, dtype[Any]], str, str]:
         raise ValueError("Incorrect data length")
 
     # Extract grid data
-    grid_data = rawData[:638].reshape((29, 22))
+    grid_data = rawData[1:639].reshape((29, 22))
 
     # Extract weight in "a.b" format
-    weight = f"{rawData[640]}.{rawData[641]}"
+    weight = f"{rawData[641]}.{rawData[642]}"
+    # weight = f"{rawData[640]}.{rawData[641]}"
 
     # Extract battery as integer string
-    battery = str(rawData[642])
+    # battery = str(rawData[642])
+    battery = "99"
 
     return grid_data, weight, battery
 
@@ -71,6 +73,7 @@ def _preprocess_grid_data(grid_data: np.ndarray) -> np.ndarray:
     return grid_data
 
 
+# def extract_frames_from_buffer(buffer: bytearray, index: int) -> Optional[str]:
 def extract_frames_from_buffer(buffer: bytearray, index: int) -> Optional[str]:
     if index >= 643:
         start_index = index - 643
@@ -83,6 +86,7 @@ def extract_frames_from_buffer(buffer: bytearray, index: int) -> Optional[str]:
 def parse_frame_from_chunk(chunk: str) -> Optional[MeasurementFrame]:
     if (data := extract_data(chunk)) is None:
         return None
+    # matrix, weight, battery = data
     matrix, weight, battery = data
     return MeasurementFrame(
         timestamp=datetime.now().replace(microsecond=0).isoformat(),

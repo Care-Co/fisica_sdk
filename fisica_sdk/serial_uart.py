@@ -10,10 +10,8 @@ class SerialUART(BaseUART):
         if not self.ser.is_open:
             self.ser.open()
 
-    def send(self, data, newLine):
-        if newLine:
-            data = data + "\n"
-        self.ser.write(data.encode('utf-8'))
+    def send(self, data):
+        self.ser.write(data)
 
     def close(self):
         self.ser.close()

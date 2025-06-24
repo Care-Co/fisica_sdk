@@ -1,10 +1,12 @@
 import threading
 import time
+
 from .serial_uart import SerialUART
 from .serial_handler import SerialHandler
 from .bluetooth_handler import BluetoothHandler
 from .utils import log
-from .device import scan
+from .device import scan, ATCommands
+
 
 class Receiver:
     def __init__(self, device, callback):
@@ -36,13 +38,6 @@ class Receiver:
         self._thread.start()
 
         log.debug("Receiver started.")
-        # self._uart.send("AT+STOP", newLine=True)
-        self._uart.send("AT+AUTO", newLine=True)
-        # self._uart.send("AT+UPSENS=5", newLine=True)
-        # self._uart.send("AT+BATGAUGE", newLine=True)
-        # self._uart.send("AT+SCALE", newLine=True)
-        # self._uart.send("AT+WEIGHT", newLine=True)
-
 
     def stop(self):
         if self._check_stop_event:
@@ -54,8 +49,7 @@ class Receiver:
         if self.loop_alive:
             if self._handler:
                 self._handler.stop_listening()
-            if self._uart:
-                self._uart.send("AT+STOP", newLine=True)
+                self._handler.send(ATCommands.STOP_CONTINUOUS_MEASUREMENT)
         self._stop_event.set()
         if self._thread:
             self._thread.join()
@@ -115,11 +109,13 @@ class Receiver:
                 self._handler = SerialHandler(self._uart)
             self._handler.set_uart(self._uart)
             log.info(f"Connected to device: {self._device_id}")
+            if not self._notice_recovery:
+                log.info("Measurement will be continued.")
             self._notice_recovery = True
 
         if self._device.get('type') == "bluetooth":
-            pass
-
+            if not self._handler:
+                self._handler = BluetoothHandler(self._device_id)
 
 
     def discon(self):
