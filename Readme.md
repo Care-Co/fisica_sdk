@@ -43,7 +43,6 @@ The SDK automatically installs the following dependencies:
   'packaging>=21.0',
   'Pillow>=8.0',
   'pyserial>=3.5',
-  'importlib-metadata>=4.0; python_version<"3.8"',  # 하위 호환
   'bleak>=0.22.3' # For Bluetooth support
 
   # Dependencies for GUI
