@@ -14,9 +14,9 @@ setup(
     author_email='carencoinc@carenco.kr',
     url='https://github.com/Care-Co/',
     project_urls={
-        "Bug Tracker": "https://github.com/Care-Co/fisica-sdk/issues",
+        "Bug Tracker": "https://github.com/Care-Co/fisica_sdk/issues",
         "Documentation": "https://fisica-sdk.readthedocs.io/",
-        "Source Code": "https://github.com/Care-Co/fisica-sdk",
+        "Source Code": "https://github.com/Care-Co/fisica_sdk",
     },
     packages=find_packages(),
     install_requires=[

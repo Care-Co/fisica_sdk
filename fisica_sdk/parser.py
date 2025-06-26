@@ -29,8 +29,9 @@ def _decode_hex(hex_data: str) -> tuple[ndarray[Any, dtype[Any]], str, str]:
     grid_data = rawData[1:639].reshape((29, 22))
 
     # Extract weight in "a.b" format
-    weight = f"{rawData[641]}.{rawData[642]}"
-    # weight = f"{rawData[640]}.{rawData[641]}"
+    # weight = f"{rawData[641]}.{rawData[642]}"
+    value = (rawData[641] << 8) | rawData[642]  # big endian 기준
+    weight = value / 10  # 10배 스케일링 해석
 
     # Extract battery as integer string
     # battery = str(rawData[642])
