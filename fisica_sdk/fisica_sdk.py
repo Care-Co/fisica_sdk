@@ -458,7 +458,7 @@ class FisicaSDK:
         except Exception as e:
             log.error(
                 "\nFisica SDK\n"
-                "Export failed due to an invalid parameter format or an error occurred during processing."
+                "   Export failed due to an invalid parameter format or an error occurred during processing."
             )
             raise e
 
