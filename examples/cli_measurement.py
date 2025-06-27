@@ -22,7 +22,6 @@ def main():
     print(report)
 
     sdk.export_report(output=args.output)
-    print(f"Results saved to {args.output}")
 
 if __name__ == "__main__":
     main()

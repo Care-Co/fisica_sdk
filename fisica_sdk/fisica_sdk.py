@@ -453,8 +453,10 @@ class FisicaSDK:
                     )
                 else:
                     report = [serialize_session_report(self._current_report)]
-                    output_path = resolve_output_path(output)
-                    return export_session_reports_to_json(report, output_path)
+
+            output_path = resolve_output_path(output)
+            return export_session_reports_to_json(report, output_path)
+
         except Exception as e:
             log.error(
                 "\nFisica SDK\n"
