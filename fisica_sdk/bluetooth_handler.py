@@ -278,13 +278,6 @@ class BluetoothHandler:
             self.listen_thread = threading.Thread(target=self.listen_loop, daemon=True)
             self.listen_thread.start()
             time.sleep(1)
-            if self._listening:
-                # AT Command로 BLE 모드 설정 (연속 측정 활성화)
-                log.debug("Sending initial AT commands...")
-                self.send(ATCommands.SET_DEVICE_BLE)
-                time.sleep(0.5)
-                self.send(ATCommands.START_CONTINUOUS_MEASUREMENT)
-                log.debug("Measurement has successfully started.")
         else:
             self._listening = False
             log.error("Failed to start Bluetooth listening")
@@ -298,6 +291,14 @@ class BluetoothHandler:
             self.listen_thread = None
 
         self._execute_command("stop_notify")
+
+    def start_measurement(self):
+        if self._listening:
+            log.debug("Sending initial AT commands...")
+            self.send(ATCommands.SET_DEVICE_BLE)
+            time.sleep(0.5)
+            self.send(ATCommands.START_CONTINUOUS_MEASUREMENT)
+            log.debug("Measurement has successfully started.")
 
     def listen_loop(self):
         try:

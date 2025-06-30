@@ -156,6 +156,9 @@ class ATCommands:
 
     # 체중 영점 설정
     SET_WEIGHT_ZERO = [_STX, _HEADER_WEIGHT_ZERO, _SET, 0x00, 0x00, 0x00, _ETX_HIGH, _ETX_LOW]
+    SET_WEIGHT_SCALE_TEST_ZERO = [_STX, _HEADER_WEIGHT_SCALE, _SET, 0x00, 0xCC, 0x00, _ETX_HIGH, _ETX_LOW]
+    SET_WEIGHT_SCALE = [_STX, _HEADER_WEIGHT_SCALE, _SET, 0x00, 0x00, 0x00, _ETX_HIGH, _ETX_LOW]
+    SET_WAKEUP = [_STX, _HEADER_WAKEUP_SENSITIVITY, _SET, 0x00, 0x00, 0x00, _ETX_HIGH, _ETX_LOW]
 
 
     # === 편의 메서드들 ===
@@ -199,6 +202,22 @@ class ATCommands:
     def stop_single_measurement(cls):
         """단일 측정 중지"""
         return cls.build_command(cls._HEADER_SINGLE_MEASUREMENT, cls._SET, 0x00, cls._MEASUREMENT_STOP)
+
+    @classmethod
+    def create_weight_scale(cls, weight_value):
+        if not (-32768 <= weight_value <= 32767):
+            raise ValueError(f"Weight value {weight_value} is out of range (-32768 ~ 32767)")
+
+        # Int16을 2바이트로 변환 (Big Endian)
+        if weight_value < 0:
+            # 음수인 경우 2의 보수로 변환
+            weight_value = weight_value + 65536
+
+        high_byte = (weight_value >> 8) & 0xFF # 상위 바이트
+        low_byte = weight_value & 0xFF         # 하위 바이트
+
+        return [cls._STX, cls._HEADER_WEIGHT_SCALE, cls._SET, 0x00, high_byte, low_byte, cls._ETX_HIGH, cls._ETX_LOW]
+
 
     # === 레거시 호환성 (기존 코드와의 호환) ===
 

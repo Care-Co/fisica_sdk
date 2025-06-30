@@ -18,7 +18,7 @@ This SDK provides a Python interface to communicate with the Fisica scale device
 - Python 3.8 or higher
 - Operating System: Windows 10/11 or macOS 10.15+
 
-### Install via pip
+### ~~Install via pip~~ - Currently not supported!
 
 ```bash
   pip install fisica-sdk

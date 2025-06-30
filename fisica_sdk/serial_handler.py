@@ -30,15 +30,13 @@ class SerialHandler:
         log.debug("Thread running.")
         self.listen_thread = threading.Thread(target=self.listen_loop, daemon=True)
         self.listen_thread.start()
-        time.sleep(1)
+
+    def start_measurement(self):
         if self._listening:
-            # AT Command로 USB 모드 설정 (연속 측정 활성화)
-            # log.debug(ATCommands.SET_DEVICE_USB)
-            # log.debug(ATCommands.START_CONTINUOUS_MEASUREMENT)
-            # self.send(ATCommands.SET_DEVICE_USB)
             self.send(ATCommands.SET_DEVICE_BLE)
             self.send(ATCommands.START_CONTINUOUS_MEASUREMENT)
             log.info("Measurement has successfully started.")
+
 
     def send(self, data):
         if self._uart:

@@ -418,6 +418,42 @@ class FisicaSDK:
         """
         return [serialize_session_report(r) for r in self._reports]
 
+    def set_zero(self):
+        """
+    Fisica SDK: set_zero
+
+        Notes:
+            기기의 영점을 맞추는 기능입니다.
+            connect()를 통해 기기와의 연결을
+        """
+        if self._receiver:
+            self._receiver.zeroset()
+        else:
+            log.debug(
+            "\nFisica SDK\n"
+            "   It appears that the device is not connected.\n"
+            "   You must establish a connection to the device using `connect()` before calling `set_zero()`.\n"
+        )
+
+
+    def set_scale(self, value):
+        """
+    Fisica SDK: set_zero
+
+        Notes:
+            기기의 영점을 맞추는 기능입니다.
+            connect()를 통해 기기와의 연결을
+        """
+        if self._receiver:
+            self._receiver.setScale(value)
+        else:
+            log.debug(
+                "\nFisica SDK\n"
+                "   It appears that the device is not connected.\n"
+                "   You must establish a connection to the device using `connect()` before calling `set_zero()`.\n"
+            )
+
+
 
     def export_report(self, report: Optional[Union['SessionReport', list]] = None, output: Optional[str] = None):
         """

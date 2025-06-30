@@ -26,8 +26,7 @@ class Receiver:
     def start(self):
         self._stop_event.clear()
         self._check_stop_event.clear()
-
-        self._handler.start_listening()
+        self._handler.start_measurement()
         if not self.heartbeat:
             self.heartbeat = True
             self.check_thread = threading.Thread(target=self.is_listening_active, daemon=True)
@@ -118,9 +117,18 @@ class Receiver:
                 self._handler = BluetoothHandler(self._device_id)
                 self._handler.connect()
 
+        self._handler.start_listening()
 
     def discon(self):
         if self._uart:
             self._uart.close()
             self._uart = None
         log.debug("Scale disconnected.")
+
+    def zeroset(self):
+        if self._handler:
+            self._handler.send(ATCommands.SET_WEIGHT_ZERO)
+
+    def setScale(self, value):
+        if self._handler:
+            self._handler.send(ATCommands.create_weight_scale(value))
