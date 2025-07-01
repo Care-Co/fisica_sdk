@@ -94,36 +94,37 @@ if devices:
 # examples/realtime_monitoring.py
 from fisica_sdk import FisicaSDK, Visualizer, VisualOptions
 
-def on_frame_received(frame):
-   """Callback function for real-time data"""
-   print(f"Received frame at {frame.timestamp}")
+# Define a function to visualize incoming data
+def visualize(data):
+   image = sdk.render(frame=data, mode=VisualOptions.BLUR, bbox=True, scale=2.0)  # Render image from incoming data
+   vis.update(image)         # Update visualizer with new image
 
-   # Render visualization
-   image = sdk.render(frame, mode=VisualOptions.BBOX)
-
-   # Update GUI (if running)
-   vis.update(image)
-
-# Setup SDK
+# Initialize the SDK
 sdk = FisicaSDK()
-vis = Visualizer()
+# Find available devices.
 devices = sdk.scan_devices()
 
 if devices:
+   # Connect to the first device from the list.
    sdk.connect(devices[0])
 
-   # Register callback
-   sdk.on_data(on_frame_received)
+   # Register callback function to visualize data
+   sdk.on_data(visualize)
 
-   # Start measurement
-   sdk.start_measurement(duration=30)
+   # Start measurement.
+   sdk.start_measurement()
 
-   # Start GUI viewer
-   vis.run(scale=1.5)
-   
-   # Wait for completion
-   sdk.wait()
+   # Sleep without blocking the main thread.
+   sdk.sleep(15)
 
+   # Stop measurement.
+   sdk.stop_measurement()
+
+   # Create visualizer instance
+   vis = Visualizer()
+
+   # Launch visualizer with scaling
+   vis.run(scale=2.0)
 ```
 
 ### Batch Processing
@@ -207,7 +208,7 @@ def main():
    parser.add_argument('--output', type=str, default='results.json', help='Output file')
    args = parser.parse_args()
 
-   sdk = fisica.FisicaSDK(debug=10)
+   sdk = fisica.FisicaSDK()
    devices = sdk.scan_devices()
 
    if not devices:
@@ -222,7 +223,6 @@ def main():
    print(report)
 
    sdk.export_report(output=args.output)
-   print(f"Results saved to {args.output}")
 
 if __name__ == "__main__":
    main()
@@ -765,6 +765,130 @@ Updates the GUI viewer with the given rendered image.
 
 **Returns**:
 None
+
+---
+## 📚 API Reference - Additional Methods
+
+
+### `set_zero()`
+
+**Description**:  
+Calibrates the zero point of the device by setting the current reading as the zero reference point for weight measurements. This is equivalent to the tare function on digital scales and should be used when the scale platform is empty to establish a proper baseline.
+
+**Parameters**:  
+None
+
+**Returns**:  
+None
+
+**Usage Example**:
+```python
+# Connect to device first
+devices = sdk.scan_devices()
+if devices:
+    sdk.connect(devices[0])
+    
+    # Ensure platform is empty, then set zero point
+    sdk.set_zero()  # Tare the scale
+    
+    # Now ready for accurate measurements
+    sdk.start_measurement(duration=10)
+    
+    # Wait for finish measurement
+    sdk.wait()
+```
+
+**Notes**:
+- Device connection is required before calling this method
+- Call `connect()` first to establish device connection
+- Use this function when the scale platform is empty
+- This establishes the baseline for all subsequent weight measurements
+
+---
+
+### `set_scale(value)`
+
+**Description**:  
+Sets the scale calibration parameter of the device. This function adjusts the internal calibration value used by the device's weight measurement system to ensure accurate readings.
+
+**Parameters**:
+- `value` (int): Scale calibration parameter, must be within the range -32768 to 32767
+
+**Returns**:  
+None
+
+**Usage Example**:
+```python
+# Connect to device first
+devices = sdk.scan_devices()
+if devices:
+    sdk.connect(devices[0])
+    
+    # Set zero point first
+    sdk.set_zero()
+    
+    # Set scale calibration parameter
+    sdk.set_scale(12600)  # Set calibration value to 12600
+    
+    # Start measurement with calibrated settings
+    sdk.start_measurement(duration=10)
+    sdk.wait()
+```
+
+**Notes**:
+- Device connection is required before calling this method
+- Call `connect()` first to establish device connection
+- Value must be an integer within the range -32768 to 32767
+- Use after `set_zero()` for optimal calibration
+- Consult device documentation for appropriate calibration values
+
+---
+
+## 🔧 Device Calibration Workflow
+
+For optimal measurement accuracy, follow this calibration sequence:
+
+```python
+# examples/calibration.py
+import fisica_sdk as fisica
+
+# Initialize and connect
+sdk = fisica.FisicaSDK()
+devices = sdk.scan_devices()
+
+if devices:
+    sdk.connect(devices[0])
+    
+    # Step 1: Set zero point (empty platform)
+    print("Please ensure platform is empty...")
+    input("Press Enter when ready...")
+    sdk.set_zero()
+    print("Zero point calibrated.")
+    
+    # Step 2: Set scale calibration parameter
+    # Use appropriate calibration value for your device
+    # (consult device documentation for recommended values)
+    calibration_value = 12600  # Example value within -32768 to 32767 range
+    sdk.set_scale(calibration_value)
+    print(f"Scale calibration set to: {calibration_value}")
+    
+    # Step 3: Verify calibration with known reference weight
+    print("Place a known reference weight on platform...")
+    reference_weight = float(input("Enter reference weight (kg): "))
+    
+    # Take a measurement to verify accuracy
+    sdk.start_measurement(duration=10)
+    sdk.wait()
+    report = sdk.analyze()
+    measured_weight = report.weight
+    
+    print(f"Reference: {reference_weight}kg, Measured: {measured_weight}kg")
+    print(f"Accuracy: {abs(measured_weight - reference_weight):.3f}kg difference")
+    
+    # Step 4: Ready for accurate measurements
+    print("Calibration complete. Ready for measurements.")
+    sdk.disconnect()
+```
 
 ---
 

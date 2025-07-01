@@ -18,7 +18,7 @@ class BluetoothHandler:
         self.last_heartbeat = time.time()
         self._buffer = bytearray()
         self.data_queue = queue.Queue()
-        self.at_response_queue = queue.Queue()  # AT 응답 큐 추가
+        self.at_response_queue = queue.Queue()
 
         # 공통 파서 초기화
         self.parser = DataParser(self.data_queue, self.at_response_queue)
@@ -29,8 +29,14 @@ class BluetoothHandler:
         self._command_queue = queue.Queue()
         self._connected = False
 
-        # 특성 UUID (연결 후 자동 발견)
+        # 특성 정보 (handle과 UUID 모두 저장)
         self.char_uuid = None
+        self.char_handle = None
+        self.selected_char = None  # 선택된 특성 객체
+
+        # 연결 재시도 설정
+        self.max_retries = 3
+        self.retry_delay = 2.0
 
         # 이벤트 루프 스레드 시작
         self._start_loop_thread()
@@ -95,7 +101,7 @@ class BluetoothHandler:
                 log.error(f"Command processor error: {e}")
                 await asyncio.sleep(0.1)
 
-    def _execute_command(self, command, *args, timeout=15.0):  # 타임아웃 증가
+    def _execute_command(self, command, *args, timeout=20.0):  # 타임아웃 더 증가
         """명령을 이벤트 루프에서 실행하고 결과 반환"""
         if not self._loop or not self._loop_thread.is_alive():
             log.error("Event loop not running")
@@ -113,29 +119,53 @@ class BluetoothHandler:
             return False
 
     async def _connect_async(self):
-        """비동기 연결"""
-        try:
-            log.debug(f"Attempting BLE connection to {self.device_address}")
-            self.client = BleakClient(self.device_address)
+        """비동기 연결 (재시도 로직 포함)"""
+        for attempt in range(self.max_retries):
+            try:
+                log.debug(f"Connection attempt {attempt + 1}/{self.max_retries} to {self.device_address}")
 
-            # 연결 시도 (더 긴 타임아웃)
-            await asyncio.wait_for(self.client.connect(), timeout=10.0)
-            self._connected = True
-            log.debug(f"Bluetooth connected to {self.device_address}")
+                # 기존 클라이언트가 있다면 정리
+                if self.client:
+                    try:
+                        if self.client.is_connected:
+                            await self.client.disconnect()
+                    except:
+                        pass
+                    self.client = None
 
-            # 연결 후 적절한 특성 UUID 찾기
-            if self.char_uuid is None:
-                await self._discover_characteristics()
+                # 새 클라이언트 생성
+                self.client = BleakClient(self.device_address)
 
-            return True
-        except asyncio.TimeoutError:
-            log.error(f"Bluetooth connection timeout to {self.device_address}")
-            self._connected = False
-            return False
-        except Exception as e:
-            log.error(f"Bluetooth connection failed: {e}")
-            self._connected = False
-            return False
+                # 연결 시도 (더 긴 타임아웃)
+                await asyncio.wait_for(self.client.connect(), timeout=15.0)
+
+                # 연결 확인
+                if not self.client.is_connected:
+                    raise Exception("Connection established but client reports not connected")
+
+                self._connected = True
+                log.debug(f"Bluetooth connected to {self.device_address}")
+
+                # 연결 후 특성 발견
+                success = await self._discover_characteristics()
+                if not success:
+                    log.warning("Characteristic discovery failed, but connection established")
+
+                return True
+
+            except asyncio.TimeoutError:
+                log.warning(f"Connection attempt {attempt + 1} timed out")
+            except Exception as e:
+                log.warning(f"Connection attempt {attempt + 1} failed: {e}")
+
+            # 재시도 전 대기
+            if attempt < self.max_retries - 1:
+                log.debug(f"Waiting {self.retry_delay}s before retry...")
+                await asyncio.sleep(self.retry_delay)
+
+        log.error(f"All {self.max_retries} connection attempts failed")
+        self._connected = False
+        return False
 
     async def _disconnect_async(self):
         """비동기 연결 해제"""
@@ -143,6 +173,9 @@ class BluetoothHandler:
             if self.client and self.client.is_connected:
                 await self.client.disconnect()
             self._connected = False
+            self.char_uuid = None
+            self.char_handle = None
+            self.selected_char = None
             log.debug("Bluetooth disconnected")
             return True
         except Exception as e:
@@ -166,25 +199,29 @@ class BluetoothHandler:
                 return b''
 
     async def _send_async(self, data):
-        """비동기 데이터 전송"""
+        """비동기 데이터 전송 (handle 우선 사용)"""
         try:
             if not self.client or not self.client.is_connected:
                 log.error("Client not connected for sending data")
                 return False
 
-            if self.char_uuid is None:
-                log.error("No characteristic UUID available for sending data")
-                return False
-
             # 데이터 타입 변환
             cmd_bytes = self._ensure_bytes(data)
-
             if not cmd_bytes:
                 log.error("Empty data after conversion")
                 return False
 
-            log.debug(f"Sending BLE data: {cmd_bytes.hex()} (length: {len(cmd_bytes)})")
-            await self.client.write_gatt_char(self.char_uuid, cmd_bytes)
+            # handle이 있으면 handle 사용, 없으면 UUID 사용
+            if self.char_handle is not None:
+                log.debug(f"Sending BLE data via handle {self.char_handle}: {cmd_bytes.hex()}")
+                await self.client.write_gatt_char(self.char_handle, cmd_bytes)
+            elif self.char_uuid is not None:
+                log.debug(f"Sending BLE data via UUID {self.char_uuid}: {cmd_bytes.hex()}")
+                await self.client.write_gatt_char(self.char_uuid, cmd_bytes)
+            else:
+                log.error("No characteristic handle or UUID available")
+                return False
+
             log.debug("BLE data sent successfully")
             return True
 
@@ -193,17 +230,23 @@ class BluetoothHandler:
             return False
 
     async def _start_notify_async(self, callback):
-        """비동기 알림 시작"""
+        """비동기 알림 시작 (handle 우선 사용)"""
         try:
             if not self.client or not self.client.is_connected:
                 log.error("Client not connected for notifications")
                 return False
 
-            if self.char_uuid is None:
-                log.error("No characteristic UUID available for notifications")
+            # handle이 있으면 handle 사용, 없으면 UUID 사용
+            if self.char_handle is not None:
+                log.debug(f"Starting notifications via handle {self.char_handle}")
+                await self.client.start_notify(self.char_handle, callback)
+            elif self.char_uuid is not None:
+                log.debug(f"Starting notifications via UUID {self.char_uuid}")
+                await self.client.start_notify(self.char_uuid, callback)
+            else:
+                log.error("No characteristic handle or UUID available")
                 return False
 
-            await self.client.start_notify(self.char_uuid, callback)
             log.debug("Bluetooth notifications started")
             return True
         except Exception as e:
@@ -213,12 +256,117 @@ class BluetoothHandler:
     async def _stop_notify_async(self):
         """비동기 알림 중지"""
         try:
-            if self.client and self.client.is_connected and self.char_uuid:
-                await self.client.stop_notify(self.char_uuid)
+            if self.client and self.client.is_connected:
+                # handle이 있으면 handle 사용, 없으면 UUID 사용
+                if self.char_handle is not None:
+                    await self.client.stop_notify(self.char_handle)
+                elif self.char_uuid is not None:
+                    await self.client.stop_notify(self.char_uuid)
             log.debug("Bluetooth notifications stopped")
             return True
         except Exception as e:
             log.error(f"Stop notify error: {e}")
+            return False
+
+    async def _discover_characteristics(self):
+        """연결된 기기의 특성을 탐색하여 적절한 특성 선택"""
+        try:
+            if not self.client or not self.client.is_connected:
+                log.error("Client not connected for characteristic discovery")
+                return False
+
+            log.debug("Discovering device characteristics...")
+
+            # 알려진 UUID들 (우선순위 순)
+            known_uuids = [
+                "beb5483e-36e1-4688-b7f5-ea07361b26a8",  # Fisica Scale 기본
+                "6e400002-b5a3-f393-e0a9-e50e24dcca9e",  # Nordic UART TX
+                "6e400003-b5a3-f393-e0a9-e50e24dcca9e",  # Nordic UART RX
+            ]
+
+            # 모든 특성 수집
+            all_characteristics = []
+            target_uuid_chars = []
+
+            for service in self.client.services:
+                log.debug(f"Service: {service.uuid} ({service.description or 'Unknown'})")
+
+                for char in service.characteristics:
+                    char_info = {
+                        'char': char,
+                        'uuid': char.uuid,
+                        'handle': char.handle,
+                        'properties': char.properties,
+                        'service_uuid': service.uuid
+                    }
+                    all_characteristics.append(char_info)
+
+                    log.debug(f"  Char: {char.uuid} | Handle: {char.handle} | Props: {char.properties}")
+
+                    # 특정 UUID의 특성들 별도 수집
+                    if char.uuid in known_uuids:
+                        target_uuid_chars.append(char_info)
+
+            # 특성 선택 로직
+            selected_char_info = None
+
+            # 1. 알려진 UUID 중에서 write+notify 가능한 것 선택
+            for char_info in target_uuid_chars:
+                props = char_info['properties']
+                if 'write' in props and 'notify' in props:
+                    selected_char_info = char_info
+                    log.info(f"Selected known UUID with write+notify: {char_info['uuid']}")
+                    break
+
+            # 2. 알려진 UUID 중에서 write 가능한 것 선택
+            if selected_char_info is None:
+                for char_info in target_uuid_chars:
+                    if 'write' in char_info['properties']:
+                        selected_char_info = char_info
+                        log.info(f"Selected known UUID with write: {char_info['uuid']}")
+                        break
+
+            # 3. 알려진 UUID 중 첫 번째 선택
+            if selected_char_info is None and target_uuid_chars:
+                selected_char_info = target_uuid_chars[0]
+                log.info(f"Selected first known UUID: {selected_char_info['uuid']}")
+
+            # 4. 모든 특성 중에서 write+notify 가능한 것 선택
+            if selected_char_info is None:
+                for char_info in all_characteristics:
+                    props = char_info['properties']
+                    if 'write' in props and 'notify' in props:
+                        selected_char_info = char_info
+                        log.warning(f"Selected unknown UUID with write+notify: {char_info['uuid']}")
+                        break
+
+            # 5. 마지막 수단: write 가능한 특성 선택
+            if selected_char_info is None:
+                for char_info in all_characteristics:
+                    if 'write' in char_info['properties']:
+                        selected_char_info = char_info
+                        log.warning(f"Selected write-capable characteristic: {char_info['uuid']}")
+                        break
+
+            if selected_char_info:
+                # 선택된 특성 정보 저장
+                self.selected_char = selected_char_info['char']
+                self.char_uuid = selected_char_info['uuid']
+                self.char_handle = selected_char_info['handle']
+
+                log.info(f"Characteristic selected - UUID: {self.char_uuid}, Handle: {self.char_handle}")
+                return True
+            else:
+                log.error("No suitable characteristics found")
+                return False
+
+        except Exception as e:
+            log.error(f"Characteristic discovery failed: {e}")
+            # 백업으로 기본값 설정
+            if self.char_uuid is None:
+                self.char_uuid = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+                self.char_handle = None  # handle은 unknown
+                log.warning(f"Using fallback UUID: {self.char_uuid}")
             return False
 
     def set_uart(self, uart):
@@ -228,7 +376,7 @@ class BluetoothHandler:
     def connect(self):
         """동기식 연결"""
         log.debug(f"Starting connection to {self.device_address}")
-        result = self._execute_command("connect", timeout=20.0)
+        result = self._execute_command("connect", timeout=30.0)  # 더 긴 타임아웃
         if result:
             log.info("Bluetooth connection successful")
         else:
@@ -270,7 +418,7 @@ class BluetoothHandler:
             try:
                 self._buffer.extend(data)
                 self.last_heartbeat = time.time()
-                log.debug(f"Raw data received: {data.hex()}, buffer len : {len(self._buffer)}")
+                log.debug(f"Raw data received: {data.hex()}, buffer len: {len(self._buffer)}")
             except Exception as e:
                 log.error(f"Bluetooth notification processing error: {e}")
 
@@ -321,90 +469,13 @@ class BluetoothHandler:
                     else:
                         log.critical(f"[Unexpected Exception] {e}")
                     self._listening = False
-                time.sleep(0.01)
+                time.sleep(0.5)
             log.debug("listen_loop stopped.")
             self.listen_thread = None
         except Exception as e:
             log.critical(f"listen_loop exception: {e}")
             self.listen_thread = None
             raise RuntimeError
-
-    async def _discover_characteristics(self):
-        """연결된 기기의 특성을 탐색하여 적절한 UUID 찾기"""
-        try:
-            if not self.client or not self.client.is_connected:
-                log.error("Client not connected for characteristic discovery")
-                return False
-
-            log.debug("Discovering device characteristics...")
-
-            # 알려진 UUID들 (우선순위 순)
-            known_uuids = [
-                "beb5483e-36e1-4688-b7f5-ea07361b26a8",  # Fisica Scale 기본
-            ]
-
-            # 모든 서비스의 특성 수집
-            available_chars = []
-            writable_chars = []
-            notify_chars = []
-
-            for service in self.client.services:
-                log.debug(f"Service: {service.uuid} - {service.description}")
-
-                for char in service.characteristics:
-                    available_chars.append(char.uuid)
-
-                    # 속성 확인
-                    if "write" in char.properties:
-                        writable_chars.append(char.uuid)
-                    if "notify" in char.properties:
-                        notify_chars.append(char.uuid)
-
-                    log.debug(f"  Characteristic: {char.uuid} - Properties: {char.properties}")
-
-            # UUID 선택 우선순위
-            selected_uuid = None
-
-            # 1. 알려진 UUID가 있는지 확인
-            for known_uuid in known_uuids:
-                if known_uuid in available_chars:
-                    selected_uuid = known_uuid
-                    log.debug(f"Using known UUID: {selected_uuid}")
-                    break
-
-            # 2. 알려진 UUID가 없으면 write+notify 가능한 특성 찾기
-            if selected_uuid is None:
-                for char_uuid in available_chars:
-                    if char_uuid in writable_chars and char_uuid in notify_chars:
-                        selected_uuid = char_uuid
-                        log.info(f"Using write+notify capable UUID: {selected_uuid}")
-                        break
-
-            # 3. write 가능한 특성 찾기
-            if selected_uuid is None and writable_chars:
-                selected_uuid = writable_chars[0]
-                log.info(f"Using writable UUID: {selected_uuid}")
-
-            # 4. 첫 번째 특성 사용
-            if selected_uuid is None and available_chars:
-                selected_uuid = available_chars[0]
-                log.warning(f"Using first available UUID: {selected_uuid}")
-
-            if selected_uuid:
-                self.char_uuid = selected_uuid
-                log.debug(f"Characteristic UUID set to: {self.char_uuid}")
-                return True
-            else:
-                log.error("No suitable characteristics found")
-                return False
-
-        except Exception as e:
-            log.error(f"Characteristic discovery failed: {e}")
-            # 백업으로 기본 UUID 사용
-            if self.char_uuid is None:
-                self.char_uuid = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-                log.warning(f"Using fallback UUID: {self.char_uuid}")
-            return False
 
     def close(self):
         """연결 해제"""
