@@ -115,7 +115,7 @@ class Receiver:
         if self._device.get('type') == "bluetooth":
             if not self._handler:
                 self._handler = BluetoothHandler(self._device_id)
-                self._handler.connect()
+            self._handler.connect()
 
         self._handler.start_listening()
 

@@ -422,37 +422,52 @@ class FisicaSDK:
         """
     Fisica SDK: set_zero
 
+        Calibrates the zero point of the device.
+
+        This function sets the current reading as the zero reference point for
+        weight measurements. This is typically used to tare the scale or establish
+        a baseline when the scale platform is empty.
+
         Notes:
-            기기의 영점을 맞추는 기능입니다.
-            connect()를 통해 기기와의 연결을
+            - Device connection is required before calling this method
+            - Call connect() first to establish device connection
+            - Use this function when the scale platform is empty to set proper zero point
+            - This is equivalent to the "tare" function on digital scales
         """
         if self._receiver:
             self._receiver.zeroset()
         else:
             log.debug(
-            "\nFisica SDK\n"
-            "   It appears that the device is not connected.\n"
-            "   You must establish a connection to the device using `connect()` before calling `set_zero()`.\n"
-        )
-
-
+                "\nFisica SDK\n"
+                "   Device is not connected.\n"
+                "   You must establish a connection to the device using `connect()` before calling `set_zero()`.\n"
+            )
     def set_scale(self, value):
         """
-    Fisica SDK: set_zero
+    Fisica SDK: set_scale
+
+        Adjusts the weight calibration of the device.
+
+        This function allows you to modify the scale value to correct measurement
+        errors in weight readings. The device must be connected via connect()
+        before using this function.
+
+        Args:
+            value: Scale calibration value to adjust weight measurement accuracy
 
         Notes:
-            기기의 영점을 맞추는 기능입니다.
-            connect()를 통해 기기와의 연결을
+            - Device connection is required before calling this method
+            - Use this to fine-tune weight measurement precision
+            - Call connect() first to establish device connection
         """
         if self._receiver:
             self._receiver.setScale(value)
         else:
             log.debug(
                 "\nFisica SDK\n"
-                "   It appears that the device is not connected.\n"
-                "   You must establish a connection to the device using `connect()` before calling `set_zero()`.\n"
+                "   Device is not connected.\n"
+                "   You must establish a connection to the device using `connect()` before calling `set_scale()`.\n"
             )
-
 
 
     def export_report(self, report: Optional[Union['SessionReport', list]] = None, output: Optional[str] = None):
@@ -581,10 +596,12 @@ class FisicaSDK:
         self._session.frames = []
         return self._current_report
 
-    def render(self, frame: Optional[MeasurementFrame] = None, grid_data: Optional[np.ndarray] = None, mode: str = "BLUR", scale: float = 1.0):
+    def render(self, frame: Optional[MeasurementFrame] = None, grid_data: Optional[np.ndarray] = None, mode: str = "BLUR", scale: float = 1.0, bbox: bool = False):
         """
     Fisica SDK : render
         Parameters:
+            :param bbox:
+
             :param frame:
             MeasurementFrame (dataclass): This dataclass is used when measurement data is received through the on_data callback function.
                                           If you are calling the render function directly, please provide grid_data instead.
@@ -609,7 +626,7 @@ class FisicaSDK:
         Notes:
             If you need to display image data in real time during scale measurement,
             you can use the built-in visualize function provided by the Fisica SDK.
-            Refer to builtin_visualizer.py in the examples directory.
+            Refer to realtime_monitoring.py in the examples directory.
         """
         if frame is None and grid_data is None:
             log.error(
@@ -624,7 +641,7 @@ class FisicaSDK:
         if frame:
             grid_data = np.array(frame.sensor_matrix)
 
-        return global_render(grid_data, mode, scale=scale)
+        return global_render(grid_data, mode, scale=scale, bbox=bbox)
 
     def wait(self):
         """

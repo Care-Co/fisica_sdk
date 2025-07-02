@@ -55,35 +55,35 @@ SDK는 다음 의존성 패키지들을 자동으로 설치합니다:
 # examples/basic_use.py
 import fisica_sdk as fisica
 
-# SDK 초기화
+# Initialize SDK
 sdk = fisica.FisicaSDK()
 
-# 기기 스캔
+# Scan for devices
 devices = sdk.scan_devices()
-print("사용 가능한 기기:", devices)
+print("Available devices:", devices)
 
-# 첫 번째 기기에 연결
+# Connect to the first device
 if devices:
-    sdk.connect(devices[0])
-    
-    # 메타데이터 설정
-    sdk.set_metadata(name="홍길동")
-    
-    # 10초 동안 측정 시작
-    sdk.start_measurement(duration=10)
-    
-    # 완료 대기
-    sdk.wait()
-    
-    # 결과 분석
-    report = sdk.analyze()
-    print("분석 완료:", report)
-    
-    # 연결 해제
-    sdk.disconnect()
-    
-    #연결 해제 대기
-    sdk.wait()
+   sdk.connect(devices[0])
+
+   # Set metadata
+   sdk.set_metadata(name="John Doe")
+
+   # Start measurement for 10 seconds
+   sdk.start_measurement(duration=10)
+
+   # Wait for completion
+   sdk.wait()
+
+   # Analyze results
+   report = sdk.analyze()
+   print("Analysis complete:", report)
+
+   # Disconnect
+   sdk.disconnect()
+
+   # Wait for completion
+   sdk.wait()
 ```
 
 ### 실시간 데이터 모니터링
@@ -92,35 +92,37 @@ if devices:
 # examples/realtime_monitoring.py
 from fisica_sdk import FisicaSDK, Visualizer, VisualOptions
 
-def on_frame_received(frame):
-   """Callback function for real-time data"""
-   print(f"Received frame at {frame.timestamp}")
+# Define a function to visualize incoming data
+def visualize(data):
+   image = sdk.render(frame=data, mode=VisualOptions.BLUR, bbox=True, scale=2.0)  # Render image from incoming data
+   vis.update(image)         # Update visualizer with new image
 
-   # Render visualization
-   image = sdk.render(frame, mode=VisualOptions.BBOX)
-
-   # Update GUI (if running)
-   vis.update(image)
-
-# Setup SDK
+# Initialize the SDK
 sdk = FisicaSDK()
-vis = Visualizer()
+# Find available devices.
 devices = sdk.scan_devices()
 
 if devices:
+   # Connect to the first device from the list.
    sdk.connect(devices[0])
 
-   # Register callback
-   sdk.on_data(on_frame_received)
+   # Register callback function to visualize data
+   sdk.on_data(visualize)
 
-   # Start measurement
-   sdk.start_measurement(duration=30)
+   # Start measurement.
+   sdk.start_measurement()
 
-   # Start GUI viewer
-   vis.run(scale=1.5)
+   # Sleep without blocking the main thread.
+   sdk.sleep(15)
 
-   # Wait for completion
-   sdk.wait()
+   # Stop measurement.
+   sdk.stop_measurement()
+
+   # Create visualizer instance
+   vis = Visualizer()
+
+   # Launch visualizer with scaling
+   vis.run(scale=2.0)
 
 ```
 
@@ -134,25 +136,25 @@ sdk = fisica.FisicaSDK()
 devices = sdk.scan_devices()
 
 if devices:
-    sdk.connect(devices[0])
+   sdk.connect(devices[0])
 
-    # Multiple measurements
-    for i in range(5):
-        sdk.set_metadata(id=i, name=f"Test_{i}")
-        sdk.start_measurement(duration=5)
-        sdk.wait()
-        sdk.analyze()
-        # Get session data
-        frames = sdk.get_session_frames()
-        print(f"Session {i}: {len(frames)} frames captured")
+   # Multiple measurements
+   for i in range(5):
+      sdk.set_metadata(id=i, name=f"Test_{i}")
+      sdk.start_measurement(duration=5)
+      sdk.wait()
+      sdk.analyze()
+      # Get session data
+      frames = sdk.get_session_frames()
+      print(f"Session {i}: {len(frames)} frames captured")
 
-        # Reset for next measurement
-        sdk.reset_session()
+      # Reset for next measurement
+      sdk.reset_session()
 
-    # Export all reports
-    reports = sdk.get_all_reports()
-    sdk.export_report(reports, output="measurement_results.json")
-    sdk.disconnect()
+   # Export all reports
+   reports = sdk.get_all_reports()
+   sdk.export_report(reports, output="measurement_results.json")
+   sdk.disconnect()
 ```
 
 ## 📱 기기 연결
@@ -205,7 +207,7 @@ def main():
    parser.add_argument('--output', type=str, default='results.json', help='Output file')
    args = parser.parse_args()
 
-   sdk = fisica.FisicaSDK(debug=10)
+   sdk = fisica.FisicaSDK()
    devices = sdk.scan_devices()
 
    if not devices:
@@ -220,7 +222,6 @@ def main():
    print(report)
 
    sdk.export_report(output=args.output)
-   print(f"Results saved to {args.output}")
 
 if __name__ == "__main__":
    main()
@@ -766,6 +767,129 @@ VisualOptions 클래스는 FisicaSDK.render()에서 사용할 수 있는 렌더�
 없음
 
 ---
+## 📚 API 참조 - 추가 메서드
+
+
+### `set_zero()`
+
+**설명**:  
+현재 측정값을 무게 측정의 영점 기준점으로 설정하여 장치의 영점을 보정합니다.
+
+**매개변수**:  
+없음
+
+**반환값**:  
+없음
+
+**사용 예시**:
+```python
+# 먼저 장치에 연결
+devices = sdk.scan_devices()
+if devices:
+   sdk.connect(devices[0])
+   
+   # 플랫폼이 비어있는지 확인한 후 영점 설정
+   sdk.set_zero()  # 저울 영점 조정
+   
+   # 이제 정확한 측정 준비 완료
+   sdk.start_measurement(duration=10)
+   
+   # 측정 종료 대기
+   sdk.wait()  
+```
+**참고사항**:
+- 이 메서드를 호출하기 전에 장치 연결이 필요합니다
+- 장치 연결을 설정하려면 먼저 `connect()`를 호출하세요
+- 저울 플랫폼이 비어있을 때 이 기능을 사용하세요
+- 이는 모든 후속 무게 측정의 기준선을 설정합니다
+
+---
+
+### `set_scale(value)`
+
+**설명**:  
+장치의 스케일 보정 매개변수를 설정합니다. 이 함수는 정확한 측정값을 보장하기 위해 장치의 무게 측정 시스템에서 사용하는 내부 보정값을 조정합니다.
+
+**매개변수**:
+- `value` (int): 스케일 보정 매개변수, -32768부터 32767까지의 범위 내에 있어야 함
+
+**반환값**:  
+없음
+
+**사용 예시**:
+```python
+# 먼저 장치에 연결
+devices = sdk.scan_devices()
+if devices:
+    sdk.connect(devices[0])
+    
+    # 먼저 영점 설정
+    sdk.set_zero()
+    
+    # 스케일 보정 매개변수 설정
+    sdk.set_scale(12600)  # 보정값을 12600으로 설정
+    
+    # 보정된 설정으로 측정 시작
+    sdk.start_measurement(duration=10)
+    
+    # 측정 종료 대기
+    sdk.wait()
+```
+
+**참고사항**:
+- 이 메서드를 호출하기 전에 장치 연결이 필요합니다
+- 장치 연결을 설정하려면 먼저 `connect()`를 호출하세요
+- 값은 -32768부터 32767까지 범위의 정수여야 합니다
+- 최적의 보정을 위해 `set_zero()` 후에 사용하세요
+- 적절한 보정값은 장치 문서를 참조하세요
+
+---
+
+## 🔧 장치 보정 워크플로우
+
+최적의 측정 정확도를 위해 다음 보정 순서를 따르세요:
+
+```python
+# examples/calibration.py
+import fisica_sdk as fisica
+
+# 초기화 및 연결
+sdk = fisica.FisicaSDK()
+devices = sdk.scan_devices()
+
+if devices:
+    sdk.connect(devices[0])
+    
+    # 1단계: 영점 설정 (빈 플랫폼)
+    print("플랫폼이 비어있는지 확인해주세요...")
+    input("준비되면 Enter를 누르세요...")
+    sdk.set_zero()
+    print("영점이 보정되었습니다.")
+    
+    # 2단계: 스케일 보정 매개변수 설정
+    # 장치에 적합한 보정값 사용
+    # (권장값은 장치 문서 참조)
+    calibration_value = 12600  # -32768부터 32767 범위의 예시값
+    sdk.set_scale(calibration_value)
+    print(f"스케일 보정이 다음 값으로 설정되었습니다: {calibration_value}")
+    
+    # 3단계: 알려진 기준 무게로 보정 확인
+    print("플랫폼에 알려진 기준 무게를 올려주세요...")
+    reference_weight = float(input("기준 무게를 입력하세요 (kg): "))
+    
+    # 정확도 확인을 위한 측정
+    sdk.start_measurement(duration=10)
+    sdk.wait()
+    report = sdk.analyze()
+    measured_weight = report.weight
+    
+    print(f"기준값: {reference_weight}kg, 측정값: {measured_weight}kg")
+    print(f"정확도: {abs(measured_weight - reference_weight):.3f}kg 차이")
+    
+    # 4단계: 정확한 측정 준비 완료
+    print("보정이 완료되었습니다. 측정 준비가 되었습니다.")
+    sdk.disconnect()
+```
 
 ## 🤝 Contributing
 

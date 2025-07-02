@@ -5,7 +5,7 @@ import asyncio
 from bleak import BleakClient
 
 from .device import ATCommands
-from .parser import *
+from .parser import DataParser
 from .utils import log
 import errno
 
@@ -18,7 +18,10 @@ class BluetoothHandler:
         self.last_heartbeat = time.time()
         self._buffer = bytearray()
         self.data_queue = queue.Queue()
-        self.at_response_queue = queue.Queue()  # AT 응답 큐 추가
+        self.at_response_queue = queue.Queue()
+
+        # 공통 파서 초기화
+        self.parser = DataParser(self.data_queue, self.at_response_queue)
 
         # 전용 이벤트 루프와 스레드
         self._loop = None
@@ -26,8 +29,14 @@ class BluetoothHandler:
         self._command_queue = queue.Queue()
         self._connected = False
 
-        # 특성 UUID (연결 후 자동 발견)
+        # 특성 정보 (handle과 UUID 모두 저장)
         self.char_uuid = None
+        self.char_handle = None
+        self.selected_char = None  # 선택된 특성 객체
+
+        # 연결 재시도 설정
+        self.max_retries = 3
+        self.retry_delay = 2.0
 
         # 이벤트 루프 스레드 시작
         self._start_loop_thread()
@@ -92,7 +101,7 @@ class BluetoothHandler:
                 log.error(f"Command processor error: {e}")
                 await asyncio.sleep(0.1)
 
-    def _execute_command(self, command, *args, timeout=15.0):  # 타임아웃 증가
+    def _execute_command(self, command, *args, timeout=20.0):  # 타임아웃 더 증가
         """명령을 이벤트 루프에서 실행하고 결과 반환"""
         if not self._loop or not self._loop_thread.is_alive():
             log.error("Event loop not running")
@@ -110,29 +119,53 @@ class BluetoothHandler:
             return False
 
     async def _connect_async(self):
-        """비동기 연결"""
-        try:
-            log.debug(f"Attempting BLE connection to {self.device_address}")
-            self.client = BleakClient(self.device_address)
+        """비동기 연결 (재시도 로직 포함)"""
+        for attempt in range(self.max_retries):
+            try:
+                log.debug(f"Connection attempt {attempt + 1}/{self.max_retries} to {self.device_address}")
 
-            # 연결 시도 (더 긴 타임아웃)
-            await asyncio.wait_for(self.client.connect(), timeout=10.0)
-            self._connected = True
-            log.debug(f"Bluetooth connected to {self.device_address}")
+                # 기존 클라이언트가 있다면 정리
+                if self.client:
+                    try:
+                        if self.client.is_connected:
+                            await self.client.disconnect()
+                    except:
+                        pass
+                    self.client = None
 
-            # 연결 후 적절한 특성 UUID 찾기
-            if self.char_uuid is None:
-                await self._discover_characteristics()
+                # 새 클라이언트 생성
+                self.client = BleakClient(self.device_address)
 
-            return True
-        except asyncio.TimeoutError:
-            log.error(f"Bluetooth connection timeout to {self.device_address}")
-            self._connected = False
-            return False
-        except Exception as e:
-            log.error(f"Bluetooth connection failed: {e}")
-            self._connected = False
-            return False
+                # 연결 시도 (더 긴 타임아웃)
+                await asyncio.wait_for(self.client.connect(), timeout=15.0)
+
+                # 연결 확인
+                if not self.client.is_connected:
+                    raise Exception("Connection established but client reports not connected")
+
+                self._connected = True
+                log.debug(f"Bluetooth connected to {self.device_address}")
+
+                # 연결 후 특성 발견
+                success = await self._discover_characteristics()
+                if not success:
+                    log.warning("Characteristic discovery failed, but connection established")
+
+                return True
+
+            except asyncio.TimeoutError:
+                log.warning(f"Connection attempt {attempt + 1} timed out")
+            except Exception as e:
+                log.warning(f"Connection attempt {attempt + 1} failed: {e}")
+
+            # 재시도 전 대기
+            if attempt < self.max_retries - 1:
+                log.debug(f"Waiting {self.retry_delay}s before retry...")
+                await asyncio.sleep(self.retry_delay)
+
+        log.error(f"All {self.max_retries} connection attempts failed")
+        self._connected = False
+        return False
 
     async def _disconnect_async(self):
         """비동기 연결 해제"""
@@ -140,6 +173,9 @@ class BluetoothHandler:
             if self.client and self.client.is_connected:
                 await self.client.disconnect()
             self._connected = False
+            self.char_uuid = None
+            self.char_handle = None
+            self.selected_char = None
             log.debug("Bluetooth disconnected")
             return True
         except Exception as e:
@@ -163,25 +199,29 @@ class BluetoothHandler:
                 return b''
 
     async def _send_async(self, data):
-        """비동기 데이터 전송"""
+        """비동기 데이터 전송 (handle 우선 사용)"""
         try:
             if not self.client or not self.client.is_connected:
                 log.error("Client not connected for sending data")
                 return False
 
-            if self.char_uuid is None:
-                log.error("No characteristic UUID available for sending data")
-                return False
-
             # 데이터 타입 변환
             cmd_bytes = self._ensure_bytes(data)
-
             if not cmd_bytes:
                 log.error("Empty data after conversion")
                 return False
 
-            log.debug(f"Sending BLE data: {cmd_bytes.hex()} (length: {len(cmd_bytes)})")
-            await self.client.write_gatt_char(self.char_uuid, cmd_bytes)
+            # handle이 있으면 handle 사용, 없으면 UUID 사용
+            if self.char_handle is not None:
+                log.debug(f"Sending BLE data via handle {self.char_handle}: {cmd_bytes.hex()}")
+                await self.client.write_gatt_char(self.char_handle, cmd_bytes)
+            elif self.char_uuid is not None:
+                log.debug(f"Sending BLE data via UUID {self.char_uuid}: {cmd_bytes.hex()}")
+                await self.client.write_gatt_char(self.char_uuid, cmd_bytes)
+            else:
+                log.error("No characteristic handle or UUID available")
+                return False
+
             log.debug("BLE data sent successfully")
             return True
 
@@ -190,17 +230,23 @@ class BluetoothHandler:
             return False
 
     async def _start_notify_async(self, callback):
-        """비동기 알림 시작"""
+        """비동기 알림 시작 (handle 우선 사용)"""
         try:
             if not self.client or not self.client.is_connected:
                 log.error("Client not connected for notifications")
                 return False
 
-            if self.char_uuid is None:
-                log.error("No characteristic UUID available for notifications")
+            # handle이 있으면 handle 사용, 없으면 UUID 사용
+            if self.char_handle is not None:
+                log.debug(f"Starting notifications via handle {self.char_handle}")
+                await self.client.start_notify(self.char_handle, callback)
+            elif self.char_uuid is not None:
+                log.debug(f"Starting notifications via UUID {self.char_uuid}")
+                await self.client.start_notify(self.char_uuid, callback)
+            else:
+                log.error("No characteristic handle or UUID available")
                 return False
 
-            await self.client.start_notify(self.char_uuid, callback)
             log.debug("Bluetooth notifications started")
             return True
         except Exception as e:
@@ -210,12 +256,117 @@ class BluetoothHandler:
     async def _stop_notify_async(self):
         """비동기 알림 중지"""
         try:
-            if self.client and self.client.is_connected and self.char_uuid:
-                await self.client.stop_notify(self.char_uuid)
+            if self.client and self.client.is_connected:
+                # handle이 있으면 handle 사용, 없으면 UUID 사용
+                if self.char_handle is not None:
+                    await self.client.stop_notify(self.char_handle)
+                elif self.char_uuid is not None:
+                    await self.client.stop_notify(self.char_uuid)
             log.debug("Bluetooth notifications stopped")
             return True
         except Exception as e:
             log.error(f"Stop notify error: {e}")
+            return False
+
+    async def _discover_characteristics(self):
+        """연결된 기기의 특성을 탐색하여 적절한 특성 선택"""
+        try:
+            if not self.client or not self.client.is_connected:
+                log.error("Client not connected for characteristic discovery")
+                return False
+
+            log.debug("Discovering device characteristics...")
+
+            # 알려진 UUID들 (우선순위 순)
+            known_uuids = [
+                "beb5483e-36e1-4688-b7f5-ea07361b26a8",  # Fisica Scale 기본
+                "6e400002-b5a3-f393-e0a9-e50e24dcca9e",  # Nordic UART TX
+                "6e400003-b5a3-f393-e0a9-e50e24dcca9e",  # Nordic UART RX
+            ]
+
+            # 모든 특성 수집
+            all_characteristics = []
+            target_uuid_chars = []
+
+            for service in self.client.services:
+                log.debug(f"Service: {service.uuid} ({service.description or 'Unknown'})")
+
+                for char in service.characteristics:
+                    char_info = {
+                        'char': char,
+                        'uuid': char.uuid,
+                        'handle': char.handle,
+                        'properties': char.properties,
+                        'service_uuid': service.uuid
+                    }
+                    all_characteristics.append(char_info)
+
+                    log.debug(f"  Char: {char.uuid} | Handle: {char.handle} | Props: {char.properties}")
+
+                    # 특정 UUID의 특성들 별도 수집
+                    if char.uuid in known_uuids:
+                        target_uuid_chars.append(char_info)
+
+            # 특성 선택 로직
+            selected_char_info = None
+
+            # 1. 알려진 UUID 중에서 write+notify 가능한 것 선택
+            for char_info in target_uuid_chars:
+                props = char_info['properties']
+                if 'write' in props and 'notify' in props:
+                    selected_char_info = char_info
+                    log.info(f"Selected known UUID with write+notify: {char_info['uuid']}")
+                    break
+
+            # 2. 알려진 UUID 중에서 write 가능한 것 선택
+            if selected_char_info is None:
+                for char_info in target_uuid_chars:
+                    if 'write' in char_info['properties']:
+                        selected_char_info = char_info
+                        log.info(f"Selected known UUID with write: {char_info['uuid']}")
+                        break
+
+            # 3. 알려진 UUID 중 첫 번째 선택
+            if selected_char_info is None and target_uuid_chars:
+                selected_char_info = target_uuid_chars[0]
+                log.info(f"Selected first known UUID: {selected_char_info['uuid']}")
+
+            # 4. 모든 특성 중에서 write+notify 가능한 것 선택
+            if selected_char_info is None:
+                for char_info in all_characteristics:
+                    props = char_info['properties']
+                    if 'write' in props and 'notify' in props:
+                        selected_char_info = char_info
+                        log.warning(f"Selected unknown UUID with write+notify: {char_info['uuid']}")
+                        break
+
+            # 5. 마지막 수단: write 가능한 특성 선택
+            if selected_char_info is None:
+                for char_info in all_characteristics:
+                    if 'write' in char_info['properties']:
+                        selected_char_info = char_info
+                        log.warning(f"Selected write-capable characteristic: {char_info['uuid']}")
+                        break
+
+            if selected_char_info:
+                # 선택된 특성 정보 저장
+                self.selected_char = selected_char_info['char']
+                self.char_uuid = selected_char_info['uuid']
+                self.char_handle = selected_char_info['handle']
+
+                log.info(f"Characteristic selected - UUID: {self.char_uuid}, Handle: {self.char_handle}")
+                return True
+            else:
+                log.error("No suitable characteristics found")
+                return False
+
+        except Exception as e:
+            log.error(f"Characteristic discovery failed: {e}")
+            # 백업으로 기본값 설정
+            if self.char_uuid is None:
+                self.char_uuid = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+                self.char_handle = None  # handle은 unknown
+                log.warning(f"Using fallback UUID: {self.char_uuid}")
             return False
 
     def set_uart(self, uart):
@@ -225,7 +376,7 @@ class BluetoothHandler:
     def connect(self):
         """동기식 연결"""
         log.debug(f"Starting connection to {self.device_address}")
-        result = self._execute_command("connect", timeout=15.0)
+        result = self._execute_command("connect", timeout=30.0)  # 더 긴 타임아웃
         if result:
             log.info("Bluetooth connection successful")
         else:
@@ -267,7 +418,7 @@ class BluetoothHandler:
             try:
                 self._buffer.extend(data)
                 self.last_heartbeat = time.time()
-                log.debug(f"Raw data received: {data.hex()}, buffer len : {len(self._buffer)}")
+                log.debug(f"Raw data received: {data.hex()}, buffer len: {len(self._buffer)}")
             except Exception as e:
                 log.error(f"Bluetooth notification processing error: {e}")
 
@@ -305,8 +456,8 @@ class BluetoothHandler:
             while self._listening:
                 self.last_heartbeat = time.time()
                 try:
-                    # 종료 구분자별로 데이터 처리
-                    self._process_all_data_by_terminator()
+                    # 공통 파서 사용
+                    self.parser.process_all_data_by_terminator(self._buffer)
 
                 except Exception as e:
                     if isinstance(e, OSError) and e.errno == errno.ENXIO:
@@ -318,229 +469,13 @@ class BluetoothHandler:
                     else:
                         log.critical(f"[Unexpected Exception] {e}")
                     self._listening = False
-                time.sleep(0.01)
+                time.sleep(0.5)
             log.debug("listen_loop stopped.")
             self.listen_thread = None
         except Exception as e:
             log.critical(f"listen_loop exception: {e}")
             self.listen_thread = None
             raise RuntimeError
-
-    def _process_all_data_by_terminator(self):
-        """종료 구분자를 기준으로 모든 데이터를 순차적으로 처리"""
-        self._check_and_process_plantar_data()
-        at_footer_pos = self._buffer.rfind(b'\xff\xf0')       # AT Command 응답
-
-        if at_footer_pos != -1:
-            # AT Command 응답 처리
-            self._process_at_command_response(at_footer_pos)
-
-    def _process_at_command_response(self, footer_pos):
-        """AT Command 응답 처리 (종료: ff f0)"""
-        try:
-            # AT Command는 8바이트 고정이므로 footer 위치 확인
-            if footer_pos >= 6:  # STX(1) + Header(1) + Type(1) + RET(1) + Data(2) + ETX(2) = 8
-                packet_start = footer_pos - 6
-
-                # STX 확인
-                if self._buffer[packet_start] == 0x24:
-                    at_packet = bytes(self._buffer[packet_start:footer_pos + 2])
-
-                    if len(at_packet) == 8:
-                        log.debug(f"Processing AT command response: {at_packet.hex()}")
-                        self._handle_at_response(at_packet)
-
-                        # 처리된 AT Command 제거
-                        del self._buffer[:footer_pos + 2]
-                        return
-
-            # AT Command 형식이 맞지 않으면 해당 footer만 제거
-            log.debug(f"Invalid AT command format at footer position {footer_pos}")
-            log.debug(f"Context: {self._buffer[max(0, footer_pos-10):footer_pos+10].hex()}")
-
-        except Exception as e:
-            log.error(f"AT command response parsing failed: {e}")
-
-        # 오류 발생 시 해당 footer까지만 제거
-        del self._buffer[:footer_pos + 2]
-
-    def _check_and_process_plantar_data(self):
-        """
-        족저압 데이터 크기 기반 처리
-        조건:
-        1. 버퍼 크기가 645 이상
-        2. 마지막 footer index - 645 > 0
-        """
-        # 조건 1: 버퍼 크기 확인
-        if len(self._buffer) < 644:
-            return False  # 버퍼 계속 쌓기
-
-        # 마지막 f0 0f footer 찾기
-        last_footer_index = self._buffer.rfind(b'\xf0\x0f')
-
-        if last_footer_index == -1:
-            return False  # footer가 없으면 계속 쌓기
-
-        if last_footer_index < 642:
-            return False  # 조건 불만족, 계속 쌓기
-
-        # 조건 만족: 족저압 데이터 처리
-        try:
-            log.debug(f"Processing plantar data: buffer size={len(self._buffer)}, "
-                      f"footer at {last_footer_index}")
-
-            # footer까지의 데이터 추출 (footer 포함)
-            frame_data = self._buffer[:last_footer_index + 2]
-
-            # 족저압 데이터 파싱
-            matrix = extract_frames_from_buffer(frame_data, last_footer_index)
-            if matrix:
-                frame = parse_frame_from_chunk(matrix)
-                if frame is not None:
-                    self.data_queue.put(frame)
-                    log.debug(f"Successfully parsed plantar frame, queue size: {self.data_queue.qsize()}")
-                else:
-                    log.debug("parse_frame_from_chunk returned None")
-            else:
-                log.debug("extract_frames_from_buffer returned empty")
-
-        except Exception as e:
-            log.error(f"Plantar data parsing failed: {e}")
-            log.debug(f"Problematic data: {self._buffer[:100].hex()}...")
-
-        # 처리된 데이터 제거 (footer 포함)
-        del self._buffer[:last_footer_index + 2]
-
-        return True  # 처리 완료
-
-    def _handle_at_response(self, packet: bytes):
-        """AT Command 응답 파싱"""
-        if len(packet) != 8:
-            log.warning(f"AT packet length mismatch: expected 8, got {len(packet)}")
-            return
-
-        stx = packet[0]
-        header = packet[1]
-        type_byte = packet[2]
-        ret = packet[3]
-        data_high = packet[4]
-        data_low = packet[5]
-        etx = packet[6:8]
-
-        log.debug(f"[AT Response] Header: 0x{header:02X}, Type: 0x{type_byte:02X}, "
-                  f"RET: 0x{ret:02X}, Data: 0x{data_high:02X}{data_low:02X}")
-
-        # 성공/실패 확인
-        if ret == 0x01:
-            log.debug("AT Command executed successfully")
-        elif ret == 0x00:
-            error_code = data_low if data_high == 0x00 else (data_high << 8) | data_low
-            self._log_error_code(error_code)
-
-        # AT 응답을 큐에 추가
-        response = {
-            'header': header,
-            'type': type_byte,
-            'ret': ret,
-            'data_high': data_high,
-            'data_low': data_low,
-            'success': ret == 0x01
-        }
-        self.at_response_queue.put(response)
-
-    async def _discover_characteristics(self):
-        """연결된 기기의 특성을 탐색하여 적절한 UUID 찾기"""
-        try:
-            if not self.client or not self.client.is_connected:
-                log.error("Client not connected for characteristic discovery")
-                return False
-
-            log.debug("Discovering device characteristics...")
-
-            # 알려진 UUID들 (우선순위 순)
-            known_uuids = [
-                "beb5483e-36e1-4688-b7f5-ea07361b26a8",  # Fisica Scale 기본
-                # 다른 알려진 UUID들 추가 가능
-            ]
-
-            # 모든 서비스의 특성 수집
-            available_chars = []
-            writable_chars = []
-            notify_chars = []
-
-            for service in self.client.services:
-                log.debug(f"Service: {service.uuid} - {service.description}")
-
-                for char in service.characteristics:
-                    available_chars.append(char.uuid)
-
-                    # 속성 확인
-                    if "write" in char.properties:
-                        writable_chars.append(char.uuid)
-                    if "notify" in char.properties:
-                        notify_chars.append(char.uuid)
-
-                    log.debug(f"  Characteristic: {char.uuid} - Properties: {char.properties}")
-
-            # UUID 선택 우선순위
-            selected_uuid = None
-
-            # 1. 알려진 UUID가 있는지 확인
-            for known_uuid in known_uuids:
-                if known_uuid in available_chars:
-                    selected_uuid = known_uuid
-                    log.debug(f"Using known UUID: {selected_uuid}")
-                    break
-
-            # 2. 알려진 UUID가 없으면 write+notify 가능한 특성 찾기
-            if selected_uuid is None:
-                for char_uuid in available_chars:
-                    if char_uuid in writable_chars and char_uuid in notify_chars:
-                        selected_uuid = char_uuid
-                        log.info(f"Using write+notify capable UUID: {selected_uuid}")
-                        break
-
-            # 3. write 가능한 특성 찾기
-            if selected_uuid is None and writable_chars:
-                selected_uuid = writable_chars[0]
-                log.info(f"Using writable UUID: {selected_uuid}")
-
-            # 4. 첫 번째 특성 사용
-            if selected_uuid is None and available_chars:
-                selected_uuid = available_chars[0]
-                log.warning(f"Using first available UUID: {selected_uuid}")
-
-            if selected_uuid:
-                self.char_uuid = selected_uuid
-                log.debug(f"Characteristic UUID set to: {self.char_uuid}")
-                return True
-            else:
-                log.error("No suitable characteristics found")
-                return False
-
-        except Exception as e:
-            log.error(f"Characteristic discovery failed: {e}")
-            # 백업으로 기본 UUID 사용
-            if self.char_uuid is None:
-                self.char_uuid = "beb5483e-36e1-4688-b7f5-ea07361b26a8"
-                log.warning(f"Using fallback UUID: {self.char_uuid}")
-            return False
-
-    def _log_error_code(self, code):
-        """에러 코드별 메시지 출력"""
-        error_messages = {
-            1: "설정 값이 기존 값과 동일하거나 이미 다른 디바이스와 연결됨",
-            2: "설정 값이 범위를 벗어남",
-            3: "AT Command 포맷이 일치하지 않음",
-            4: "저장된 데이터가 존재하지 않음",
-            5: "측정 동작 중에는 족저압 측정 횟수 변경 불가",
-            6: "연결된 디바이스가 아님",
-            7: "OTA 펌웨어 업데이트 오류",
-            8: "펌웨어가 이미 최신 버전",
-            9: "WiFi 연결이 끊어짐"
-        }
-        message = error_messages.get(code, f"알 수 없는 오류 ({code})")
-        log.debug(f"[Error] Error Code {code}: {message}")
 
     def close(self):
         """연결 해제"""

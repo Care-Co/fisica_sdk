@@ -7,10 +7,10 @@ from .gui_viewer import update_gui
 from .utils import log
 
 
-def render(grid_data: np.ndarray, mode: str = 'BLUR', scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
+def render(grid_data: np.ndarray, mode: str = 'BLUR', bbox: bool = False, scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
     vis = Visualizer()
     vis.scale(scale)
-    return vis.render(grid_data, mode)
+    return vis.render(grid_data, mode, bbox)
 
 class VisualOptions:
     """
@@ -20,16 +20,16 @@ class VisualOptions:
             - BLUR: Smoothly rendered
             - BINARY: Text grid of values
             - BINARY_NONZERO: Text grid hiding zero values
-            - BBOX: Bounding box based on PCA
             - CONTOUR: Contour outline of foot shape
             - ALL: Return all in a list.
     """
+    # - BBOX: Bounding box based on PCA
+
     ALL    = 'ALL'
     PIXEL  = 'PIXEL'
     BLUR   = 'BLUR'
     BINARY = 'BINARY'
     BINARY_NONZERO = 'BINARY_NONZERO'
-    BBOX = 'BBOX'
     CONTOUR = 'CONTOUR'
 
 class Visualizer:
@@ -39,7 +39,7 @@ class Visualizer:
     def scale(self, factor: float):
         self._scale = factor
 
-    def _render_with_transparency(self, grid_data: np.ndarray) -> np.ndarray:
+    def _render_with_transparency(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
 
         grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         heatmap = cv2.resize(grid_norm, (456, 512), interpolation=cv2.INTER_LINEAR)
@@ -54,22 +54,18 @@ class Visualizer:
         rgba = cv2.cvtColor(dst, cv2.COLOR_BGR2BGRA)
         rgba[:, :, 3] = alpha
         rgba[sharpened < 10, 3] = 0
+        rgba = cv2.cvtColor(dst, cv2.COLOR_BGRA2BGR)
 
         scale = self._scale
         target_size = (int(456 * scale), int(512 * scale))
         rgba_resized = cv2.resize(rgba, target_size, interpolation=cv2.INTER_LINEAR)
+        if bbox:
+            rgba_resized = self._render_bbox(grid_data, rgba_resized)
 
         return rgba_resized
-        # retval, buffer = cv2.imencode('.png', rgba)
-        # return buffer.tobytes()
 
-    def _render_pixel(self, grid_data: np.ndarray) -> np.ndarray:
-        # grid_data = decode_raw(hex_data)
-        # if grid_data is None:
-        #     logger.error("Failed to render: could not decode hex_data.")
-        #     raise ValueError
 
-        # grid_data = preprocess_grid_data(grid_data)
+    def _render_pixel(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
         try:
             grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         except Exception as e:
@@ -84,9 +80,12 @@ class Visualizer:
         target_size = (int(456 * scale), int(512 * scale))
         img_resized = cv2.resize(img, target_size, interpolation=cv2.INTER_NEAREST)
 
+        if bbox:
+            self._render_bbox(grid_data, img_resized)
+
         return img_resized
 
-    def _render_binary(self, grid_data: np.ndarray, hide_zeros: bool = False) -> np.ndarray:
+    def _render_binary(self, grid_data: np.ndarray, bbox_x:bool, hide_zeros: bool = False) -> np.ndarray:
         # grid_data = decode_raw(hex_data)
         # if grid_data is None:
         #     logger.error("Failed to render: could not decode hex_data.")
@@ -126,11 +125,16 @@ class Visualizer:
         scale = self._scale
         target_size = (int(base_w * scale), int(base_h * scale))
         image_resized = image.resize(target_size, resample=Image.BICUBIC)
+        final_image = cv2.cvtColor(np.array(image_resized), cv2.COLOR_RGB2BGR)
+        if bbox_x:
+            final_image = self._render_bbox(grid_data, final_image)
 
-        return cv2.cvtColor(np.array(image_resized), cv2.COLOR_RGB2BGR)
+        return final_image
 
-    def _render_bbox(self, grid_data: np.ndarray) -> np.ndarray:
-        img = self._render_pixel(grid_data)
+    # def _render_bbox(self, grid_data: np.ndarray) -> np.ndarray:
+    def _render_bbox(self, grid_data: np.ndarray, img:np.ndarray) -> np.ndarray:
+        # img = self._render_pixel(grid_data)
+        # log.debug(f"image type -> {type(img)}")
         rows, cols = grid_data.shape
         h, w = img.shape[:2]
         cell_w = w / cols
@@ -169,36 +173,36 @@ class Visualizer:
         return img
 
 
-    def _render_contour(self, grid_data: np.ndarray) -> np.ndarray:
-        img = self._render_pixel(grid_data)
+    def _render_contour(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
+        img = self._render_pixel(grid_data, False)
         mask = (grid_data > 0).astype(np.uint8) * 255
         h, w = img.shape[:2]
         mask_resized = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
         contours, _ = cv2.findContours(mask_resized, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         cv2.drawContours(img, contours, -1, (0,0,255), 2)
+        if bbox:
+            img = self._render_bbox(grid_data, img)
         return img
 
-    def render(self, grid_data: np.ndarray, mode: str) -> Union[np.ndarray, bytes, list]:
+    def render(self, grid_data: np.ndarray, mode: str, bbox: bool) -> Union[np.ndarray, bytes, list]:
         if mode == VisualOptions.PIXEL:
-            return self._render_pixel(grid_data)
+            return self._render_pixel(grid_data, bbox)
         elif mode == VisualOptions.BLUR:
-            return self._render_with_transparency(grid_data)
+            return self._render_with_transparency(grid_data, bbox)
         elif mode == VisualOptions.BINARY:
-            return self._render_binary(grid_data)
+            return self._render_binary(grid_data, bbox)
         elif mode == VisualOptions.BINARY_NONZERO:
-            return self._render_binary(grid_data, hide_zeros=True)
-        elif mode == VisualOptions.BBOX:
-            return self._render_bbox(grid_data)
+            return self._render_binary(grid_data, bbox, hide_zeros=True)
         elif mode == VisualOptions.CONTOUR:
-            return self._render_contour(grid_data)
+            return self._render_contour(grid_data, bbox)
         elif mode == VisualOptions.ALL:
             return [
-                self._render_pixel(grid_data),
-                self._render_with_transparency(grid_data),
-                self._render_binary(grid_data),
-                self._render_binary(grid_data, hide_zeros=True),
-                self._render_bbox(grid_data),
-                self._render_contour(grid_data)
+                self._render_pixel(grid_data, bbox),
+                self._render_with_transparency(grid_data, bbox),
+                self._render_binary(grid_data, bbox),
+                self._render_binary(grid_data, bbox, hide_zeros=True),
+                self._render_bbox(grid_data, bbox),
+                self._render_contour(grid_data, bbox)
             ]
         else:
             raise ValueError(f"Unsupported rendering mode: {mode}")
