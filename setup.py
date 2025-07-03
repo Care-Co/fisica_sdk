@@ -29,14 +29,6 @@ setup(
         'PyQt5>=5.15',
         'bleak>=0.22.3'
     ],
-    extras_require={
-        "dev": [
-            "pytest>=6.0",
-            "black",
-            "flake8",
-            "mypy",
-        ],
-    },
     python_requires='>=3.8',
     keywords='foot pressure analysis medical sensor visualization',
     license='MIT',  # classifiers와 일치
