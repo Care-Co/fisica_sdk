@@ -12,6 +12,8 @@ import errno
 class BluetoothHandler:
     def __init__(self, device_address):
         self.device_address = device_address
+        self.desired_mtu = 517  # 사전 정의된 MTU 값
+        self.negotiated_mtu = 23  # 기본 MTU 값, 새로 추가
         self.client = None
         self.listen_thread = None
         self._listening = False
@@ -89,6 +91,9 @@ class BluetoothHandler:
                         result = await self._start_notify_async(callback)
                     elif command == "stop_notify":
                         result = await self._stop_notify_async()
+                    elif command == "negotiate_mtu":  # 새로 추가
+                        mtu = args[0] if args else self.desired_mtu
+                        result = await self._negotiate_mtu_async(mtu)
                     else:
                         result = False
 
@@ -101,7 +106,7 @@ class BluetoothHandler:
                 log.error(f"Command processor error: {e}")
                 await asyncio.sleep(0.1)
 
-    def _execute_command(self, command, *args, timeout=20.0):  # 타임아웃 더 증가
+    def _execute_command(self, command, *args, timeout=20.0):
         """명령을 이벤트 루프에서 실행하고 결과 반환"""
         if not self._loop or not self._loop_thread.is_alive():
             log.error("Event loop not running")
@@ -116,6 +121,122 @@ class BluetoothHandler:
             return result
         except queue.Empty:
             log.error(f"Command {command} timeout after {timeout}s")
+            return False
+
+    async def _negotiate_mtu_async(self, mtu_size):
+        """MTU 협상 비동기 함수 - 플랫폼별 구현"""
+        try:
+            if not self.client or not self.client.is_connected:
+                log.error("Client not connected for MTU negotiation")
+                return False
+
+            log.debug(f"Attempting MTU negotiation for {mtu_size} bytes")
+
+            # 플랫폼별 MTU 처리
+            backend_name = self.client._backend.__class__.__name__
+            log.debug(f"Backend: {backend_name}")
+
+            if backend_name == "BleakClientBlueZDBus":
+                # Linux BlueZ 백엔드의 경우 - _acquire_mtu 사용
+                try:
+                    await self.client._backend._acquire_mtu()
+                    self.negotiated_mtu = self.client.mtu_size
+                    log.info(f"BlueZ MTU acquired: {self.negotiated_mtu} bytes")
+                except Exception as e:
+                    log.warning(f"BlueZ _acquire_mtu failed: {e}")
+                    # 수동으로 MTU 설정 시도
+                    self.client._backend._mtu_size = mtu_size
+                    self.negotiated_mtu = mtu_size
+                    log.info(f"BlueZ MTU manually set to: {self.negotiated_mtu} bytes")
+
+            elif backend_name in ["BleakClientWinRT", "BleakClientCoreBluetooth"]:
+                # Windows 또는 macOS의 경우 - 수동 MTU 설정 시도
+                try:
+                    # 먼저 OS의 자동 협상 MTU 확인
+                    current_mtu = self.client.mtu_size
+                    log.debug(f"Current OS negotiated MTU: {current_mtu} bytes")
+
+                    # 원하는 MTU가 현재 MTU와 다르면 수동 설정 시도
+                    if current_mtu != mtu_size:
+                        log.info(f"Attempting manual MTU override from {current_mtu} to {mtu_size}")
+
+                        # Windows WinRT 백엔드의 경우
+                        if backend_name == "BleakClientWinRT":
+                            # WinRT 백엔드에서 MTU 수동 설정
+                            if hasattr(self.client._backend, '_mtu_size'):
+                                self.client._backend._mtu_size = mtu_size
+                                log.info(f"WinRT MTU manually set to: {mtu_size} bytes")
+                            elif hasattr(self.client._backend, 'mtu_size'):
+                                self.client._backend.mtu_size = mtu_size
+                                log.info(f"WinRT MTU property set to: {mtu_size} bytes")
+                            else:
+                                log.warning("WinRT backend MTU property not found, using internal override")
+
+                        # macOS CoreBluetooth 백엔드의 경우
+                        elif backend_name == "BleakClientCoreBluetooth":
+                            # CoreBluetooth 백엔드에서 MTU 수동 설정
+                            if hasattr(self.client._backend, '_mtu_size'):
+                                self.client._backend._mtu_size = mtu_size
+                                log.info(f"CoreBluetooth MTU manually set to: {mtu_size} bytes")
+                            elif hasattr(self.client._backend, 'mtu_size'):
+                                self.client._backend.mtu_size = mtu_size
+                                log.info(f"CoreBluetooth MTU property set to: {mtu_size} bytes")
+                            else:
+                                log.warning("CoreBluetooth backend MTU property not found, using internal override")
+
+                        # 수동 설정 후 MTU 확인
+                        try:
+                            updated_mtu = self.client.mtu_size
+                            if updated_mtu == mtu_size:
+                                self.negotiated_mtu = mtu_size
+                                log.info(f"MTU successfully updated to: {mtu_size} bytes")
+                            else:
+                                log.warning(f"MTU update failed, using fallback: {mtu_size} bytes")
+                                self.negotiated_mtu = mtu_size  # 강제 설정
+                        except Exception as e:
+                            log.warning(f"MTU verification failed: {e}, using fallback")
+                            self.negotiated_mtu = mtu_size  # 강제 설정
+                    else:
+                        # 이미 원하는 MTU와 같은 경우
+                        self.negotiated_mtu = current_mtu
+                        log.info(f"MTU already at desired value: {self.negotiated_mtu} bytes")
+
+                except Exception as e:
+                    log.warning(f"Failed to get/set MTU on {backend_name}: {e}")
+                    # 실패 시 강제로 원하는 MTU 설정
+                    self.negotiated_mtu = mtu_size
+                    log.info(f"Fallback MTU set to: {mtu_size} bytes")
+            else:
+                log.warning(f"Unknown backend {backend_name}, using manual MTU")
+                self.negotiated_mtu = mtu_size
+
+            # 특성별 최대 쓰기 크기 확인
+            if hasattr(self, 'selected_char') and self.selected_char:
+                try:
+                    max_write_size = self.selected_char.max_write_without_response_size
+                    log.debug(f"Characteristic max write without response: {max_write_size} bytes")
+
+                    # 실제 사용 가능한 MTU는 특성의 제한과 협상된 MTU 중 작은 값
+                    if max_write_size > 0:
+                        original_mtu = self.negotiated_mtu
+                        self.negotiated_mtu = min(self.negotiated_mtu, max_write_size + 3)  # ATT 헤더 추가
+
+                        if self.negotiated_mtu != original_mtu:
+                            log.warning(f"MTU limited by characteristic: {original_mtu} -> {self.negotiated_mtu} bytes")
+                        else:
+                            log.info(f"MTU within characteristic limits: {self.negotiated_mtu} bytes")
+                except Exception as e:
+                    log.debug(f"Could not get characteristic write size: {e}")
+
+            log.info(f"Final negotiated MTU: {self.negotiated_mtu} bytes")
+            log.info(f"Maximum data payload: {self.negotiated_mtu - 3} bytes")
+
+            return True
+
+        except Exception as e:
+            log.warning(f"MTU negotiation failed: {e}")
+            log.info(f"Using fallback MTU: {mtu_size} bytes")
+            self.negotiated_mtu = mtu_size  # 실패해도 원하는 MTU로 설정
             return False
 
     async def _connect_async(self):
@@ -146,6 +267,10 @@ class BluetoothHandler:
                 self._connected = True
                 log.debug(f"Bluetooth connected to {self.device_address}")
 
+                # MTU 정보 확인 및 설정 - connect() 호출 시 플랫폼별 MTU 처리
+                log.debug("Attempting MTU negotiation and acquisition...")
+                await self._negotiate_mtu_async(self.desired_mtu)
+
                 # 연결 후 특성 발견
                 success = await self._discover_characteristics()
                 if not success:
@@ -173,6 +298,7 @@ class BluetoothHandler:
             if self.client and self.client.is_connected:
                 await self.client.disconnect()
             self._connected = False
+            self.negotiated_mtu = 23  # MTU 초기화 - 새로 추가
             self.char_uuid = None
             self.char_handle = None
             self.selected_char = None
@@ -199,7 +325,7 @@ class BluetoothHandler:
                 return b''
 
     async def _send_async(self, data):
-        """비동기 데이터 전송 (handle 우선 사용)"""
+        """비동기 데이터 전송 (MTU 크기 고려) - 수정됨"""
         try:
             if not self.client or not self.client.is_connected:
                 log.error("Client not connected for sending data")
@@ -211,19 +337,47 @@ class BluetoothHandler:
                 log.error("Empty data after conversion")
                 return False
 
-            # handle이 있으면 handle 사용, 없으면 UUID 사용
-            if self.char_handle is not None:
-                log.debug(f"Sending BLE data via handle {self.char_handle}: {cmd_bytes.hex()}")
-                await self.client.write_gatt_char(self.char_handle, cmd_bytes)
-            elif self.char_uuid is not None:
-                log.debug(f"Sending BLE data via UUID {self.char_uuid}: {cmd_bytes.hex()}")
-                await self.client.write_gatt_char(self.char_uuid, cmd_bytes)
-            else:
-                log.error("No characteristic handle or UUID available")
-                return False
+            # MTU 크기 체크 및 분할 전송
+            max_data_size = self.negotiated_mtu - 3  # ATT 헤더 3바이트 제외
 
-            log.debug("BLE data sent successfully")
-            return True
+            if len(cmd_bytes) > max_data_size:
+                log.warning(f"Data size ({len(cmd_bytes)}) exceeds MTU payload ({max_data_size})")
+                log.info("Splitting data into multiple packets...")
+
+                # 데이터 분할 전송
+                for i in range(0, len(cmd_bytes), max_data_size):
+                    chunk = cmd_bytes[i:i + max_data_size]
+
+                    # handle이 있으면 handle 사용, 없으면 UUID 사용
+                    if self.char_handle is not None:
+                        log.debug(f"Sending chunk {i//max_data_size + 1} via handle {self.char_handle}: {chunk.hex()}")
+                        await self.client.write_gatt_char(self.char_handle, chunk)
+                    elif self.char_uuid is not None:
+                        log.debug(f"Sending chunk {i//max_data_size + 1} via UUID {self.char_uuid}: {chunk.hex()}")
+                        await self.client.write_gatt_char(self.char_uuid, chunk)
+                    else:
+                        log.error("No characteristic handle or UUID available")
+                        return False
+
+                    # 청크 간 짧은 대기
+                    await asyncio.sleep(0.01)
+
+                log.debug("All data chunks sent successfully")
+                return True
+            else:
+                # 단일 패킷 전송
+                if self.char_handle is not None:
+                    log.debug(f"Sending BLE data via handle {self.char_handle}: {cmd_bytes.hex()}")
+                    await self.client.write_gatt_char(self.char_handle, cmd_bytes)
+                elif self.char_uuid is not None:
+                    log.debug(f"Sending BLE data via UUID {self.char_uuid}: {cmd_bytes.hex()}")
+                    await self.client.write_gatt_char(self.char_uuid, cmd_bytes)
+                else:
+                    log.error("No characteristic handle or UUID available")
+                    return False
+
+                log.debug("BLE data sent successfully")
+                return True
 
         except Exception as e:
             log.error(f"Bluetooth write error: {e}")
@@ -374,14 +528,39 @@ class BluetoothHandler:
         pass
 
     def connect(self):
-        """동기식 연결"""
+        """동기식 연결 - 500 MTU로 자동 협상"""
         log.debug(f"Starting connection to {self.device_address}")
-        result = self._execute_command("connect", timeout=30.0)  # 더 긴 타임아웃
+        log.debug(f"Will negotiate MTU to {self.desired_mtu} bytes during connection")
+        result = self._execute_command("connect", timeout=30.0)
         if result:
             log.info("Bluetooth connection successful")
+            log.debug(f"Final MTU: {self.negotiated_mtu} bytes (max payload: {self.negotiated_mtu - 3} bytes)")
         else:
             log.error("Bluetooth connection failed")
         return result
+
+    def negotiate_mtu(self, mtu_size=None):
+        """MTU 협상 (동기식) - 새로 추가"""
+        if mtu_size is None:
+            mtu_size = self.desired_mtu
+
+        log.debug(f"Requesting MTU negotiation: {mtu_size} bytes")
+        result = self._execute_command("negotiate_mtu", mtu_size, timeout=10.0)
+
+        if result:
+            log.debug(f"MTU negotiation successful: {self.negotiated_mtu} bytes")
+        else:
+            log.warning("MTU negotiation failed, using current MTU")
+
+        return result
+
+    def get_mtu_info(self):
+        """MTU 정보 반환 - 새로 추가"""
+        return {
+            'desired_mtu': self.desired_mtu,
+            'negotiated_mtu': self.negotiated_mtu,
+            'max_payload': self.negotiated_mtu - 3  # ATT 헤더 제외
+        }
 
     def send(self, data):
         """데이터 전송 (타입 변환 포함)"""
