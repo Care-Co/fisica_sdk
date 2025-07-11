@@ -23,7 +23,6 @@ class VisualOptions:
             - CONTOUR: Contour outline of foot shape
             - ALL: Return all in a list.
     """
-    # - BBOX: Bounding box based on PCA
 
     ALL    = 'ALL'
     PIXEL  = 'PIXEL'

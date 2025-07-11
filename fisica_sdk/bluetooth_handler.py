@@ -315,7 +315,7 @@ class BluetoothHandler:
                 props = char_info['properties']
                 if 'write' in props and 'notify' in props:
                     selected_char_info = char_info
-                    log.info(f"Selected known UUID with write+notify: {char_info['uuid']}")
+                    log.debug(f"Selected known UUID with write+notify: {char_info['uuid']}")
                     break
 
             # 2. 알려진 UUID 중에서 write 가능한 것 선택
@@ -323,13 +323,13 @@ class BluetoothHandler:
                 for char_info in target_uuid_chars:
                     if 'write' in char_info['properties']:
                         selected_char_info = char_info
-                        log.info(f"Selected known UUID with write: {char_info['uuid']}")
+                        log.debug(f"Selected known UUID with write: {char_info['uuid']}")
                         break
 
             # 3. 알려진 UUID 중 첫 번째 선택
             if selected_char_info is None and target_uuid_chars:
                 selected_char_info = target_uuid_chars[0]
-                log.info(f"Selected first known UUID: {selected_char_info['uuid']}")
+                log.debug(f"Selected first known UUID: {selected_char_info['uuid']}")
 
             # 4. 모든 특성 중에서 write+notify 가능한 것 선택
             if selected_char_info is None:
@@ -354,10 +354,10 @@ class BluetoothHandler:
                 self.char_uuid = selected_char_info['uuid']
                 self.char_handle = selected_char_info['handle']
 
-                log.info(f"Characteristic selected - UUID: {self.char_uuid}, Handle: {self.char_handle}")
+                log.debug(f"Characteristic selected - UUID: {self.char_uuid}, Handle: {self.char_handle}")
                 return True
             else:
-                log.error("No suitable characteristics found")
+                log.error("No suitable bluetooth characteristics found")
                 return False
 
         except Exception as e:

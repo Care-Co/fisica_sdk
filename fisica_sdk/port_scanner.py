@@ -51,7 +51,7 @@ def find_bluetooth_com_ports(timeout=15.0, max_devices=5) -> List[Dict]:
                         fisica_devices[device.address] = {
                             'id': device.address,
                             'name': device_name,
-                            'type': 'bluetooth',
+                            'type': 'Bluetooth',
                             'address': device.address,
                             'rssi': advertisement_data.rssi
                         }
@@ -117,8 +117,8 @@ def find_all_com_ports(timeout=15.0, max_bt_devices=5, prioritize_signal=True) -
         for i, port in enumerate(serial_ports):
             all_devices.append({
                 'id': port,
-                'name': f'Fisica Scale (Serial)',
-                'type': 'serial',
+                'name': f'Fisica Scale',
+                'type': 'Serial',
                 'port': port,
                 'priority': 1000 + i  # 시리얼은 높은 우선순위
             })
@@ -151,8 +151,8 @@ def find_all_com_ports(timeout=15.0, max_bt_devices=5, prioritize_signal=True) -
 
     log.info(f"Total device count : {len(all_devices)}")
     for i, device in enumerate(all_devices):
-        device_info = f"{i+1}. {device['name']} ({device.get('address', device.get('port', 'N/A'))})"
-        if device['type'] == 'bluetooth':
+        device_info = f"{i+1}. {device['name']} ({device.get('type', device.get('port', 'N/A'))})"
+        if device['type'] == 'Bluetooth':
             device_info += f" - RSSI: {device.get('rssi', 'N/A')} dBm"
         log.info(device_info)
 

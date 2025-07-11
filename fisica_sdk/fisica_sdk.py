@@ -29,6 +29,8 @@ class FisicaSDK:
         - on_data(callback: Callable): Register a callback function to receive real-time frame data.
         - sleep(seconds: float, after: Optional[Callable]): Non-blocking delay with optional callback after delay.
         - wait(): Wait until all internal states (starting, stopping, working, sleeping, disconnecting) are cleared.
+        - set_zero(): Calibrate the zero point of the device.
+        - set_scale(value): Adjust the weight calibration of the device.
         - analyze(): Analyze collected session frames and generate a session report.
         - get_session_frames(): Retrieve serialized raw frames from the current session.
         - get_report(): Retrieve the most recent analysis report.
@@ -222,7 +224,7 @@ class FisicaSDK:
                 raise TypeError("Device must be a dictionary returned from scan_devices().")
 
             # device_id = device.get("id")
-            log.info(f"Attempting to connect to device: {device}")
+            log.info(f"Attempting to connect to Fisica Scale ({device.get('type')}) device..")
 
             if not hasattr(self, '_available_devices') or not self._available_devices:
                 raise RuntimeError("No devices scanned. Call scan_devices() first.")
@@ -237,9 +239,8 @@ class FisicaSDK:
                 "\nFisica SDK\n"
                 "   It seems that no device was found, the connection was lost, or an invalid parameter was provided.\n"
                 "   Please make sure to call `scan_devices()` before using this method.\n"
-                "   For usage examples, call `print(FisicaSDK.__doc__)`\n"
                 "   To learn how to retrieve the list of devices, call `print(FisicaSDK.scan_devices.__doc__)`\n"
-                "   To learn how to connect after retrieving devices, refer to the example in `print(FisicaSDK.__doc__)`\n"
+                "   To learn how to connect after retrieving devices, refer to general information in `print(FisicaSDK.__doc__)`\n"
                 "   or call `print(FisicaSDK.connect.__doc__)`\n"
             )
             raise e
@@ -425,14 +426,14 @@ class FisicaSDK:
         Calibrates the zero point of the device.
 
         This function sets the current reading as the zero reference point for
-        weight measurements. This is typically used to tare the scale or establish
-        a baseline when the scale platform is empty.
+        weight measurements. This is typically used to establish a baseline
+        when the scale platform is empty for accurate weight calibration.
 
         Notes:
             - Device connection is required before calling this method
             - Call connect() first to establish device connection
             - Use this function when the scale platform is empty to set proper zero point
-            - This is equivalent to the "tare" function on digital scales
+            - This calibrates the fundamental zero reference point of the sensor
         """
         if self._receiver:
             self._receiver.zeroset()
@@ -452,10 +453,11 @@ class FisicaSDK:
         errors in weight readings. The device must be connected via connect()
         before using this function.
 
-        Args:
+        Parameters:
             value: Scale calibration value to adjust weight measurement accuracy
 
         Notes:
+            - The value must be within the range -32768 to 32767
             - Device connection is required before calling this method
             - Use this to fine-tune weight measurement precision
             - Call connect() first to establish device connection
@@ -598,26 +600,23 @@ class FisicaSDK:
 
     def render(self, frame: Optional[MeasurementFrame] = None, grid_data: Optional[np.ndarray] = None, mode: str = "BLUR", scale: float = 1.0, bbox: bool = False):
         """
-    Fisica SDK : render
+    Fisica SDK: render
         Parameters:
-            :param bbox:
-
-            :param frame:
-            MeasurementFrame (dataclass): This dataclass is used when measurement data is received through the on_data callback function.
+            frame (MeasurementFrame): This dataclass is used when measurement data is received through the on_data callback function.
                                           If you are calling the render function directly, please provide grid_data instead.
                                           When calling render from within the on_data callback, you can pass the data argument directly.
                                           For more details, refer to the example below.
 
-            :param grid_data:
-            grid_data (str): Hexadecimal string from the sensor (645 bytes). > deprecated. fixme::
+            grid_data (str): Hexadecimal string from the sensor (645 bytes). > deprecated
 
-            :param mode:
-            mode (str): Visualization mode. You can import VisualOptions and use
-            `print(VisualOptions.__doc__)` to see the available options.
+            mode (str): Visualization mode for rendering the sensor data.
+                       Available options: 'ALL', 'PIXEL', 'BLUR', 'BINARY', 'BINARY_NONZERO', 'CONTOUR'.
+                       Default is 'BLUR'. You can also import VisualOptions for these constants.
 
-            :param scale:
             scale (float): Scaling factor for the output image. The default resolution is 456x512 pixels,
                            and the image will be scaled up proportionally.
+
+            bbox (bool): When set to True, bounding boxes will be drawn on the rendered image.
 
         Returns:
             np.ndarray: It returns image data as a NumPy array.
@@ -628,6 +627,7 @@ class FisicaSDK:
             you can use the built-in visualize function provided by the Fisica SDK.
             Refer to realtime_monitoring.py in the examples directory.
         """
+
         if frame is None and grid_data is None:
             log.error(
                 "\nFisica SDK\n"

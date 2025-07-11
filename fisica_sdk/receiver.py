@@ -101,7 +101,7 @@ class Receiver:
         self.heartbeat = False
 
     def conn(self):
-        if self._device.get('type') == "serial":
+        if self._device.get('type') == "Serial":
             self._uart = SerialUART(self._device_id, baudrate=115200)
             self._uart.connect()
             if not self._handler:
@@ -112,7 +112,7 @@ class Receiver:
                 log.info("Measurement will be continued.")
             self._notice_recovery = True
 
-        if self._device.get('type') == "bluetooth":
+        if self._device.get('type') == "Bluetooth":
             if not self._handler:
                 self._handler = BluetoothHandler(self._device_id)
             self._handler.connect()
