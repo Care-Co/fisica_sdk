@@ -26,7 +26,6 @@ class ATCommands:
     _RET_SUCCESS = 0x01  # 성공
 
     # === HEADER 정의 (문서 참조) ===
-
     # 체중 관련 (0x10~0x18)
     _HEADER_WEIGHT_SCALE = 0x10      # 체중 스케일
     _HEADER_WEIGHT_ZERO = 0x11       # 체중 영점 설정

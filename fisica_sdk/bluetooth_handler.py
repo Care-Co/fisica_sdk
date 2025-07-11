@@ -1,13 +1,13 @@
+from .device import ATCommands
+from .parser import DataParser
+from .utils import log
+import errno
+
 import threading
 import time
 import queue
 import asyncio
 from bleak import BleakClient
-
-from .device import ATCommands
-from .parser import DataParser
-from .utils import log
-import errno
 
 class BluetoothHandler:
     def __init__(self, device_address):
@@ -204,11 +204,11 @@ class BluetoothHandler:
                 except Exception as e:
                     log.warning(f"Failed to get/set MTU on {backend_name}: {e}")
                     # 실패 시 강제로 원하는 MTU 설정
-                    self.negotiated_mtu = mtu_size
-                    log.info(f"Fallback MTU set to: {mtu_size} bytes")
+                    self.negotiated_mtu = self.client.mtu_size
+                    log.info(f"Fallback MTU set to: {self.negotiated_mtu} bytes")
             else:
                 log.warning(f"Unknown backend {backend_name}, using manual MTU")
-                self.negotiated_mtu = mtu_size
+                self.negotiated_mtu = self.client.mtu_size
 
             # 특성별 최대 쓰기 크기 확인
             if hasattr(self, 'selected_char') and self.selected_char:
@@ -235,8 +235,8 @@ class BluetoothHandler:
 
         except Exception as e:
             log.warning(f"MTU negotiation failed: {e}")
-            log.info(f"Using fallback MTU: {mtu_size} bytes")
-            self.negotiated_mtu = mtu_size  # 실패해도 원하는 MTU로 설정
+            log.info(f"Using fallback MTU: {self.client.mtu_size} bytes")
+            self.negotiated_mtu = self.client.mtu_size  # 실패해도 원하는 MTU로 설정
             return False
 
     async def _connect_async(self):
@@ -648,7 +648,7 @@ class BluetoothHandler:
                     else:
                         log.critical(f"[Unexpected Exception] {e}")
                     self._listening = False
-                time.sleep(0.5)
+                time.sleep(0.01)
             log.debug("listen_loop stopped.")
             self.listen_thread = None
         except Exception as e:
