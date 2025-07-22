@@ -26,7 +26,7 @@ class ImageUpdater(QObject):
 class ImageWindow(QMainWindow):
     def __init__(self, width, height):
         super().__init__()
-        self.setWindowTitle("Image Viewer")
+        self.setWindowTitle("Fisica Scale")
         self.label = QLabel(self)
         self.setCentralWidget(self.label)
         self.resize(width, height)
