@@ -406,6 +406,10 @@ class BluetoothHandler:
             log.debug("Thread `listen_loop` is running.")
             return
 
+        # 종료된 스레드 정리
+        if self.listen_thread and not self.listen_thread.is_alive():
+            self.listen_thread = None
+
         if not self._connected:
             log.error("Cannot start listening: not connected")
             return
@@ -444,6 +448,11 @@ class BluetoothHandler:
         self._execute_command("stop_notify")
 
     def start_measurement(self):
+        # 리스닝이 중지된 상태라면 다시 시작
+        if not self._listening or not (self.listen_thread and self.listen_thread.is_alive()):
+            log.debug("Restarting listening for new measurement...")
+            self.start_listening()
+        
         if self._listening:
             log.debug("Sending initial AT commands...")
             self.send(ATCommands.SET_DEVICE_BLE)
@@ -470,12 +479,13 @@ class BluetoothHandler:
                         log.critical(f"[Unexpected Exception] {e}")
                     self._listening = False
                 time.sleep(0.5)
-            log.debug("listen_loop stopped.")
-            self.listen_thread = None
+            # log.debug("listen_loop stopped.")
+            # self.listen_thread = None
         except Exception as e:
             log.critical(f"listen_loop exception: {e}")
-            self.listen_thread = None
             raise RuntimeError
+        finally:
+            self.listen_thread = None
 
     def close(self):
         """연결 해제"""

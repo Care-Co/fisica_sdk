@@ -52,6 +52,7 @@ class Receiver:
         self._stop_event.set()
         if self._thread:
             self._thread.join()
+        self._notice_recovery = False
         log.debug("Receiver stopped.")
 
     def _read_loop(self):
@@ -123,6 +124,8 @@ class Receiver:
         if self._uart:
             self._uart.close()
             self._uart = None
+        if self._handler:
+            self._handler = None
         log.debug("Scale disconnected.")
 
     def zeroset(self):

@@ -31,11 +31,22 @@ class SerialHandler:
             log.debug("Thread `listen_loop` is running.")
             return
 
+        # 종료된 스레드 정리
+        if self.listen_thread and not self.listen_thread.is_alive():
+            self.listen_thread = None
+
         log.debug("Thread running.")
         self.listen_thread = threading.Thread(target=self.listen_loop, daemon=True)
         self.listen_thread.start()
 
+        self._listening = True
+
     def start_measurement(self):
+
+        if not self._listening or not (self.listen_thread and self.listen_thread.is_alive()):
+            log.debug("Restarting listening for new measurement...")
+            self.start_listening()
+
         if self._listening:
             self.send(ATCommands.SET_DEVICE_BLE)
             self.send(ATCommands.START_CONTINUOUS_MEASUREMENT)
@@ -76,14 +87,15 @@ class SerialHandler:
                         )
                     else:
                         log.critical(f"[Unexpected Exception] {e}")
-                    self._listening = False
                 time.sleep(0.01)
-            log.debug("listen_loop stopped.")
-            self.listen_thread = None
+            # log.debug("listen_loop stopped.")
+            # self.listen_thread = None
         except Exception as e:
             log.critical(f"listen_loop exception: {e}")
-            self.listen_thread = None
             raise RuntimeError
+        finally:
+            self.listen_thread = None
+            self._listening = False
 
     def _process_text_messages_if_needed(self):
         """ESP32 부트 메시지 등 특별한 경우에만 처리"""
