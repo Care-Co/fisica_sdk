@@ -7,10 +7,10 @@ from .gui_viewer import update_gui
 from .utils import log
 
 
-def render(grid_data: np.ndarray, mode: str = 'BLUR', bbox: bool = False, scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
+def render(grid_data: np.ndarray, mode: str = 'BLUR', bbox: bool = False, scale: float = 1.0, debug: bool = True) -> Union[np.ndarray, bytes, list]:
     vis = Visualizer()
     vis.scale(scale)
-    return vis.render(grid_data, mode, bbox)
+    return vis.render(grid_data, mode, bbox, debug)
 
 class VisualOptions:
     """
@@ -38,7 +38,7 @@ class Visualizer:
     def scale(self, factor: float):
         self._scale = factor
 
-    def _render_with_transparency(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
+    def _render_with_transparency(self, grid_data: np.ndarray, bbox: bool, debug: bool = True) -> np.ndarray:
 
         grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         heatmap = cv2.resize(grid_norm, (456, 512), interpolation=cv2.INTER_LINEAR)
@@ -61,10 +61,13 @@ class Visualizer:
         if bbox:
             rgba_resized = self._render_bbox(grid_data, rgba_resized)
 
+        if debug:
+            rgba_resized = self._find_and_draw_farthest_points(grid_data, rgba_resized)
+
         return rgba_resized
 
 
-    def _render_pixel(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
+    def _render_pixel(self, grid_data: np.ndarray, bbox: bool, debug: bool = True) -> np.ndarray:
         try:
             grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         except Exception as e:
@@ -82,9 +85,12 @@ class Visualizer:
         if bbox:
             self._render_bbox(grid_data, img_resized)
 
+        if debug:
+            img_resized = self._find_and_draw_farthest_points(grid_data, img_resized)
+
         return img_resized
 
-    def _render_binary(self, grid_data: np.ndarray, bbox_x:bool, hide_zeros: bool = False) -> np.ndarray:
+    def _render_binary(self, grid_data: np.ndarray, bbox_x:bool, hide_zeros: bool = False, debug: bool = True) -> np.ndarray:
         # grid_data = decode_raw(hex_data)
         # if grid_data is None:
         #     logger.error("Failed to render: could not decode hex_data.")
@@ -128,12 +134,15 @@ class Visualizer:
         if bbox_x:
             final_image = self._render_bbox(grid_data, final_image)
 
+        if debug:
+            final_image = self._find_and_draw_farthest_points(grid_data, final_image)
+
         return final_image
 
     # def _render_bbox(self, grid_data: np.ndarray) -> np.ndarray:
     def _render_bbox(self, grid_data: np.ndarray, img:np.ndarray) -> np.ndarray:
         # img = self._render_pixel(grid_data)
-        # log.debug(f"image type -> {type(img)}")
+        # log.debug(f"image type -> {type(img})")
         rows, cols = grid_data.shape
         h, w = img.shape[:2]
         cell_w = w / cols
@@ -171,8 +180,92 @@ class Visualizer:
 
         return img
 
+    def _find_and_draw_farthest_points(self, grid_data: np.ndarray, img: np.ndarray) -> np.ndarray:
+        from itertools import combinations
 
-    def _render_contour(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
+        def _find_points_for_subgrid(subgrid: np.ndarray, col_offset: int):
+            points = np.argwhere(subgrid > 0)
+            if len(points) < 2:
+                return
+
+            points[:, 1] += col_offset
+
+            # 1. Find the main axis from all points
+            max_dist_sq = -1
+            farthest_pair = (None, None)
+            for p1, p2 in combinations(points, 2):
+                dist_sq = np.sum((p1 - p2) ** 2)
+                if dist_sq > max_dist_sq:
+                    max_dist_sq = dist_sq
+                    farthest_pair = (tuple(p1), tuple(p2))
+
+            if farthest_pair[0] is None:
+                return
+
+            p1_grid, p2_grid = farthest_pair
+            main_axis_vector = np.array(p2_grid) - np.array(p1_grid)
+
+            # 2. Define a search area for the second axis to exclude the toes.
+            min_row = np.min(points[:, 0])
+            max_row = np.max(points[:, 0])
+            foot_length_rows = max_row - min_row
+            if foot_length_rows == 0: 
+                search_points = points
+            else:
+                row_threshold = min_row + foot_length_rows * 0.25
+                search_points = points[points[:, 0] > row_threshold]
+
+            if len(search_points) < 2:
+                search_points = points
+
+            # 3. Find the second axis within the search area
+            max_dist_sq_perp = -1
+            best_pair_perp = (None, None)
+
+            for pa, pb in combinations(search_points, 2):
+                perp_axis_vector = np.array(pb) - np.array(pa)
+                dot = main_axis_vector[1] * perp_axis_vector[1] + main_axis_vector[0] * perp_axis_vector[0]
+                det = main_axis_vector[1] * perp_axis_vector[0] - main_axis_vector[0] * perp_axis_vector[1]
+                angle_rad = np.arctan2(det, dot)
+                angle_deg = np.abs(np.rad2deg(angle_rad))
+
+                if 70 <= angle_deg <= 110:
+                    dist_sq = np.sum(perp_axis_vector ** 2)
+                    if dist_sq > max_dist_sq_perp:
+                        max_dist_sq_perp = dist_sq
+                        best_pair_perp = (tuple(pa), tuple(pb))
+
+            # 4. Draw the lines and points
+            h, w = img.shape[:2]
+            grid_rows, grid_cols = grid_data.shape
+            cell_w = w / grid_cols
+            cell_h = h / grid_rows
+
+            p1_img = (int((p1_grid[1] + 0.5) * cell_w), int((p1_grid[0] + 0.5) * cell_h))
+            p2_img = (int((p2_grid[1] + 0.5) * cell_w), int((p2_grid[0] + 0.5) * cell_h))
+            cv2.line(img, p1_img, p2_img, color=(255, 0, 255), thickness=2)
+            cv2.circle(img, p1_img, radius=5, color=(255, 0, 255), thickness=-1)
+            cv2.circle(img, p2_img, radius=5, color=(255, 0, 255), thickness=-1)
+
+            if best_pair_perp[0] is not None:
+                pa_grid, pb_grid = best_pair_perp
+                pa_img = (int((pa_grid[1] + 0.5) * cell_w), int((pa_grid[0] + 0.5) * cell_h))
+                pb_img = (int((pb_grid[1] + 0.5) * cell_w), int((pb_grid[0] + 0.5) * cell_h))
+                cv2.line(img, pa_img, pb_img, color=(0, 255, 255), thickness=2)
+                cv2.circle(img, pa_img, radius=5, color=(0, 255, 255), thickness=-1)
+                cv2.circle(img, pb_img, radius=5, color=(0, 255, 255), thickness=-1)
+
+        # --- Main body of _find_and_draw_farthest_points ---
+        rows, cols = grid_data.shape
+        mid = cols // 2
+
+        _find_points_for_subgrid(grid_data[:, :mid], 0)
+        _find_points_for_subgrid(grid_data[:, mid:], mid)
+
+        return img
+
+
+    def _render_contour(self, grid_data: np.ndarray, bbox: bool, debug: bool = True) -> np.ndarray:
         img = self._render_pixel(grid_data, False)
         mask = (grid_data > 0).astype(np.uint8) * 255
         h, w = img.shape[:2]
@@ -181,27 +274,34 @@ class Visualizer:
         cv2.drawContours(img, contours, -1, (0,0,255), 2)
         if bbox:
             img = self._render_bbox(grid_data, img)
+        
+        if debug:
+            img = self._find_and_draw_farthest_points(grid_data, img)
+            
         return img
 
-    def render(self, grid_data: np.ndarray, mode: str, bbox: bool) -> Union[np.ndarray, bytes, list]:
+    def render(self, grid_data: np.ndarray, mode: str, bbox: bool, debug: bool = True) -> Union[np.ndarray, bytes, list]:
         if mode == VisualOptions.PIXEL:
-            return self._render_pixel(grid_data, bbox)
+            return self._render_pixel(grid_data, bbox, debug)
         elif mode == VisualOptions.BLUR:
-            return self._render_with_transparency(grid_data, bbox)
+            return self._render_with_transparency(grid_data, bbox, debug)
         elif mode == VisualOptions.BINARY:
-            return self._render_binary(grid_data, bbox)
+            return self._render_binary(grid_data, bbox, debug=debug)
         elif mode == VisualOptions.BINARY_NONZERO:
-            return self._render_binary(grid_data, bbox, hide_zeros=True)
+            return self._render_binary(grid_data, bbox, hide_zeros=True, debug=debug)
         elif mode == VisualOptions.CONTOUR:
-            return self._render_contour(grid_data, bbox)
+            return self._render_contour(grid_data, bbox, debug)
         elif mode == VisualOptions.ALL:
+            # Note: The original _render_bbox call in 'ALL' mode was incorrect.
+            # It has been corrected to pass a rendered image.
+            pixel_img_for_bbox = self._render_pixel(grid_data, bbox=False, debug=debug)
             return [
-                self._render_pixel(grid_data, bbox),
-                self._render_with_transparency(grid_data, bbox),
-                self._render_binary(grid_data, bbox),
-                self._render_binary(grid_data, bbox, hide_zeros=True),
-                self._render_bbox(grid_data, bbox),
-                self._render_contour(grid_data, bbox)
+                self._render_pixel(grid_data, bbox, debug),
+                self._render_with_transparency(grid_data, bbox, debug),
+                self._render_binary(grid_data, bbox, debug=debug),
+                self._render_binary(grid_data, bbox, hide_zeros=True, debug=debug),
+                self._render_bbox(grid_data, pixel_img_for_bbox),
+                self._render_contour(grid_data, bbox, debug)
             ]
         else:
             raise ValueError(f"Unsupported rendering mode: {mode}")
