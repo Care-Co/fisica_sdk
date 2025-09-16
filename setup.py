@@ -5,8 +5,8 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name='fisica-sdk',
-    version='0.1.0',
+    name='fisica',
+    version='1.0.0',
     description='Care&Co Foot pressure analysis and visualization SDK',
     long_description=long_description,
     long_description_content_type="text/markdown",

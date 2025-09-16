@@ -17,7 +17,7 @@
 ### pip로 설치
 
 ```bash
-  pip install fisica-sdk
+  pip install fisica
 ```
 
 ### 소스코드에서 설치

@@ -1,0 +1,16 @@
+exclude .idea/*
+global-exclude .idea/*
+exclude *.iml
+global-exclude *.iml
+
+exclude .gitignore
+exclude .git/*
+global-exclude .git/*
+
+global-exclude *.pyc
+global-exclude __pycache__/*
+global-exclude .pytest_cache/*
+
+global-exclude .DS_Store
+exclude .env
+exclude .venv/*
