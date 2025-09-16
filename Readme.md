@@ -18,7 +18,7 @@ This SDK provides a Python interface to communicate with the Fisica scale device
 - Python 3.8 or higher
 - Operating System: Windows 10/11 or macOS 10.15+
 
-### ~~Install via pip~~ - Currently not supported!
+### Install via pip
 
 ```bash
   pip install fisica-sdk
@@ -189,7 +189,7 @@ The SDK provides comprehensive foot pressure analysis:
 modes = ["PIXEL", "BLUR", "BINARY", "BINARY_NONZERO", "BBOX", "CONTOUR"]
 
 for mode in modes:
-    image = sdk.render(frame, mode=mode, scale=2.0)
+    image = sdk.render(frame, mode=mode, bbox=False, scale=2.0)
     # Save or display image
 ```
 
@@ -418,22 +418,6 @@ if __name__ == '__main__':
 
 ## 🔧 Advanced Configuration
 
-### Custom Callback Functions
-
-```python
-def advanced_callback(frame):
-    """Advanced data processing"""
-    # Custom analysis
-    pressure_sum = frame.grid.sum()
-    max_pressure = frame.grid.max()
-    
-    # Log to file
-    with open("pressure_log.txt", "a") as f:
-        f.write(f"{frame.timestamp},{pressure_sum},{max_pressure}\n")
-
-sdk.on_data(advanced_callback)
-```
-
 ### Async Operations
 
 ```python
@@ -470,6 +454,7 @@ Enable debug logging:
 import logging
 
 sdk = fisica.FisicaSDK(debug=logging.DEBUG)
+# could be replaced logging.DEBUG to 10
 ```
 
 ## 📚 API Reference

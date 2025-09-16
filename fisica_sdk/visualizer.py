@@ -7,7 +7,7 @@ from .gui_viewer import update_gui
 from .utils import log
 
 
-def render(grid_data: np.ndarray, mode: str = 'BLUR', bbox: bool = False, scale: float = 1.0, debug: bool = True) -> Union[np.ndarray, bytes, list]:
+def render(grid_data: np.ndarray, mode: str = 'BLUR', bbox: bool = False, scale: float = 1.0, debug: bool = False) -> Union[np.ndarray, bytes, list]:
     vis = Visualizer()
     vis.scale(scale)
     return vis.render(grid_data, mode, bbox, debug)
@@ -38,7 +38,7 @@ class Visualizer:
     def scale(self, factor: float):
         self._scale = factor
 
-    def _render_with_transparency(self, grid_data: np.ndarray, bbox: bool, debug: bool = True) -> np.ndarray:
+    def _render_with_transparency(self, grid_data: np.ndarray, bbox: bool, debug: bool = False) -> np.ndarray:
 
         grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         heatmap = cv2.resize(grid_norm, (456, 512), interpolation=cv2.INTER_LINEAR)
@@ -67,7 +67,7 @@ class Visualizer:
         return rgba_resized
 
 
-    def _render_pixel(self, grid_data: np.ndarray, bbox: bool, debug: bool = True) -> np.ndarray:
+    def _render_pixel(self, grid_data: np.ndarray, bbox: bool, debug: bool = False) -> np.ndarray:
         try:
             grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         except Exception as e:
@@ -90,7 +90,7 @@ class Visualizer:
 
         return img_resized
 
-    def _render_binary(self, grid_data: np.ndarray, bbox_x:bool, hide_zeros: bool = False, debug: bool = True) -> np.ndarray:
+    def _render_binary(self, grid_data: np.ndarray, bbox_x:bool, hide_zeros: bool = False, debug: bool = False) -> np.ndarray:
         # grid_data = decode_raw(hex_data)
         # if grid_data is None:
         #     logger.error("Failed to render: could not decode hex_data.")
@@ -181,91 +181,66 @@ class Visualizer:
         return img
 
     def _find_and_draw_farthest_points(self, grid_data: np.ndarray, img: np.ndarray) -> np.ndarray:
-        from itertools import combinations
+        h, w = img.shape[:2]
+        grid_rows, grid_cols = grid_data.shape
+        cell_w = w / grid_cols
+        cell_h = h / grid_rows
 
-        def _find_points_for_subgrid(subgrid: np.ndarray, col_offset: int):
-            points = np.argwhere(subgrid > 0)
-            if len(points) < 2:
+        def _draw_pca_axes_for_subgrid(subgrid: np.ndarray, col_offset: int):
+            pts_idx = np.argwhere(subgrid > 0)
+            if pts_idx.shape[0] < 2:
                 return
 
-            points[:, 1] += col_offset
+            # Convert grid indices to image coordinates
+            pts = np.stack([
+                (pts_idx[:, 1] + col_offset + 0.5) * cell_w,
+                (pts_idx[:, 0] + 0.5) * cell_h
+            ], axis=1)
 
-            # 1. Find the main axis from all points
-            max_dist_sq = -1
-            farthest_pair = (None, None)
-            for p1, p2 in combinations(points, 2):
-                dist_sq = np.sum((p1 - p2) ** 2)
-                if dist_sq > max_dist_sq:
-                    max_dist_sq = dist_sq
-                    farthest_pair = (tuple(p1), tuple(p2))
+            # PCA calculation
+            center = pts.mean(axis=0)
+            cov = np.cov(pts, rowvar=False)
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            principal = eigvecs[:, eigvals.argmax()]
+            secondary = eigvecs[:, eigvals.argmin()]
 
-            if farthest_pair[0] is None:
-                return
+            # Project points onto axes
+            disp = pts - center
+            proj_pr = disp.dot(principal)
+            proj_sec = disp.dot(secondary)
 
-            p1_grid, p2_grid = farthest_pair
-            main_axis_vector = np.array(p2_grid) - np.array(p1_grid)
+            # Find endpoints for length (along principal axis)
+            p1_idx = np.argmin(proj_pr)
+            p2_idx = np.argmax(proj_pr)
+            p1 = pts[p1_idx].astype(int)
+            p2 = pts[p2_idx].astype(int)
 
-            # 2. Define a search area for the second axis to exclude the toes.
-            min_row = np.min(points[:, 0])
-            max_row = np.max(points[:, 0])
-            foot_length_rows = max_row - min_row
-            if foot_length_rows == 0: 
-                search_points = points
-            else:
-                row_threshold = min_row + foot_length_rows * 0.25
-                search_points = points[points[:, 0] > row_threshold]
+            # Find endpoints for breadth (along secondary axis)
+            pa_idx = np.argmin(proj_sec)
+            pb_idx = np.argmax(proj_sec)
+            pa = pts[pa_idx].astype(int)
+            pb = pts[pb_idx].astype(int)
 
-            if len(search_points) < 2:
-                search_points = points
+            # Draw lines and circles
+            cv2.line(img, tuple(p1), tuple(p2), color=(255, 0, 255), thickness=2)  # Length
+            cv2.circle(img, tuple(p1), radius=5, color=(255, 0, 255), thickness=-1)
+            cv2.circle(img, tuple(p2), radius=5, color=(255, 0, 255), thickness=-1)
 
-            # 3. Find the second axis within the search area
-            max_dist_sq_perp = -1
-            best_pair_perp = (None, None)
-
-            for pa, pb in combinations(search_points, 2):
-                perp_axis_vector = np.array(pb) - np.array(pa)
-                dot = main_axis_vector[1] * perp_axis_vector[1] + main_axis_vector[0] * perp_axis_vector[0]
-                det = main_axis_vector[1] * perp_axis_vector[0] - main_axis_vector[0] * perp_axis_vector[1]
-                angle_rad = np.arctan2(det, dot)
-                angle_deg = np.abs(np.rad2deg(angle_rad))
-
-                if 70 <= angle_deg <= 110:
-                    dist_sq = np.sum(perp_axis_vector ** 2)
-                    if dist_sq > max_dist_sq_perp:
-                        max_dist_sq_perp = dist_sq
-                        best_pair_perp = (tuple(pa), tuple(pb))
-
-            # 4. Draw the lines and points
-            h, w = img.shape[:2]
-            grid_rows, grid_cols = grid_data.shape
-            cell_w = w / grid_cols
-            cell_h = h / grid_rows
-
-            p1_img = (int((p1_grid[1] + 0.5) * cell_w), int((p1_grid[0] + 0.5) * cell_h))
-            p2_img = (int((p2_grid[1] + 0.5) * cell_w), int((p2_grid[0] + 0.5) * cell_h))
-            cv2.line(img, p1_img, p2_img, color=(255, 0, 255), thickness=2)
-            cv2.circle(img, p1_img, radius=5, color=(255, 0, 255), thickness=-1)
-            cv2.circle(img, p2_img, radius=5, color=(255, 0, 255), thickness=-1)
-
-            if best_pair_perp[0] is not None:
-                pa_grid, pb_grid = best_pair_perp
-                pa_img = (int((pa_grid[1] + 0.5) * cell_w), int((pa_grid[0] + 0.5) * cell_h))
-                pb_img = (int((pb_grid[1] + 0.5) * cell_w), int((pb_grid[0] + 0.5) * cell_h))
-                cv2.line(img, pa_img, pb_img, color=(0, 255, 255), thickness=2)
-                cv2.circle(img, pa_img, radius=5, color=(0, 255, 255), thickness=-1)
-                cv2.circle(img, pb_img, radius=5, color=(0, 255, 255), thickness=-1)
+            cv2.line(img, tuple(pa), tuple(pb), color=(0, 255, 255), thickness=2)  # Breadth
+            cv2.circle(img, tuple(pa), radius=5, color=(0, 255, 255), thickness=-1)
+            cv2.circle(img, tuple(pb), radius=5, color=(0, 255, 255), thickness=-1)
 
         # --- Main body of _find_and_draw_farthest_points ---
         rows, cols = grid_data.shape
         mid = cols // 2
 
-        _find_points_for_subgrid(grid_data[:, :mid], 0)
-        _find_points_for_subgrid(grid_data[:, mid:], mid)
+        _draw_pca_axes_for_subgrid(grid_data[:, :mid], 0)
+        _draw_pca_axes_for_subgrid(grid_data[:, mid:], mid)
 
         return img
 
 
-    def _render_contour(self, grid_data: np.ndarray, bbox: bool, debug: bool = True) -> np.ndarray:
+    def _render_contour(self, grid_data: np.ndarray, bbox: bool, debug: bool = False) -> np.ndarray:
         img = self._render_pixel(grid_data, False)
         mask = (grid_data > 0).astype(np.uint8) * 255
         h, w = img.shape[:2]
@@ -280,7 +255,7 @@ class Visualizer:
             
         return img
 
-    def render(self, grid_data: np.ndarray, mode: str, bbox: bool, debug: bool = True) -> Union[np.ndarray, bytes, list]:
+    def render(self, grid_data: np.ndarray, mode: str, bbox: bool, debug: bool = False) -> Union[np.ndarray, bytes, list]:
         if mode == VisualOptions.PIXEL:
             return self._render_pixel(grid_data, bbox, debug)
         elif mode == VisualOptions.BLUR:
