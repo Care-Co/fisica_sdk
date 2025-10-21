@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLa
 from PyQt5.QtCore import QThread, pyqtSignal, Qt
 from PyQt5.QtGui import QPixmap, QImage
 import fisica_sdk as fisica
+from fisica_sdk import VisualOptions
 
 class MonitoringThread(QThread):
     frame_received = pyqtSignal(object)
@@ -50,23 +51,32 @@ class MonitoringThread(QThread):
         self.wait() # Wait for the run loop to finish
 
 class RealtimeMonitor(QMainWindow):
-    def __init__(self):
+    def __init__(self, scale=2.0):
         super().__init__()
         self.sdk = fisica.FisicaSDK()
         self.monitoring_thread = None
+        self.scale = scale
         self.init_ui()
         self.start_monitoring()
 
     def init_ui(self):
         self.setWindowTitle('Fisica SDK - Realtime Monitor')
-        self.setGeometry(100, 100, 480, 560)
+
+        base_img_w, base_img_h = 456, 512
+        img_w = int(base_img_w * self.scale)
+        img_h = int(base_img_h * self.scale)
+        
+        window_w = img_w + 24 
+        window_h = img_h + 80
+
+        self.setGeometry(100, 100, window_w, window_h)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         layout = QVBoxLayout(central_widget)
 
         self.image_label = QLabel('Initializing...')
-        self.image_label.setMinimumSize(456, 512)
+        self.image_label.setMinimumSize(img_w, img_h)
         self.image_label.setStyleSheet("border: 1px solid black;")
         self.image_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.image_label)
@@ -86,7 +96,7 @@ class RealtimeMonitor(QMainWindow):
 
     def update_visualization(self, frame):
         try:
-            image_array = self.sdk.render(frame, mode="BLUR", bbox=True, scale=2.0)
+            image_array = self.sdk.render(frame, mode=VisualOptions.BINARY_NONZERO, bbox=True, scale=self.scale)
             self.set_image(image_array)
         except Exception as e:
             error_message = f'Visualization error: {e}'
@@ -121,7 +131,7 @@ class RealtimeMonitor(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    window = RealtimeMonitor()
+    window = RealtimeMonitor(scale=2.0)
     window.show()
     sys.exit(app.exec_())
 
