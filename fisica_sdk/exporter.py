@@ -1,6 +1,7 @@
 import json
 import os
 from typing import List, Dict, Any, Union
+import numpy as np
 
 from .models import SessionReport, MeasurementSession
 from .utils import log
@@ -57,7 +58,6 @@ def reshape_sensor_matrix(report: dict, rows: int, cols: int):
     if "sensor_matrix" in report and isinstance(report["sensor_matrix"], list):
         flat = report["sensor_matrix"]
         if len(flat) == rows * cols:
-            import numpy as np
             report["sensor_matrix"] = np.array(flat).reshape((rows, cols)).tolist()
 
 

@@ -7,10 +7,10 @@ from .gui_viewer import update_gui
 from .utils import log
 
 
-def render(grid_data: np.ndarray, mode: str = 'BLUR', bbox: bool = False, scale: float = 1.0, debug: bool = False) -> Union[np.ndarray, bytes, list]:
+def render(grid_data: np.ndarray, mode: str = 'BLUR', bbox: bool = False, scale: float = 1.0) -> Union[np.ndarray, bytes, list]:
     vis = Visualizer()
     vis.scale(scale)
-    return vis.render(grid_data, mode, bbox, debug)
+    return vis.render(grid_data, mode, bbox)
 
 class VisualOptions:
     """
@@ -38,7 +38,7 @@ class Visualizer:
     def scale(self, factor: float):
         self._scale = factor
 
-    def _render_with_transparency(self, grid_data: np.ndarray, bbox: bool, debug: bool = False) -> np.ndarray:
+    def _render_with_transparency(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
 
         grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         heatmap = cv2.resize(grid_norm, (456, 512), interpolation=cv2.INTER_LINEAR)
@@ -61,13 +61,10 @@ class Visualizer:
         if bbox:
             rgba_resized = self._render_bbox(grid_data, rgba_resized)
 
-        if debug:
-            rgba_resized = self._find_and_draw_farthest_points(grid_data, rgba_resized)
-
         return rgba_resized
 
 
-    def _render_pixel(self, grid_data: np.ndarray, bbox: bool, debug: bool = False) -> np.ndarray:
+    def _render_pixel(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
         try:
             grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
         except Exception as e:
@@ -85,24 +82,14 @@ class Visualizer:
         if bbox:
             self._render_bbox(grid_data, img_resized)
 
-        if debug:
-            img_resized = self._find_and_draw_farthest_points(grid_data, img_resized)
-
         return img_resized
 
-    def _render_binary(self, grid_data: np.ndarray, bbox_x:bool, hide_zeros: bool = False, debug: bool = False) -> np.ndarray:
-        # grid_data = decode_raw(hex_data)
-        # if grid_data is None:
-        #     logger.error("Failed to render: could not decode hex_data.")
-        #     raise ValueError
-
-        # grid_data = preprocess_grid_data(grid_data)
+    def _render_binary(self, grid_data: np.ndarray, bbox_x:bool, hide_zeros: bool = False) -> np.ndarray:
         rows, cols = grid_data.shape
         base_w, base_h = 456, 512
         cell_w = base_w // cols
         cell_h = base_h // rows
 
-        # Create image canvas
         image = Image.new("RGB", (base_w, base_h), (0, 0, 0))
         draw = ImageDraw.Draw(image)
 
@@ -126,7 +113,6 @@ class Visualizer:
                 y = i * cell_h + (cell_h - text_height) // 2
                 draw.text((x, y), text, fill=(255, 255, 255), font=font)
 
-        # Resize after rendering
         scale = self._scale
         target_size = (int(base_w * scale), int(base_h * scale))
         image_resized = image.resize(target_size, resample=Image.BICUBIC)
@@ -134,20 +120,13 @@ class Visualizer:
         if bbox_x:
             final_image = self._render_bbox(grid_data, final_image)
 
-        if debug:
-            final_image = self._find_and_draw_farthest_points(grid_data, final_image)
-
         return final_image
 
-    # def _render_bbox(self, grid_data: np.ndarray) -> np.ndarray:
     def _render_bbox(self, grid_data: np.ndarray, img:np.ndarray) -> np.ndarray:
-        # img = self._render_pixel(grid_data)
-        # log.debug(f"image type -> {type(img})")
         rows, cols = grid_data.shape
         h, w = img.shape[:2]
         cell_w = w / cols
         cell_h = h / rows
-
         def draw_pca_box(subgrid, col_offset, color):
             pts_idx = np.argwhere(subgrid > 0)
             if pts_idx.size == 0:
@@ -180,67 +159,8 @@ class Visualizer:
 
         return img
 
-    def _find_and_draw_farthest_points(self, grid_data: np.ndarray, img: np.ndarray) -> np.ndarray:
-        h, w = img.shape[:2]
-        grid_rows, grid_cols = grid_data.shape
-        cell_w = w / grid_cols
-        cell_h = h / grid_rows
 
-        def _draw_pca_axes_for_subgrid(subgrid: np.ndarray, col_offset: int):
-            pts_idx = np.argwhere(subgrid > 0)
-            if pts_idx.shape[0] < 2:
-                return
-
-            # Convert grid indices to image coordinates
-            pts = np.stack([
-                (pts_idx[:, 1] + col_offset + 0.5) * cell_w,
-                (pts_idx[:, 0] + 0.5) * cell_h
-            ], axis=1)
-
-            # PCA calculation
-            center = pts.mean(axis=0)
-            cov = np.cov(pts, rowvar=False)
-            eigvals, eigvecs = np.linalg.eigh(cov)
-            principal = eigvecs[:, eigvals.argmax()]
-            secondary = eigvecs[:, eigvals.argmin()]
-
-            # Project points onto axes
-            disp = pts - center
-            proj_pr = disp.dot(principal)
-            proj_sec = disp.dot(secondary)
-
-            # Find endpoints for length (along principal axis)
-            p1_idx = np.argmin(proj_pr)
-            p2_idx = np.argmax(proj_pr)
-            p1 = pts[p1_idx].astype(int)
-            p2 = pts[p2_idx].astype(int)
-
-            # Find endpoints for breadth (along secondary axis)
-            pa_idx = np.argmin(proj_sec)
-            pb_idx = np.argmax(proj_sec)
-            pa = pts[pa_idx].astype(int)
-            pb = pts[pb_idx].astype(int)
-
-            # Draw lines and circles
-            cv2.line(img, tuple(p1), tuple(p2), color=(255, 0, 255), thickness=2)  # Length
-            cv2.circle(img, tuple(p1), radius=5, color=(255, 0, 255), thickness=-1)
-            cv2.circle(img, tuple(p2), radius=5, color=(255, 0, 255), thickness=-1)
-
-            cv2.line(img, tuple(pa), tuple(pb), color=(0, 255, 255), thickness=2)  # Breadth
-            cv2.circle(img, tuple(pa), radius=5, color=(0, 255, 255), thickness=-1)
-            cv2.circle(img, tuple(pb), radius=5, color=(0, 255, 255), thickness=-1)
-
-        # --- Main body of _find_and_draw_farthest_points ---
-        rows, cols = grid_data.shape
-        mid = cols // 2
-
-        _draw_pca_axes_for_subgrid(grid_data[:, :mid], 0)
-        _draw_pca_axes_for_subgrid(grid_data[:, mid:], mid)
-
-        return img
-
-
-    def _render_contour(self, grid_data: np.ndarray, bbox: bool, debug: bool = False) -> np.ndarray:
+    def _render_contour(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
         img = self._render_pixel(grid_data, False)
         mask = (grid_data > 0).astype(np.uint8) * 255
         h, w = img.shape[:2]
@@ -249,34 +169,29 @@ class Visualizer:
         cv2.drawContours(img, contours, -1, (0,0,255), 2)
         if bbox:
             img = self._render_bbox(grid_data, img)
-        
-        if debug:
-            img = self._find_and_draw_farthest_points(grid_data, img)
             
         return img
 
-    def render(self, grid_data: np.ndarray, mode: str, bbox: bool, debug: bool = False) -> Union[np.ndarray, bytes, list]:
+    def render(self, grid_data: np.ndarray, mode: str, bbox: bool) -> Union[np.ndarray, bytes, list]:
         if mode == VisualOptions.PIXEL:
-            return self._render_pixel(grid_data, bbox, debug)
+            return self._render_pixel(grid_data, bbox)
         elif mode == VisualOptions.BLUR:
-            return self._render_with_transparency(grid_data, bbox, debug)
+            return self._render_with_transparency(grid_data, bbox)
         elif mode == VisualOptions.BINARY:
-            return self._render_binary(grid_data, bbox, debug=debug)
+            return self._render_binary(grid_data, bbox)
         elif mode == VisualOptions.BINARY_NONZERO:
-            return self._render_binary(grid_data, bbox, hide_zeros=True, debug=debug)
+            return self._render_binary(grid_data, bbox, hide_zeros=True)
         elif mode == VisualOptions.CONTOUR:
-            return self._render_contour(grid_data, bbox, debug)
+            return self._render_contour(grid_data, bbox)
         elif mode == VisualOptions.ALL:
-            # Note: The original _render_bbox call in 'ALL' mode was incorrect.
-            # It has been corrected to pass a rendered image.
-            pixel_img_for_bbox = self._render_pixel(grid_data, bbox=False, debug=debug)
+            pixel_img_for_bbox = self._render_pixel(grid_data, bbox=False)
             return [
-                self._render_pixel(grid_data, bbox, debug),
-                self._render_with_transparency(grid_data, bbox, debug),
-                self._render_binary(grid_data, bbox, debug=debug),
-                self._render_binary(grid_data, bbox, hide_zeros=True, debug=debug),
+                self._render_pixel(grid_data, bbox),
+                self._render_with_transparency(grid_data, bbox),
+                self._render_binary(grid_data, bbox),
+                self._render_binary(grid_data, bbox, hide_zeros=True),
                 self._render_bbox(grid_data, pixel_img_for_bbox),
-                self._render_contour(grid_data, bbox, debug)
+                self._render_contour(grid_data, bbox)
             ]
         else:
             raise ValueError(f"Unsupported rendering mode: {mode}")
