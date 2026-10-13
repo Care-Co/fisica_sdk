@@ -285,3 +285,36 @@ def test_stop_cannot_override_release_and_duplicate_pending_requests_are_busy():
         feed(session,'245153010000fff0',3)
         events=feed(session,'242253010000fff0',4)
         assert events[-1]['operation']==4 and events[-1]['status']==0
+
+
+def test_ble_probe_tool_drives_the_core_sequence_and_records_ack_and_frames():
+    """The device-verification tool itself is exercised here with a scripted link."""
+    import asyncio
+    from fisica_sdk.native import get_core
+    from tools.ble_probe import drive
+    core = get_core()
+    frame = bytes.fromhex(next(f['packet_hex'] for f in json.loads((VECTORS.parent / 'legacy-processing.json').read_text())
+                               if f.get('id') == 'synthetic-recorded-layout'))
+
+    async def scenario(start_ack):
+        incoming, sent = asyncio.Queue(), []
+        replies = {core.command('GET_FIRMWARE_VERSION'): bytes.fromhex('24434701322e302e31fff0')}
+        for name in ('SET_DEVICE_BLE', 'STOP_CONTINUOUS_MEASUREMENT', 'SET_DEVICE_STOP'):
+            command = core.command(name)
+            replies[command] = bytes([0x24, command[1], command[2], 1, 0, 0, 0xff, 0xf0])
+        start = core.command('START_CONTINUOUS_MEASUREMENT')
+        replies[start] = bytes([0x24, start[1], start[2], *start_ack, 0xff, 0xf0]) + (frame * 4 if start_ack[0] else b'')
+
+        async def write(data):
+            sent.append(bytes(data))
+            if bytes(data) in replies:
+                incoming.put_nowait(replies[bytes(data)])
+        return await drive(write, incoming, 0.1), sent
+
+    accepted, sent = asyncio.run(scenario((1, 0, 0)))
+    assert accepted['firmware'] == '2.0.1' and accepted['continuous_start_accepted'] and accepted['frames'] == 4
+    assert accepted['final_state'] == 'DISCONNECTED' and core.command('SET_DEVICE_BLE') in sent
+    assert sent[-1] == core.command('SET_DEVICE_STOP')
+    rejected, _ = asyncio.run(scenario((0, 0, 3)))
+    assert not rejected['continuous_start_accepted'] and rejected['frames'] == 0
+    assert any(e.get('status') == 'DEVICE_REJECTED' and e.get('device_code') == 3 for e in rejected['log'])

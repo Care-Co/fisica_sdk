@@ -78,3 +78,15 @@ def test_customer_packages_refuse_test_entitlement_keys():
         assert require_release_keys(validation=True) is True
     else:
         assert require_release_keys(validation=False) is False
+
+
+def test_native_binary_is_byte_identical_whoever_it_is_built_for(monkeypatch, tmp_path):
+    """Same platform, architecture and core version: one binary, no build timestamp or company data."""
+    from tools.native_build import build_native
+    monkeypatch.delenv('FISICA_PREBUILT_CORE', raising=False)
+    first = build_native(tmp_path / 'a').read_bytes()
+    monkeypatch.setenv('FISICA_PARTNER_ID', 'partner-test')
+    monkeypatch.setenv('FISICA_DISTRIBUTION_ID', 'delivery-test')
+    second = build_native(tmp_path / 'b').read_bytes()
+    assert first == second
+    assert b'partner-test' not in second and b'delivery-test' not in second

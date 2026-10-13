@@ -38,15 +38,15 @@ Supported older versions produce warnings; unsupported versions fail explicitly.
 The wrapper and compiled core use the Fisica Scale SDK License, included in the
 wrapper ZIP and core bundle. Wrapper modifications and application redistribution
 are allowed within the applicable non-commercial grant or commercial agreement;
-private core sources are never included. `versionInfo` reports native partner/delivery
-identifiers. Native errors retain their numeric `code`. `decodeResponse` exposes
+private core sources are never included. `versionInfo` reports release and entitlement
+key information; the binary carries no company or delivery identifier. Native errors retain their numeric `code`. `decodeResponse` exposes
 fixed and variable query payloads without reimplementing the protocol in Dart.
 
 See [native SDK maintenance](../../doc/native-sdk.md) for release/build/security details.
 
-## Platform packages (0.4)
+## Platform packages (0.5)
 
-Use `fisica-flutter-0.4.0-platforms.zip`, not a source checkout. It includes prebuilt
+Use `fisica-flutter-0.5.0-platforms.zip`, not a source checkout. It includes prebuilt
 Android libraries, Apple XCFrameworks and Windows x64/ARM64 DLLs. `FisicaCore.platform()`
 uses the linked process symbols on iOS/macOS and the packaged DLL/.so on Windows/Android.
 The Apple podspec retains C symbols for Dart FFI; no private source build is performed.
@@ -61,3 +61,18 @@ Flutter package does not supply a method-channel bridge or a third-party BLE plu
 Applications handle platform permissions, identity selection, firmware warnings and
 RECONNECT events. Mobile USB/Wi-Fi are not included. Same-header stale ACKs remain a
 legacy protocol limitation. Android/iOS physical measurements are still unverified.
+
+## Reports, codes and entitlement (0.5)
+
+`FisicaClient` collects decoded frames and `report()` returns weight and foot
+dimensions computed by the shared core from the received packets (29x29 display grid
+and per-frame weight; unrounded). Codes are generated classes such as `FisicaStatus`,
+`FisicaSessionState`, `FisicaSessionEventKind` and `FisicaContract`, and
+`FisicaBleProfile.scale` carries the default GATT UUIDs (from the Python SDK, not yet
+confirmed on production firmware) for the BLE plugin your app uses.
+
+`FisicaEntitlement` imports a server-signed token or file and reports three separate
+values (base license, confirmation freshness, contract state) plus warning bits. Pass
+it as `FisicaClient(core, transport, entitlement: ...)` to record real use. It never
+blocks a feature. Sending `pendingReport` and storing `exportState` are left to the app
+until the server API is final; see `doc/entitlement.md`.

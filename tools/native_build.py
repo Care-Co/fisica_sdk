@@ -143,12 +143,12 @@ def build_native(output_directory):
         command += ['/I' + str(path) for path in includes]
         command += [*sources, '/link', '/OUT:' + str(output),
                     '/IMPLIB:' + str(generated / 'fisica_core.lib'), '/INCREMENTAL:NO',
-                    '/OPT:REF', '/OPT:ICF', '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA', '/MACHINE:' + ('ARM64' if machine==0xaa64 else 'X64')]
+                    '/OPT:REF', '/OPT:ICF', '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA', '/Brepro', '/MACHINE:' + ('ARM64' if machine==0xaa64 else 'X64')]
     elif windows:
         if not os.environ.get('CXX'):
             raise RuntimeError('Cross-building Windows requires CXX pointing to a matching cross compiler')
         command = [compiler, '-std=c++17', '-O2', '-DNDEBUG', '-DFISICA_CORE_BUILD',
-                   '-shared', '-static', '-s', '-ffp-contract=off']
+                   '-shared', '-static', '-s', '-ffp-contract=off', '-Wl,--no-insert-timestamp']
         command += ['-I' + str(path) for path in includes]
         command += [*sources, '-o', str(output)]
     else:

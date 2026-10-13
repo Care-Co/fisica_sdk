@@ -357,7 +357,8 @@ int32_t fisica_core_entitlement_restore(FisicaEntitlement *context, const uint8_
                 for (unsigned i = 0; i < 16 && valid; ++i) {
                     const auto digit = [&](char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1; };
                     const int high = digit(parts[1][2*i]), low = digit(parts[1][2*i+1]);
-                    valid = high >= 0 && low >= 0; report.id[i] = uint8_t((high << 4) | low);
+                    valid = high >= 0 && low >= 0;
+                    if (valid) report.id[i] = uint8_t(high * 16 + low);
                 }
                 if (valid && token(parts[2], report.token) && parse_number(parts[3], report.last_used)) {
                     report.observed = parts[4] == "1"; report.active = true; restored.report = report;

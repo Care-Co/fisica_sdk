@@ -51,9 +51,9 @@ def test_default_ble_profile_covers_the_python_transport_characteristics():
     import re
     from fisica_sdk import codes
     ROOT = Path(__file__).resolve().parents[1]
-    source = (ROOT / 'fisica_sdk' / 'bluetooth_handler.py').read_text()
+    source = (ROOT / 'fisica_sdk' / 'bluetooth_handler.py').read_text(encoding='utf-8')
     block = source[source.index('known_uuids = ['):source.index(']', source.index('known_uuids = ['))]
     known = set(re.findall(r'"([0-9a-f-]{36})"', block))
     generated = {value for profile in codes.BLE_PROFILES.values() for value in profile.values()}
     assert known and known == generated
-    assert codes.BLE_NAME_CONTAINS.lower() in (ROOT / 'fisica_sdk' / 'port_scanner.py').read_text().lower()
+    assert codes.BLE_NAME_CONTAINS.lower() in (ROOT / 'fisica_sdk' / 'port_scanner.py').read_text(encoding='utf-8').lower()

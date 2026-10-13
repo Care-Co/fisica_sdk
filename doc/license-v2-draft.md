@@ -1,0 +1,160 @@
+# Fisica Scale SDK License — Version 2.0 DRAFT
+
+> **Draft for legal review. Not in force.** `LICENSE` (Version 1.0) stays the
+> applicable text, and stays in every package, until Care&Co approves and publishes
+> this version. This draft does not change any existing agreement, any package
+> already delivered, or any rights granted under an earlier license.
+>
+> Written by engineering from the product policy of 2026-10-13. Wording, governing
+> law, liability and consumer-law questions need a lawyer.
+
+Copyright (c) 2026 Care&Co. All rights reserved.
+
+## 1. Scope and definitions
+
+This license applies to the Fisica Scale SDK materials distributed by Care&Co under
+it: public language wrappers, documentation, public C headers and the compiled
+native core.
+
+- "Hardware" means a genuine Fisica Scale lawfully obtained from Care&Co or an
+  authorized channel.
+- "Public Wrappers" means wrapper source expressly provided by Care&Co.
+- "Native Core" means the compiled implementation and its private source.
+- "Base SDK License" means the grant in section 2.
+- "Separate Agreement" means a written agreement with Care&Co for the matters in
+  section 4.
+- "Entitlement Information" means server-signed information that identifies a
+  registered company and a contract reference.
+
+## 2. Base SDK License (included with the Hardware)
+
+Purchase of the Hardware includes a non-exclusive license to use the SDK with that
+Hardware. The Base SDK License has no date-based expiry.
+
+It covers non-commercial development and research, and ordinary commercial use:
+building and operating your own applications, services and facility measurements
+that use the Hardware, including charging your own customers for them. No SDK fee
+and no signed agreement is required merely because the use is commercial.
+
+Connection, measurement, local processing, analysis and reports provided by the SDK
+are not disabled by Care&Co on the basis of registration, verification or contract
+status.
+
+## 3. Registration for commercial use
+
+A company using the SDK commercially registers the company and the application or
+service with Care&Co and accepts these terms. Registration receives a contract
+reference. Registration details are used for support and for administering these
+terms. They are not a unit of runtime tracking.
+
+## 4. Matters that need a Separate Agreement
+
+The Base SDK License does not include, and a Separate Agreement is required for:
+
+- selling or distributing the SDK on its own, or reselling the SDK;
+- OEM integration and supply of the Hardware or SDK under another party's product;
+- rebranding the Hardware;
+- use of the SDK with anything other than the Hardware;
+- any other exception to these terms.
+
+Paid support, cloud or analysis services are offered, if at all, under their own
+agreements. Scope, term and renewal of a Separate Agreement are stated in that
+agreement and administered by Care&Co; they are not built into the SDK.
+
+## 5. End of a Separate Agreement
+
+The end of a Separate Agreement ends the special rights and services of that
+agreement. It does not end or convert the Base SDK License, ownership of the
+Hardware or the registration of devices. End users of Hardware and applications that
+were lawfully supplied keep the Base SDK License. Ending new OEM supply or special
+distribution is handled under the agreement. Access to paid server services is
+governed by the terms of those services and is separate from continued local use of
+the SDK.
+
+## 6. Public Wrappers: modification and redistribution
+
+Within these terms you may use, copy and modify the Public Wrappers and include them,
+together with the unmodified compiled Native Core, in your own applications and
+products for distribution to your users. Keep this license and the applicable
+copyright and third-party notices, and identify your modifications so they are not
+presented as an unmodified Care&Co release. Your users' rights must be consistent
+with this license. You may not sublicense the SDK on terms that remove these
+conditions.
+
+## 7. Native Core and retained rights
+
+No Native Core source is provided or licensed for disclosure, modification or
+redistribution. Do not distribute private implementation source, debug symbols or
+internal build materials. Rights not expressly granted are reserved. Nothing here
+restricts rights that cannot lawfully be restricted.
+
+## 8. Entitlement Information and local operation
+
+The SDK can check Entitlement Information online or from a file imported on a device
+that has never been online. Missing, outdated, rejected, expired or revoked
+Entitlement Information produces a status and a notice only. It does not block local
+SDK features.
+
+Entitlement Information is confirmed for at most 30 days at a time. An older
+confirmation means the information should be refreshed; it does not mean the Base SDK
+License has expired. A communication failure is not treated as an expiry or a
+revocation. Entitlement Information does not prove that a device is genuine, where
+code came from, or that an agreement is being complied with.
+
+## 9. Usage records
+
+When Entitlement Information for a company and contract has been verified and the
+application has enabled online reporting, the SDK reports to Care&Co, for that
+company and contract only: that the SDK was used, the time of the last use according
+to the device clock, and whether use was observed while that contract was ended or
+revoked.
+
+The SDK does not report measurement data, weights, health information, information
+about individual users, hardware identifiers, counts of measurements or API calls, or
+detailed logs. Unverified use is not attributed to any company or contract.
+
+An observation of use after a contract ended is not, by itself, evidence that a
+special right was exercised or that these terms were breached; using the Base SDK
+License after a Separate Agreement ends is permitted. Usage records are not a billing
+or audit record.
+
+Applications that enable online reporting are responsible for the disclosures their
+own users are entitled to under applicable privacy and platform rules.
+
+## 10. Earlier versions and third-party materials
+
+Rights granted under an earlier license for an earlier SDK version, including
+versions published under the MIT License, are not restricted retroactively by this
+license. Examples, wrappers, the Native Core and included third-party libraries or
+models are each under the license stated for them; third-party licenses are not
+replaced by this one. The Native Core includes Monocypher (CC0-1.0 or BSD-2-Clause).
+The optional Python GUI extra depends on PyQt5 under its own GPL/commercial terms.
+
+## 11. Warranty and liability
+
+To the extent permitted by applicable law, the SDK is provided "AS IS", without
+warranties of any kind, express or implied, including merchantability, fitness for a
+particular purpose and non-infringement. Care&Co is not liable for indirect,
+incidental, special or consequential damages arising from use of the SDK, except
+where applicable law or a separate written agreement requires otherwise.
+
+## 12. Contact
+
+For registration, Separate Agreements or questions: carencoinc@carenco.kr.
+
+---
+
+## Differences from Version 1.0 for the reviewer
+
+| Version 1.0 | Version 2.0 draft |
+|---|---|
+| §2 free use is non-commercial only | §2 Base SDK License also covers ordinary commercial use |
+| §3 any commercial use needs a written commercial agreement and fees | §3 registration and acceptance; §4 Separate Agreement only for OEM, rebranding, resale, non-genuine hardware and other exceptions |
+| §4 distribution must keep Care&Co's distribution identifiers | §6 no per-partner identifier exists in the binary; keep license and notices |
+| §6 no online activation, no usage telemetry | §8 optional online or offline confirmation that never blocks; §9 minimal usage record when the application enables reporting |
+| Agreement end: obligations left to the agreement | §5 agreement end never ends the Base SDK License, hardware ownership or device registration |
+
+Open points for legal review: effect on companies already under Version 1.0 or a
+signed agreement; whether the usage record needs consent or notice wording per
+market; definition of "genuine" and authorized channels; whether section 9 belongs
+in the license or in a privacy notice.

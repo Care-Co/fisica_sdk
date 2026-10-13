@@ -35,6 +35,21 @@ def flat_fixtures(output):
     return path
 
 
+def native(output):
+    """Public C ABI contracts under UBSan (and ASan where its runtime works on the host)."""
+    generated = output / 'generated'
+    prepare_release(generated)
+    token = json.loads((FIXTURES / 'entitlement.json').read_text())['valid']
+    sources = sorted((ROOT / 'native/src').glob('*.cpp'))
+    for sanitizer in os.environ.get('FISICA_SANITIZERS', 'undefined').split():
+        for name, arguments in (('native_contract', []), ('native_entitlement', [token])):
+            binary = output / f'{name}-{sanitizer.replace(",", "-")}'
+            run([os.environ.get('CXX', 'c++'), '-std=c++17', '-O1', '-g', '-UNDEBUG', '-ffp-contract=off', f'-fsanitize={sanitizer}',
+                 '-fno-sanitize-recover=all', '-DFISICA_CORE_STATIC', '-I', ROOT / 'native/include', '-I', generated,
+                 *sources, ROOT / 'tests' / f'{name}.cpp', '-o', binary])
+            run([binary, *arguments], timeout=300)
+
+
 def kotlin(output):
     gradle = Path(os.environ.get('FISICA_GRADLE_LIB', '/opt/homebrew/opt/gradle/libexec/lib'))
     java_home = Path(os.environ.get('JAVA_HOME') or subprocess.check_output(['/usr/libexec/java_home'], text=True).strip())
@@ -83,7 +98,7 @@ def dart(output):
 
 
 def main():
-    targets = {'kotlin': kotlin, 'swift': swift, 'dotnet': dotnet, 'dart': dart}
+    targets = {'native': native, 'kotlin': kotlin, 'swift': swift, 'dotnet': dotnet, 'dart': dart}
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('languages', nargs='+', choices=sorted(targets))
     parser.add_argument('--output', type=Path, default=ROOT / '.build' / 'binding-verification')

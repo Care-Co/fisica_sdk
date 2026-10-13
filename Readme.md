@@ -1,9 +1,11 @@
 # Fisica SDK
 
 Fisica Scale SDK with a shared C++ native core and independently versioned wrappers.
-Python 2.3.0 retains the measurement API and delegates packet processing, session states, ACK deadlines and analysis
-to core 1.3.0 (C ABI 1.3). The Dart/Flutter FFI wrapper is 0.4.0.
-No server or device firmware changes are required.
+Python 2.4.0 retains the measurement API and delegates packet processing, session states, ACK deadlines and analysis
+to core 1.4.0 (C ABI 1.4). The Dart/Flutter wrapper is 0.5.0; Swift, Kotlin and C# are 0.2.0.
+Every company uses the same binary per platform; company and contract information is
+supplied at runtime as [entitlement information](doc/entitlement.md) and never blocks a feature.
+No device firmware change is required. The entitlement server is specified but not yet implemented.
 
 ## Install a binary Python release
 
@@ -93,31 +95,43 @@ Compiled distribution raises the cost of reverse engineering; it does not make
 host-side code or device communications impossible to inspect. No firmware-level
 command authorization is added.
 
-## Requirements, licensing and partner delivery
+## Requirements, licensing and entitlement
 
-The [confirmed SDK requirements](doc/sdk-requirements.md) define Windows 10/11 x64
+The [SDK requirements](doc/sdk-requirements.md) define Windows 10/11 x64
 first, BLE/USB access, unrestricted partner calibration/raw data, offline use,
 and the remaining hardware/platform validation work.
 
-Public wrappers and compiled core are provided under the [Fisica Scale SDK License](LICENSE).
-Non-commercial personal/academic/research use with purchased Scale hardware is free.
-Business use, including internal operations and free business services, requires
-a company/term commercial agreement. Wrappers may be modified; applications may
-redistribute wrappers and the unmodified compiled core within their license terms.
-Core sources are not distributed. No online activation, usage telemetry or technical
-expiry lock is added. Previously licensed versions and third-party rights remain separate.
-The optional GUI uses PyQt5, which has separate GPL/commercial terms; see the
+Policy (2026-10-13): the base SDK license comes with genuine hardware, has no date
+expiry and covers ordinary commercial apps and services after registration. Separate
+agreements are only for exceptions such as OEM supply, rebranding or SDK resale.
+The packaged [LICENSE](LICENSE) is still Version 1.0, which predates this policy;
+the replacement is a [draft awaiting legal review](doc/license-v2-draft.md).
+Wrappers may be modified; applications may redistribute wrappers and the unmodified
+compiled core. Core sources are not distributed. Previously licensed versions and
+third-party rights remain separate. The optional GUI uses PyQt5, which has separate
+GPL/commercial terms; see the
 [provider's licensing FAQ](https://riverbankcomputing.com/commercial/license-faq)
 before redistributing a proprietary GUI product.
 
-```sh
-python tools/build_release.py --partner-id partner-example
+```python
+sdk.configure_entitlement(file='fisica-entitlement.fse')   # works on a PC that was never online
+print(sdk.entitlement_status())   # base license, confirmation freshness, contract state
 ```
 
-The trusted builder creates a new delivery ID, embeds partner/delivery metadata in
-the core, includes the license in each archive, and writes a SHA-256 delivery manifest.
-Keep the manifest as the internal delivery record. IDs are not authentication keys.
-Read `sdk.version_info()` for release/distribution information and
+Missing, outdated, rejected, ended or revoked entitlement information only produces
+a status and a `FisicaEntitlementWarning`; connection, measurement and analysis keep
+working. Online confirmation and the minimal usage report run only when an `endpoint`
+is given. See [entitlement](doc/entitlement.md).
+
+```sh
+python tools/build_release.py --validation
+```
+
+The trusted builder produces the same binary for every company, includes the license
+in each archive and writes a SHA-256 `artifact-manifest.json`. The core currently
+trusts a test signing key only, so packaging requires `--validation` until production
+keys are configured.
+Read `sdk.version_info()` for release information and
 `sdk.get_device_info()` for queried firmware and its verification state. Unverified
 firmware warns and continues without an opt-in flag.
 

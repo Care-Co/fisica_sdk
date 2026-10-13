@@ -1,0 +1,99 @@
+openapi: 3.0.3
+info:
+  title: Fisica SDK entitlement API
+  version: 0.1.0-draft
+  description: |
+    Contract between the SDK and the Care&Co server. DRAFT: the server is not implemented;
+    `tools/entitlement_dev.py` is the reference mock and `tests/test_entitlement.py` the contract tests.
+
+    Rules the server must keep:
+    - The company and contract are taken ONLY from the verified bearer token. Identifiers in a
+      request body are never trusted; the usage body has no identity fields at all.
+    - The token is an identifier that ships inside partner apps. Treat it as public: it authorizes
+      nothing except refreshing itself and reporting minimal usage for its own contract. Rate-limit.
+    - Nothing here blocks the SDK. A refused or failed request only leaves the SDK with older
+      information; the SDK never treats a network failure as an expiry or a revocation.
+    - Three facts stay separate: the base SDK license (no date expiry, not represented here),
+      the confirmation time (`verified_at`/`refresh_by`, 30 days at most) and the contract
+      (`contract_start`/`contract_end`/`revoked_at`). Never merge them into one `expires_at`.
+    - Ending a contract ends that contract's special rights only. It does not revoke the base SDK
+      license, hardware ownership or device registration, and must not be modelled as a
+      subscription/payment state of NONE or a device state of REVOKED.
+    - The signing private key (Ed25519) stays on the server. The SDK embeds public keys by `kid`.
+servers:
+  - url: https://{host}
+    variables: {host: {default: sdk.example.invalid, description: Not decided}}
+security:
+  - entitlementToken: []
+paths:
+  /sdk/v1/entitlement/refresh:
+    post:
+      summary: Confirm the token's contract and return newly signed entitlement information.
+      description: |
+        Accepts any token whose signature verifies, including one older than 30 days: an old
+        token is the normal input. The response is signed with `verified_at` = server time now.
+        A revoked or ended contract is answered with 200 and a token that says so
+        (`revoked_at` / `contract_end`); only then may the SDK show "revoked".
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false}}}}
+      responses:
+        '200':
+          description: Newly signed entitlement information.
+          content: {application/json: {schema: {type: object, required: [token], properties: {token: {$ref: '#/components/schemas/Token'}}}}}
+        '401': {description: Missing token, bad signature, unknown key or unknown contract., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '503': {description: Temporarily unavailable. The SDK keeps what it had.}
+  /sdk/v1/usage:
+    post:
+      summary: Report that the SDK was really used under the token's contract.
+      description: |
+        Idempotent by `report_id`: a repeated id changes nothing and still answers 204.
+        Store per company + contract only: used (a record exists), the latest
+        `client_last_used_at` (keep the maximum, a delayed report never moves it back), whether
+        use was observed after the contract ended, and the server's own receive time.
+        `client_last_used_at` is the device clock and is not a server-verified time.
+        `observed_after_contract_end` means "use and an ended/revoked contract were observed
+        together". It is not proof that a special right was exercised or that terms were broken,
+        and using the base SDK after a separate contract ended is permitted.
+        Requests carrying any other field are refused, so counts, device identifiers,
+        measurements or personal data can never be collected through this endpoint.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/UsageReport'}}}
+      responses:
+        '204': {description: Recorded, or already recorded for this report_id.}
+        '400': {description: Malformed report or unexpected field., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '401': {description: Missing or invalid token., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '503': {description: Temporarily unavailable. The SDK keeps the record and retries the same body.}
+components:
+  securitySchemes:
+    entitlementToken: {type: http, scheme: bearer, bearerFormat: FSE1}
+  schemas:
+    Token:
+      type: string
+      maxLength: 4096
+      description: |
+        `FSE1.<base64url(payload)>.<base64url(signature)>`, no padding. The signature is
+        Ed25519 (RFC 8032) over the ASCII bytes `FSE1.<base64url(payload)>`.
+        The same string is the content of the offline entitlement file.
+        Payload: one flat JSON object, ASCII, no string escapes, members:
+        - `v` (integer, required): 1
+        - `kid` (string, required): signing key id known to the SDK build
+        - `company`, `contract` (string, required): `[A-Za-z0-9_.:-]{1,64}`; `contract` is the
+          contract reference number, also issued for a basic-terms acceptance
+        - `kind` (string, required): `basic` (registration + basic terms) or `special` (separate agreement)
+        - `verified_at` (integer, required): server confirmation time, Unix seconds
+        - `refresh_by` (integer, required): > `verified_at`; the SDK caps it at `verified_at` + 30 days
+        - `contract_start`, `contract_end` (integer, optional): contract dates; omit when none
+        - `revoked_at` (integer, optional): present only when the server revoked the contract
+        - `grants` (string, optional): comma list such as `oem,rebrand,resale`; at most 256 characters
+        Unknown members are ignored; duplicate members are rejected.
+    UsageReport:
+      type: object
+      additionalProperties: false
+      required: [report_id, client_last_used_at, observed_after_contract_end]
+      properties:
+        report_id: {type: string, pattern: '^[0-9a-f]{32}$', description: Random per report; for retry de-duplication only. Never an installation or device id.}
+        client_last_used_at: {type: integer, description: Last real feature use on the device clock (Unix seconds).}
+        observed_after_contract_end: {type: boolean}
+    Error:
+      type: object
+      properties: {error: {type: string}}
