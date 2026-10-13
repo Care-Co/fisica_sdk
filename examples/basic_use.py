@@ -1,31 +1,41 @@
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import fisica_sdk as fisica
 
-# Initialize SDK
-sdk = fisica.FisicaSDK()
 
-# Scan for devices
-devices = sdk.scan_devices()
-print("Available devices:", devices)
+def main():
+    sdk = fisica.FisicaSDK()
+    connected = False
 
-# Connect to the first device
-if devices:
-    sdk.connect(devices[0])
+    try:
+        devices = sdk.scan_devices()
+        print("Available devices:", devices)
 
-    # Set metadata
-    sdk.set_metadata(name="John Doe")
+        if not devices:
+            print("No devices found")
+            return
 
-    # Start measurement for 10 seconds
-    sdk.start_measurement(duration=10)
+        sdk.connect(devices[0])
+        connected = True
 
-    # Wait for completion
-    sdk.wait()
+        sdk.set_metadata(name="John Doe")
+        sdk.start_measurement(duration=10)
+        sdk.wait()
 
-    # Analyze results
-    report = sdk.analyze()
-    print("Analysis complete:", report)
+        report = sdk.analyze()
+        if report is None:
+            print("Analysis skipped: not enough valid measurement data.")
+            return
 
-    # Disconnect
-    sdk.disconnect()
+        print("Analysis complete:", report)
+    finally:
+        if connected:
+            sdk.disconnect()
+            sdk.wait()
 
-    # Wait for completion
-    sdk.wait()
+
+if __name__ == "__main__":
+    main()

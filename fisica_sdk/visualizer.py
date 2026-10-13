@@ -2,8 +2,7 @@ import cv2
 import numpy as np
 from typing import Union
 from PIL import Image, ImageDraw, ImageFont
-from .analyzer import pca_bounding_box_dimensions
-from .gui_viewer import update_gui
+from .native import get_core
 from .utils import log
 
 
@@ -32,16 +31,26 @@ class VisualOptions:
     CONTOUR = 'CONTOUR'
 
 class Visualizer:
+    BASE_W = 512
+    BASE_H = 512
+
     def __init__(self):
         self._scale = 1.0  # default scale
 
     def scale(self, factor: float):
         self._scale = factor
 
+    def _normalize_grid(self, grid_data: np.ndarray) -> np.ndarray:
+        min_value = np.min(grid_data)
+        max_value = np.max(grid_data)
+        if max_value == min_value:
+            return np.zeros(grid_data.shape, dtype=np.uint8)
+        return ((grid_data - min_value) / (max_value - min_value) * 255).astype(np.uint8)
+
     def _render_with_transparency(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
 
-        grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
-        heatmap = cv2.resize(grid_norm, (456, 512), interpolation=cv2.INTER_LINEAR)
+        grid_norm = self._normalize_grid(grid_data)
+        heatmap = cv2.resize(grid_norm, (self.BASE_W, self.BASE_H), interpolation=cv2.INTER_LINEAR)
         heatmap_blurred = cv2.GaussianBlur(heatmap, (21, 21), 0)
 
         kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
@@ -56,7 +65,7 @@ class Visualizer:
         rgba = cv2.cvtColor(dst, cv2.COLOR_BGRA2BGR)
 
         scale = self._scale
-        target_size = (int(456 * scale), int(512 * scale))
+        target_size = (int(self.BASE_W * scale), int(self.BASE_H * scale))
         rgba_resized = cv2.resize(rgba, target_size, interpolation=cv2.INTER_LINEAR)
         if bbox:
             rgba_resized = self._render_bbox(grid_data, rgba_resized)
@@ -66,17 +75,17 @@ class Visualizer:
 
     def _render_pixel(self, grid_data: np.ndarray, bbox: bool) -> np.ndarray:
         try:
-            grid_norm = ((grid_data - np.min(grid_data)) / (np.max(grid_data) - np.min(grid_data)) * 255).astype(np.uint8)
+            grid_norm = self._normalize_grid(grid_data)
         except Exception as e:
             log.critical(
                 "\n\nFisica SDK\n"
                 f"   There seems to be a problem with processing the matrix: {e}\n"
             )
             raise e
-        img = cv2.resize(cv2.applyColorMap(grid_norm, cv2.COLORMAP_JET), (456, 512), interpolation=cv2.INTER_NEAREST)
+        img = cv2.resize(cv2.applyColorMap(grid_norm, cv2.COLORMAP_JET), (self.BASE_W, self.BASE_H), interpolation=cv2.INTER_NEAREST)
 
         scale = self._scale
-        target_size = (int(456 * scale), int(512 * scale))
+        target_size = (int(self.BASE_W * scale), int(self.BASE_H * scale))
         img_resized = cv2.resize(img, target_size, interpolation=cv2.INTER_NEAREST)
 
         if bbox:
@@ -86,7 +95,7 @@ class Visualizer:
 
     def _render_binary(self, grid_data: np.ndarray, bbox_x:bool, hide_zeros: bool = False) -> np.ndarray:
         rows, cols = grid_data.shape
-        base_w, base_h = 456, 512
+        base_w, base_h = self.BASE_W, self.BASE_H
         cell_w = base_w // cols
         cell_h = base_h // rows
 
@@ -137,20 +146,7 @@ class Visualizer:
                 pts_idx[:,1] * cell_w + cell_w/2,
                 pts_idx[:,0] * cell_h + cell_h/2
             ], axis=1)
-            width, length, cx, cy = pca_bounding_box_dimensions(pts, cell_w, cell_h)
-            center = np.array([cx, cy])
-            cov = np.cov(pts, rowvar=False)
-            eigvals, eigvecs = np.linalg.eigh(cov)
-            principal = eigvecs[:, eigvals.argmax()]
-            secondary = eigvecs[:, eigvals.argmin()]
-            half_len = length / 2
-            half_wid = width / 2
-            corners = np.array([
-                center + principal*half_len + secondary*half_wid,
-                center + principal*half_len - secondary*half_wid,
-                center - principal*half_len - secondary*half_wid,
-                center - principal*half_len + secondary*half_wid
-            ]).astype(int)
+            corners = get_core().dimensions(pts, cell_w, cell_h)[4:].reshape(4, 2).astype(int)
             cv2.polylines(img, [corners], True, color, 2)
 
         mid = cols // 2
@@ -173,6 +169,7 @@ class Visualizer:
         return img
 
     def render(self, grid_data: np.ndarray, mode: str, bbox: bool) -> Union[np.ndarray, bytes, list]:
+        grid_data = np.asarray(grid_data)
         if mode == VisualOptions.PIXEL:
             return self._render_pixel(grid_data, bbox)
         elif mode == VisualOptions.BLUR:
@@ -197,6 +194,7 @@ class Visualizer:
             raise ValueError(f"Unsupported rendering mode: {mode}")
 
     def update(self, image: np.ndarray):
+        from .gui_viewer import update_gui
         update_gui(image)
 
     def run(self, scale=1.0):

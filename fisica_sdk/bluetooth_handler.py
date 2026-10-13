@@ -4,9 +4,9 @@ import queue
 import asyncio
 from bleak import BleakClient
 
-from .device import ATCommands
 from .parser import DataParser
 from .utils import log
+from .errors import FisicaTransportError
 import errno
 
 class BluetoothHandler:
@@ -17,6 +17,8 @@ class BluetoothHandler:
         self._listening = False
         self.last_heartbeat = time.time()
         self._buffer = bytearray()
+        self.raw_queue = queue.Queue()
+        self.session_input = False
         self.data_queue = queue.Queue()
         self.at_response_queue = queue.Queue()
 
@@ -213,10 +215,10 @@ class BluetoothHandler:
 
             # handle이 있으면 handle 사용, 없으면 UUID 사용
             if self.char_handle is not None:
-                log.debug(f"Sending BLE data via handle {self.char_handle}: {cmd_bytes.hex()}")
+                log.debug(f"Sending {len(cmd_bytes)} bytes via BLE handle {self.char_handle}")
                 await self.client.write_gatt_char(self.char_handle, cmd_bytes)
             elif self.char_uuid is not None:
-                log.debug(f"Sending BLE data via UUID {self.char_uuid}: {cmd_bytes.hex()}")
+                log.debug(f"Sending {len(cmd_bytes)} bytes via BLE UUID {self.char_uuid}")
                 await self.client.write_gatt_char(self.char_uuid, cmd_bytes)
             else:
                 log.error("No characteristic handle or UUID available")
@@ -388,17 +390,19 @@ class BluetoothHandler:
         try:
             # 미리 변환해서 로그 출력
             cmd_bytes = self._ensure_bytes(data)
-            log.debug(f"Sending command: original={data}, type={type(data)}, bytes={cmd_bytes.hex()}")
+            log.debug(f"Sending command: {len(cmd_bytes)} bytes")
 
             result = self._execute_command("send", cmd_bytes, timeout=5.0)
             if result:
                 log.debug("Command sent successfully")
             else:
-                log.error("Command send failed")
+                raise FisicaTransportError("Bluetooth command send failed")
             return result
         except Exception as e:
             log.error(f"Bluetooth send error: {e}")
-            return False
+            if isinstance(e, FisicaTransportError):
+                raise
+            raise FisicaTransportError(f'Bluetooth send failed: {e}') from e
 
     def start_listening(self):
         """BLE 리스닝 시작"""
@@ -420,9 +424,12 @@ class BluetoothHandler:
         def notification_callback(sender, data):
             """데이터 수신 콜백"""
             try:
-                self._buffer.extend(data)
+                if self.session_input:
+                    self.raw_queue.put(bytes(data))
+                else:
+                    self._buffer.extend(data)
                 self.last_heartbeat = time.time()
-                log.debug(f"Raw data received: {data.hex()}, buffer len: {len(self._buffer)}")
+                log.debug(f"Data received: {len(data)} bytes, buffer length: {len(self._buffer)}")
             except Exception as e:
                 log.error(f"Bluetooth notification processing error: {e}")
 
@@ -447,26 +454,14 @@ class BluetoothHandler:
 
         self._execute_command("stop_notify")
 
-    def start_measurement(self):
-        # 리스닝이 중지된 상태라면 다시 시작
-        if not self._listening or not (self.listen_thread and self.listen_thread.is_alive()):
-            log.debug("Restarting listening for new measurement...")
-            self.start_listening()
-        
-        if self._listening:
-            log.debug("Sending initial AT commands...")
-            self.send(ATCommands.SET_DEVICE_BLE)
-            time.sleep(0.5)
-            self.send(ATCommands.START_CONTINUOUS_MEASUREMENT)
-            log.debug("Measurement has successfully started.")
-
     def listen_loop(self):
         try:
             while self._listening:
                 self.last_heartbeat = time.time()
                 try:
                     # 공통 파서 사용
-                    self.parser.process_all_data_by_terminator(self._buffer)
+                    if not self.session_input:
+                        self.parser.process_all_data_by_terminator(self._buffer)
 
                 except Exception as e:
                     if isinstance(e, OSError) and e.errno == errno.ENXIO:

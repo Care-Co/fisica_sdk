@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.16)
+project(fisica_core LANGUAGES CXX)
+if(CMAKE_GENERATOR_PLATFORM STREQUAL "ARM64" OR CMAKE_SYSTEM_PROCESSOR MATCHES "ARM64|aarch64")
+    set(FISICA_ARCH "arm64")
+else()
+    set(FISICA_ARCH "x64")
+endif()
+set(fisica_core_bundled_libraries "${CMAKE_CURRENT_SOURCE_DIR}/lib/${FISICA_ARCH}/fisica_core.dll" PARENT_SCOPE)

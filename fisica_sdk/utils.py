@@ -26,14 +26,15 @@ class ColorFormatter(logging.Formatter):
         color = self.COLOR_MAP.get(record.levelname, "")
         return f"{color}{message}{self.RESET}"
 
-# Configure logging with color support
 handler = logging.StreamHandler(sys.stdout)
 formatter = ColorFormatter("[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
 handler.setFormatter(formatter)
 
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
-root_logger.handlers = [handler]
+package_logger = logging.getLogger("fisica_sdk")
+package_logger.setLevel(logging.INFO)
+package_logger.propagate = False
+if not package_logger.handlers:
+    package_logger.addHandler(handler)
 
 class LogWrapper:
     def __init__(self, logger):
@@ -83,5 +84,4 @@ def resolve_output_path(output: str) -> str:
     return output
 
 log = LogWrapper(logging.getLogger(__name__))
-
 

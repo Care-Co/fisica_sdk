@@ -1,53 +1,74 @@
-from setuptools import setup, find_packages
+"""Trusted source build. Customer distribution is binary wheels only."""
+import json
+import os
+from pathlib import Path
+import runpy
+import sys
+from setuptools import Distribution, setup
+from setuptools.command.build_py import build_py
+from setuptools.command.build import build
+from setuptools.command.sdist import sdist
+from setuptools.errors import SetupError
+from wheel.bdist_wheel import bdist_wheel
 
-# README 파일 읽기
-with open("README.md", "r", encoding="utf-8") as fh:
-    long_description = fh.read()
+ROOT = Path(__file__).resolve().parent
+builder = runpy.run_path(str(ROOT / 'tools' / 'native_build.py'))
+release = builder['release_metadata']()
+if sys.platform == 'darwin':
+    os.environ.setdefault('MACOSX_DEPLOYMENT_TARGET', '11.0')
+
+
+class BinaryDistribution(Distribution):
+    def has_ext_modules(self):
+        return True
+
+
+class PlatformBuild(build):
+    def finalize_options(self):
+        super().finalize_options()
+        # Keep DLLs and dylibs in separate trees, including trusted cross-builds.
+        self.build_lib = str(ROOT / '.build' / 'python' / builder['platform_tag']())
+
+
+class BuildPythonWrapper(build_py):
+    def run(self):
+        super().run()
+        package = Path(self.build_lib) / 'fisica_sdk'
+        builder['build_native'](package / '_native')
+        (package / '_release.json').write_text(json.dumps(release, indent=2) + '\n')
+
+
+class BinaryWheel(bdist_wheel):
+    def get_tag(self):
+        return 'py3', 'none', builder['platform_tag']()
+
+
+class NoSourceDistribution(sdist):
+    def run(self):
+        raise SetupError('Source distributions are disabled to protect the native implementation. Build with python -m build --wheel.')
+
 
 setup(
     name='fisica',
-    version='1.0.1',
-    description='Care&Co Foot pressure analysis and visualization SDK',
-    long_description=long_description,
-    long_description_content_type="text/markdown",
+    version=release['wrappers']['python']['version'],
+    description='Care&Co Fisica Scale Python wrapper with a shared native core',
+    long_description=(ROOT / 'Readme.md').read_text(encoding='utf-8'),
+    long_description_content_type='text/markdown',
     author='Care&Co',
     author_email='carencoinc@carenco.kr',
     url='https://github.com/Care-Co/',
-    project_urls={
-        "Bug Tracker": "https://github.com/Care-Co/fisica_sdk/issues",
-        "Documentation": "https://fisica-sdk.readthedocs.io/",
-        "Source Code": "https://github.com/Care-Co/fisica_sdk",
+    packages=['fisica_sdk'],
+    install_requires=['numpy>=1.21', 'packaging>=21.0', 'pyserial>=3.5', 'bleak>=0.22.3'],
+    extras_require={
+        'visualization': ['opencv-python>=4.5', 'Pillow>=8.0'],
+        'gui': ['opencv-python>=4.5', 'Pillow>=8.0', 'PyQt5>=5.15'],
+        'updates': ['requests>=2.25'],
     },
-    packages=find_packages(),
-    install_requires=[
-        'numpy>=1.21',
-        'opencv-python>=4.5',
-        'requests>=2.25',
-        'packaging>=21.0',
-        'Pillow>=8.0',
-        'pyserial>=3.5',
-        'PyQt5>=5.15',
-        'bleak>=0.22.3'
-    ],
-    python_requires='>=3.8',
-    keywords='foot pressure analysis medical sensor visualization',
-    license='MIT',  # classifiers와 일치
-    classifiers=[
-        'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.8',
-        'Programming Language :: Python :: 3.9',
-        'Programming Language :: Python :: 3.10',
-        'Programming Language :: Python :: 3.11',
-        'Programming Language :: Python :: 3.12',
-        'License :: OSI Approved :: MIT License',
-        'Operating System :: OS Independent',
-        'Development Status :: 3 - Alpha',
-        'Intended Audience :: Developers',
-        'Intended Audience :: Healthcare Industry',
-        'Topic :: Scientific/Engineering :: Medical Science Apps.',
-        'Topic :: Scientific/Engineering :: Human Machine Interfaces',
-        'Topic :: Software Development :: Libraries :: Python Modules',
-    ],
-    include_package_data=True,
+    python_requires='>=3.9',
+    license_expression='LicenseRef-Fisica-Scale-SDK',
+    license_files=['LICENSE'],
+    include_package_data=False,
     zip_safe=False,
+    distclass=BinaryDistribution,
+    cmdclass={'build': PlatformBuild, 'build_py': BuildPythonWrapper, 'bdist_wheel': BinaryWheel, 'sdist': NoSourceDistribution},
 )

@@ -4,7 +4,6 @@ import threading
 from queue import Queue
 
 from .parser import DataParser
-from .device import ATCommands
 from .utils import log
 import errno
 
@@ -12,10 +11,11 @@ class SerialHandler:
     def __init__(self, uart):
         self.listen_thread = None
         self._listening = False
-        self._ser = uart.ser
         self._uart = uart
         self.last_heartbeat = time.time()
         self._buffer = bytearray()
+        self.raw_queue = Queue()
+        self.session_input = False
         self.data_queue = Queue()
         self.at_response_queue = Queue()
 
@@ -23,7 +23,6 @@ class SerialHandler:
         self.parser = DataParser(self.data_queue, self.at_response_queue)
 
     def set_uart(self, uart):
-        self._ser = uart.ser
         self._uart = uart
 
     def start_listening(self):
@@ -36,21 +35,11 @@ class SerialHandler:
             self.listen_thread = None
 
         log.debug("Thread running.")
+        self._listening = True
         self.listen_thread = threading.Thread(target=self.listen_loop, daemon=True)
         self.listen_thread.start()
 
         self._listening = True
-
-    def start_measurement(self):
-
-        if not self._listening or not (self.listen_thread and self.listen_thread.is_alive()):
-            log.debug("Restarting listening for new measurement...")
-            self.start_listening()
-
-        if self._listening:
-            self.send(ATCommands.SET_DEVICE_BLE)
-            self.send(ATCommands.START_CONTINUOUS_MEASUREMENT)
-            log.info("Measurement has successfully started.")
 
     def send(self, data):
         if self._uart:
@@ -70,13 +59,17 @@ class SerialHandler:
             while self._listening:
                 self.last_heartbeat = time.time()
                 try:
-                    if self._ser.in_waiting:
-                        data = self._ser.read(self._ser.in_waiting)
-                        self._buffer.extend(data)
-                        log.debug(f"Raw data received: {data.hex()}, buffer len : {len(self._buffer)}")
+                    data = self._uart.receive_bytes()
+                    if data:
+                        if self.session_input:
+                            self.raw_queue.put(bytes(data))
+                        else:
+                            self._buffer.extend(data)
+                        log.debug(f"Data received: {len(data)} bytes, buffer length: {len(self._buffer)}")
 
                     # 공통 파서 사용
-                    self.parser.process_all_data_by_terminator(self._buffer)
+                    if not self.session_input:
+                        self.parser.process_all_data_by_terminator(self._buffer)
 
                 except Exception as e:
                     if isinstance(e, OSError) and e.errno == errno.ENXIO:
@@ -87,6 +80,7 @@ class SerialHandler:
                         )
                     else:
                         log.critical(f"[Unexpected Exception] {e}")
+                    self._listening = False
                 time.sleep(0.01)
             # log.debug("listen_loop stopped.")
             # self.listen_thread = None

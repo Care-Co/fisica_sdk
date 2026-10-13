@@ -1,17 +1,12 @@
-include README.md
-exclude .idea/*
-global-exclude .idea/*
-exclude *.iml
-global-exclude *.iml
-
-exclude .gitignore
-exclude .git/*
-global-exclude .git/*
-
-global-exclude *.pyc
-global-exclude __pycache__/*
-global-exclude .pytest_cache/*
-
-global-exclude .DS_Store
-exclude .env
-exclude .venv/*
+# Source distributions are disabled in setup.py; this is defense in depth.
+include Readme.md
+include LICENSE
+prune native
+prune tools
+prune tests
+prune examples
+prune .build
+prune .venv
+prune wrappers
+exclude sampledata.md
+global-exclude *.cpp *.cc *.c *.pyx *.pdb *.dSYM *.pyc *.lib *.exp *.obj *.ilk *.idb

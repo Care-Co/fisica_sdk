@@ -4,7 +4,7 @@ import threading
 import numpy as np
 
 from .analyzer import analyze as global_analyzer
-from .visualizer import render as global_render
+from .native import get_core
 from .receiver import Receiver
 from .exporter import *
 from .models import *
@@ -54,6 +54,7 @@ class FisicaSDK:
     """
 
     def __init__(self, debug=logging.INFO):
+        self._core = get_core()
         self._disconnecting = False
         self._connected = False
         self._sleeping = False
@@ -69,11 +70,17 @@ class FisicaSDK:
         self._session = None
         self._working = None
         self._loop = None
+        self._loop_thread = None
         self._reports = []
         self._frames = []
         self._counter = 0
         self._debug = debug
+        self._last_error = None
         log.level = self._debug
+
+    def version_info(self):
+        """Report independent SDK, Python wrapper, core and ABI versions."""
+        return self._core.version_info()
 
     def _set_metadata(self, **kwargs):
         default_metadata = {
@@ -92,29 +99,48 @@ class FisicaSDK:
         self._session = MeasurementSession(metadata=default_metadata, frames=[])
         log.info(f"Metadata set: {default_metadata}")
 
-    def _handle_frame(self, frame):
+    def _record_frame(self, frame):
+        # Record before ACK waiters are released, independent of app callback speed.
         self._frames.append(frame)
-        log.info("Frame received:", frame)
+        log.debug("Measurement frame received")
+
+    def _handle_frame(self, frame):
         if self._callback:
             self._callback(frame)
 
-    async def _start_with_timeout(self, duration):
-        await self._start_async()
-        self.sleep(duration, after=lambda: asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop))
+    def _handle_session_error(self, error):
+        self._last_error = error
+        if self._session:
+            self._session.frames.extend(self._frames)
+        self._working = self._starting = self._stopping = False
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
 
-    async def _start_async(self):
-        while self._stopping:
-            time.sleep(0.1)
-        if not self._session:
-            self._set_metadata()
-        if self._receiver:
-            log.debug("Initializing async data receiving loop...")
-            self._start_time = time.time()
-            self._frames.clear()
-            self._receiver.start()
-            self._working = True
+    async def _start_async(self, duration=None):
+        try:
+            while self._stopping:
+                await asyncio.sleep(0.1)
+            if not self._session:
+                self._set_metadata()
+            if self._receiver:
+                log.debug("Initializing async data receiving loop...")
+                self._start_time = time.time()
+                self._frames.clear()
+                self._receiver.start(duration)
+                self._working = True
+            log.info("Measurement started.")
+        except Exception as error:
+            self._last_error = error
+            self._working = False
+            if self._receiver:
+                try:
+                    self._receiver.stop()
+                except Exception:
+                    log.error('Failed to clean up measurement start')
+            if self._loop and self._loop.is_running():
+                self._loop.call_soon(self._loop.stop)
+        finally:
             self._starting = False
-        log.info("Measurement started.")
 
     async def _stop_async(self):
         try:
@@ -131,7 +157,10 @@ class FisicaSDK:
                 "\nFisica SDK\n"
                 f"  Unknown error occurred while stopping measurement : {e}"
             )
-            raise RuntimeError
+            self._last_error = e
+        finally:
+            self._working = False
+            self._stopping = False
 
     def sleep(self, seconds: float, after: Optional[callable] = None):
         """
@@ -178,7 +207,7 @@ class FisicaSDK:
         """
         self._set_metadata(**kwargs)
 
-    def scan_devices(self):
+    def scan_devices(self, transport=None):
         """
     Fisica SDK: scan_devices
 
@@ -187,15 +216,15 @@ class FisicaSDK:
 
         Notes:
             Scans for Scale devices connected via Bluetooth or wired connection.
-            If a wired Scale device is available, only that device information is returned.
-            If no wired Scale device is found, searches for Bluetooth devices.
+            Searches both transports by default. Pass transport='Serial' or
+            transport='Bluetooth' to restrict discovery.
             Before connecting a device with `connect()`, you must pass the device obtained
             through `scan_devices()` as an argument.
             The return value is in list format, so use array indexing like `device[0]`
             to attempt connection with a specific device.
         """
         log.info("Scanning for available devices...")
-        devices = scan()
+        devices = scan(transport=transport)
         if not devices:
             log.error(
                 "\nFisica SDK\n"
@@ -203,11 +232,12 @@ class FisicaSDK:
                 "   For comprehensive information about Fisica SDK, please refer to the Readme or call `print(FisicaSDK.__doc__)`.\n"
                 "   For further operation details, call `print(FisicaSDK.scan_devices.__doc__)`.\n"
             )
-            raise RuntimeError
+            self._available_devices = []
+            return []
         self._available_devices = devices
         return devices
 
-    def connect(self, device):
+    def connect(self, device, transport=None):
         """
     Fisica SDK: connect
 
@@ -219,6 +249,8 @@ class FisicaSDK:
             Use the return value from `scan_devices()` for the device parameter.
             For detailed information, print `FisicaSDK.scan_devices.__doc__`.
         """
+        if self._receiver:
+            raise RuntimeError('Disconnect the current device before connecting another Scale')
         try:
             if not isinstance(device, dict):
                 raise TypeError("Device must be a dictionary returned from scan_devices().")
@@ -226,15 +258,26 @@ class FisicaSDK:
             # device_id = device.get("id")
             log.info(f"Attempting to connect to Fisica Scale ({device.get('type')}) device..")
 
-            if not hasattr(self, '_available_devices') or not self._available_devices:
+            if transport is None and (not hasattr(self, '_available_devices') or not self._available_devices):
                 raise RuntimeError("No devices scanned. Call scan_devices() first.")
 
+            receiver = Receiver(device, self._handle_frame, transport=transport, record_callback=self._record_frame)
+            receiver.on_stopped = self._schedule_stop
+            receiver.on_error = self._handle_session_error
+            receiver.conn()
+            self._receiver = receiver
             self._connected_device = device.get('id')
             self._connected = True
-            self._receiver = Receiver(device, self._handle_frame)
-            self._receiver.conn()
 
         except Exception as e:
+            if 'receiver' in locals():
+                try:
+                    receiver.discon()
+                except Exception:
+                    log.error('Failed to clean up device connection')
+            self._receiver = None
+            self._connected_device = None
+            self._connected = False
             log.error(
                 "\nFisica SDK\n"
                 "   It seems that no device was found, the connection was lost, or an invalid parameter was provided.\n"
@@ -244,6 +287,10 @@ class FisicaSDK:
                 "   or call `print(FisicaSDK.connect.__doc__)`\n"
             )
             raise e
+
+    def get_device_info(self):
+        """Firmware query result and verification state; unknown firmware never blocks use."""
+        return dict(self._receiver.device_info) if self._receiver else None
     def disconnect(self):
         """
     Fisica SDK: disconnect
@@ -261,11 +308,11 @@ class FisicaSDK:
             Attempting to connect to another device without disconnecting first
             may cause unintended behavior and is not recommended.
         """
+        self._disconnecting = True
         def _disconnect():
-            while self._working or self._stopping:
+            while self._starting or self._stopping:
                 time.sleep(0.1)
 
-            self._disconnecting = True
             if not self._connected_device:
                 log.error("No device was detected to disconnect.")
                 self._disconnecting = False
@@ -274,11 +321,18 @@ class FisicaSDK:
                 log.info(f"Attempting to disconnect to device: {self._connected_device}")
                 if self._receiver:
                     self._receiver.discon()
-                self._connected_device = None
-                self._connected = False
             except Exception as e:
                 log.error(f"Error occurred during device disconnection. : {e}")
+                self._last_error = e
             finally:
+                if self._working and self._session:
+                    self._session.frames.extend(self._frames)
+                self._working = False
+                if self._loop and self._loop.is_running():
+                    self._loop.call_soon_threadsafe(self._loop.stop)
+                self._receiver = None
+                self._connected_device = None
+                self._connected = False
                 log.info("Scale disconnected.")
                 self._disconnecting = False
 
@@ -299,6 +353,7 @@ class FisicaSDK:
             - Make sure to call scan_devices() and connect() before using this method to establish a device connection.
         """
         self._starting = True
+        self._last_error = None
         if not self._connected:
             log.error(
                 "\nFisica SDK\n"
@@ -310,15 +365,39 @@ class FisicaSDK:
             )
             self._starting = False
             raise RuntimeError("Not connected to a device.")
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
         loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.create_task(self._start_async())
+        loop.create_task(self._start_async(duration))
         self._loop = loop
 
-        if duration:
-            self.sleep(duration, after=lambda: asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop))
+        self._loop_thread = threading.Thread(target=loop.run_forever, daemon=True)
+        self._loop_thread.start()
 
-        threading.Thread(target=loop.run_forever, daemon=True).start()
+    def _schedule_stop(self):
+        if self._stopping:
+            return
+        self._stopping = True
+
+        if not self._loop or not self._loop.is_running():
+            try:
+                if self._receiver:
+                    self._receiver.stop()
+                if self._session:
+                    self._session.frames.extend(self._frames)
+                self._duration = time.time() - self._start_time if self._start_time else 0.0
+                self._working = False
+            finally:
+                self._stopping = False
+            return
+
+        future = asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
+
+        def _stop_loop(_):
+            if self._loop and self._loop.is_running():
+                self._loop.call_soon_threadsafe(self._loop.stop)
+
+        future.add_done_callback(_stop_loop)
 
     def stop_measurement(self):
         """
@@ -341,15 +420,13 @@ class FisicaSDK:
                     if not self._counter:
                         log.debug("sleep in the stop_measurement()")
                     time.sleep(0.1)
-                asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
+                self._schedule_stop()
 
             threading.Thread(target=_wait_and_stop, daemon=True).start()
             return
 
-        self._stopping = True
         # sleep 중이 아니면 즉시 종료
-        if hasattr(self, "_loop") and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._stop_async(), self._loop)
+        self._schedule_stop()
     def on_data(self, callback):
         """
     Fisica SDK: on_data
@@ -377,8 +454,12 @@ class FisicaSDK:
             Note that this must be called after measurement has stopped.
         """
 
-        if self._session:
+        if self._session and self._session.frames:
             return serialize_session_frame(self._session)
+        if self._current_report:
+            return serialize_session_frame(
+                MeasurementSession(metadata={}, frames=self._current_report.total_frame)
+            )
         else:
             log.info("It seems there is no active session.")
 
@@ -504,8 +585,13 @@ class FisicaSDK:
                         "   For guidance on device scanning and connection, use:\n"
                         "   `print(FisicaSDK.analyze.__doc__)` and `print(FisicaSDK.export_report.__doc__)`.\n"
                     )
+                    return None
                 else:
                     report = [serialize_session_report(self._current_report)]
+            elif isinstance(report, SessionReport):
+                report = [serialize_session_report(report)]
+            elif isinstance(report, list) and report and isinstance(report[0], SessionReport):
+                report = [serialize_session_report(r) for r in report]
 
             output_path = resolve_output_path(output)
             return export_session_reports_to_json(report, output_path)
@@ -589,9 +675,10 @@ class FisicaSDK:
             foot_width={"left": round(lw,2), "right": round(rw,2)},
             total_frame=frames,
             frame_count=len(frames),
-            duration_sec=round(self._duration, 2),
+            duration_sec=round(self._duration or 0.0, 2),
             weight=weight,
-            battery=frames[-1].battery
+            battery=frames[-1].battery,
+            battery_valid=frames[-1].battery_valid,
         )
 
         self._reports.append(self._current_report)
@@ -641,6 +728,7 @@ class FisicaSDK:
         if frame:
             grid_data = np.array(frame.sensor_matrix)
 
+        from .visualizer import render as global_render
         return global_render(grid_data, mode, scale=scale, bbox=bbox)
 
     def wait(self):
@@ -664,3 +752,10 @@ class FisicaSDK:
                     f"disconnecting? > {self._disconnecting}"
                 )
             time.sleep(0.1)
+        if self._loop_thread and self._loop_thread.is_alive():
+            self._loop_thread.join(timeout=1)
+        if self._loop and not self._loop.is_running() and not self._loop.is_closed():
+            self._loop.close()
+        if self._last_error is not None:
+            error, self._last_error = self._last_error, None
+            raise error

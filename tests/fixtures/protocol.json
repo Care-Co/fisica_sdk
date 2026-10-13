@@ -1,0 +1,33 @@
+{
+  "origin": "Synthetic vectors; firmware version is an example, not hardware verification.",
+  "commands": [
+    {
+      "name": "SET_DEVICE_USB",
+      "hex": "242253000002fff0"
+    },
+    {
+      "name": "GET_FIRMWARE_VERSION",
+      "hex": "244347000000fff0"
+    },
+    {
+      "name": "START_CONTINUOUS_MEASUREMENT",
+      "hex": "245153000001fff0"
+    }
+  ],
+  "responses": [
+    {
+      "hex": "24434701322e302e31fff0",
+      "header": 67,
+      "type": 71,
+      "success": true,
+      "payload_hex": "322e302e31"
+    },
+    {
+      "hex": "245153000006fff0",
+      "header": 81,
+      "type": 83,
+      "success": false,
+      "payload_hex": "0006"
+    }
+  ]
+}

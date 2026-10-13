@@ -1,44 +1,43 @@
 import asyncio
-from bleak import BleakScanner
-import serial.tools.list_ports
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict
 from .utils import log
 
-def find_serial_com_ports():
+BLE_START_TIMEOUT = 5.0
+
+def find_serial_devices():
     """시리얼 포트에서 Fisica Scale 기기 검색"""
     try:
-        ports = [
-            p.device for p in serial.tools.list_ports.comports()
-            if (('USB' in p.description or 'usb' in p.device.lower() or 'usbserial' in p.device.lower())
-                and p.vid is not None and p.vid == 4292)
-        ]
-        log.info(f"Serial scan completed. found count : {len(ports)}")
-        return ports
+        import serial.tools.list_ports
+        devices = [{'id': p.device, 'name': 'Fisica Scale', 'type': 'Serial',
+                    'port': p.device, 'vid': p.vid, 'pid': p.pid,
+                    'serial_number': p.serial_number}
+                   for p in serial.tools.list_ports.comports() if p.vid == 4292]
+        log.info(f"Serial scan completed. found count : {len(devices)}")
+        return devices
     except Exception as e:
         log.debug(f"Serial scan error: {e}")
         return []
 
+
+def find_serial_com_ports():
+    """Legacy port-name API; VID detection also works with localized Windows descriptions."""
+    return [device['id'] for device in find_serial_devices()]
+
 def find_bluetooth_com_ports(timeout=15.0, max_devices=5) -> List[Dict]:
     """빠른 블루투스 스캔 - 여러 기기 감지, 적응적 타임아웃, 신호 강도 순 정렬"""
 
-    def _get_or_create_loop():
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                raise RuntimeError("Loop is closed")
-            return loop
-        except RuntimeError:
-            return asyncio.new_event_loop()
-
     async def _scan_bluetooth():
+        scanner = None
         try:
+            from bleak import BleakScanner
             # 주소별로 중복 제거 (같은 기기의 여러 신호 방지)
             fisica_devices = {}
             last_discovery_time = 0
 
             def detection_callback(device, advertisement_data):
                 nonlocal last_discovery_time
-                device_name = device.name or 'Unknown'
+                device_name = advertisement_data.local_name or device.name or 'Unknown'
 
                 if 'fisica scale' in device_name.lower():
                     # 새 기기 발견 시간 기록
@@ -80,8 +79,6 @@ def find_bluetooth_com_ports(timeout=15.0, max_devices=5) -> List[Dict]:
                         current_time - last_discovery_time > 2.0):
                     break
 
-            await scanner.stop()
-
             # RSSI 기준으로 내림차순 정렬 (신호가 강한 순서대로)
             device_list = sorted(fisica_devices.values(), key=lambda x: x['rssi'], reverse=True)
 
@@ -92,16 +89,29 @@ def find_bluetooth_com_ports(timeout=15.0, max_devices=5) -> List[Dict]:
         except Exception as e:
             log.debug(f"Bluetooth scan error: {e}")
             return []
+        finally:
+            if scanner is not None:
+                try:
+                    await asyncio.wait_for(scanner.stop(), timeout=2)
+                except Exception as error:
+                    log.debug(f'Bluetooth scanner cleanup failed: {error}')
+
+    async def _bounded_scan():
+        return await asyncio.wait_for(_scan_bluetooth(), timeout=timeout + BLE_START_TIMEOUT)
 
     try:
-        loop = _get_or_create_loop()
-        asyncio.set_event_loop(loop)
-        return loop.run_until_complete(_scan_bluetooth())
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(_bounded_scan())
+        # A synchronous SDK call must not replace or run the application's loop.
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            return executor.submit(lambda: asyncio.run(_bounded_scan())).result()
     except Exception as e:
         log.debug(f"Bluetooth scan failed: {e}")
         return []
 
-def find_all_com_ports(timeout=15.0, max_bt_devices=5, prioritize_signal=True) -> List[Dict]:
+def find_all_com_ports(timeout=15.0, max_bt_devices=5, prioritize_signal=True, transport=None) -> List[Dict]:
     """모든 Fisica Scale 기기 검색 (시리얼 + 블루투스)
 
     Args:
@@ -109,21 +119,20 @@ def find_all_com_ports(timeout=15.0, max_bt_devices=5, prioritize_signal=True) -
         max_bt_devices: 최대 블루투스 기기 수
         prioritize_signal: True면 블루투스 기기를 신호 강도 순으로 우선 배치
     """
+    if transport not in (None, 'Serial', 'Bluetooth'):
+        raise ValueError('transport must be Serial, Bluetooth, or None')
     all_devices = []
 
     # 1. 시리얼 포트 기기 찾기 (빠름)
     try:
-        serial_ports = find_serial_com_ports()
-        for i, port in enumerate(serial_ports):
-            all_devices.append({
-                'id': port,
-                'name': f'Fisica Scale',
-                'type': 'Serial',
-                'port': port,
-                'priority': 1000 + i  # 시리얼은 높은 우선순위
-            })
+        if transport != 'Bluetooth':
+            for i, device in enumerate(find_serial_devices()):
+                all_devices.append(dict(device, priority=1000 + i))
     except Exception as e:
         log.debug(f"Serial scan error: {e}")
+
+    if transport == 'Serial':
+        return all_devices
 
     # 2. 블루투스 기기 찾기
     try:
@@ -157,4 +166,3 @@ def find_all_com_ports(timeout=15.0, max_bt_devices=5, prioritize_signal=True) -
         log.info(device_info)
 
     return all_devices
-

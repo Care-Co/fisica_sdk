@@ -1,0 +1,2 @@
+-keep class com.carenco.fisica.Bridge { *; }
+-keep class com.carenco.fisica.FisicaException { public <init>(int, java.lang.String); }

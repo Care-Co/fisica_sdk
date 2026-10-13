@@ -1,0 +1,16 @@
+{
+  "sdk_version": "2.3.0",
+  "core_version": "1.3.0",
+  "abi_major": 1,
+  "abi_minor": 3,
+  "result_schema_version": 1,
+  "firmware_support": {
+    "verified_versions": [],
+    "planned_production_version": "2.0.1"
+  },
+  "sdk_support": {
+    "minimum": "1.0.0",
+    "deprecated_before": "2.0.0",
+    "maximum_exclusive": "3.0.0"
+  }
+}

@@ -1,7 +1,9 @@
+> v2 네이티브 SDK의 설치·버전·배포 정책은 [Readme.md](../Readme.md)와 [native-sdk.md](native-sdk.md)를 참조하세요. 아래는 기존 측정 API 사용 가이드입니다.
+
 # Fisica SDK - Python 인터페이스
 
-[![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Python Version](https://img.shields.io/badge/python-3.9+-blue.svg)](https://python.org)
+[Fisica Scale SDK License](../LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20|%20macOS%20-lightgrey.svg)](https://github.com/fisica/fisica_sdk)
 
 이 SDK는 족저압 분석을 위한 Fisica Scale 장치와 통신할 수 있는 Python 인터페이스를 제공합니다.
@@ -1007,7 +1009,11 @@ if devices:
 
 ## 📄 License
 
-이 프로젝트는 MIT 라이선스 하에 라이선스가 부여됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참조하세요.
+래퍼와 비공개 코어에는 [Fisica Scale SDK License](../LICENSE)를 적용합니다.
+비상업적 개인·교육·연구 사용은 무료이며, 사업 활용은 회사·이용 기간별 상업
+계약이 필요합니다. 오프라인으로 동작하고 계약 종료 시 기술적으로 차단하지 않습니다.
+래퍼 수정 및 계약 범위의 앱·제품 재배포는 허용하되 코어 소스는 배포하지 않습니다.
+이전 버전과 제3자 소프트웨어에 적용된 별도 이용 조건은 유지됩니다.
 
 ## 📞 지원
 
@@ -1017,7 +1023,7 @@ if devices:
 -
 ## 🔄 변경 로그
 
-### v1.0.0 (최신)
+### v1.0.0 (과거 릴리스)
 - 초기 릴리스
 - 시리얼 및 블루투스 기기 지원
 - 실시간 데이터 시각화

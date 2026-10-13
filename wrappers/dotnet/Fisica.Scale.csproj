@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
+    <Version>0.1.0</Version><PackageId>CareCo.Fisica.Scale</PackageId>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <DebugType>none</DebugType><DebugSymbols>false</DebugSymbols>
+    <Description>Fisica Scale C ABI bindings; compiled private core, public C# wrapper.</Description>
+  </PropertyGroup>
+  <ItemGroup><None Include="../../LICENSE" Pack="true" PackagePath="" />
+    <None Include="$(FisicaNativeRoot)/win_amd64/fisica_core.dll" Pack="true" PackagePath="runtimes/win-x64/native" Condition="Exists('$(FisicaNativeRoot)/win_amd64/fisica_core.dll')" />
+    <None Include="$(FisicaNativeRoot)/win_arm64/fisica_core.dll" Pack="true" PackagePath="runtimes/win-arm64/native" Condition="Exists('$(FisicaNativeRoot)/win_arm64/fisica_core.dll')" />
+    <None Include="$(FisicaNativeRoot)/macosx_11_0_universal2/libfisica_core.dylib" Pack="true" PackagePath="runtimes/osx-arm64/native" Condition="Exists('$(FisicaNativeRoot)/macosx_11_0_universal2/libfisica_core.dylib')" />
+    <None Include="$(FisicaNativeRoot)/macosx_11_0_universal2/libfisica_core.dylib" Pack="true" PackagePath="runtimes/osx-x64/native" Condition="Exists('$(FisicaNativeRoot)/macosx_11_0_universal2/libfisica_core.dylib')" />
+  </ItemGroup>
+</Project>
