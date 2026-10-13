@@ -93,15 +93,6 @@ JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_entitlementText(JNIE
     if (!checked(e,fisica_core_entitlement_text(entitlement(h),field,text.data(),text.size(),&length))) return nullptr;
     return output(e,text.data(),length);
 }
-JNIEXPORT void JNICALL Java_com_carenco_fisica_Bridge_entitlementMarkUsed(JNIEnv *e,jobject,jlong h,jlong now) { checked(e,fisica_core_entitlement_mark_used(entitlement(h),now)); }
-// Returns the bearer token; body receives the JSON to send. Null when nothing is pending.
-JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_entitlementReport(JNIEnv *e,jobject,jlong h,jbyteArray id,jobjectArray body) {
-    auto identifier=bytes(e,id); std::array<uint8_t,4096> token{}; std::array<uint8_t,256> json{}; uint32_t token_length=0,json_length=0;
-    const auto status=fisica_core_entitlement_report(entitlement(h),identifier.data(),identifier.size(),token.data(),token.size(),&token_length,json.data(),json.size(),&json_length);
-    if (status==FISICA_NO_RESULT) return nullptr; if (!checked(e,status)) return nullptr;
-    e->SetObjectArrayElement(body,0,output(e,json.data(),json_length)); return output(e,token.data(),token_length);
-}
-JNIEXPORT void JNICALL Java_com_carenco_fisica_Bridge_entitlementReportDone(JNIEnv *e,jobject,jlong h) { checked(e,fisica_core_entitlement_report_done(entitlement(h))); }
 JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_entitlementExport(JNIEnv *e,jobject,jlong h) {
     std::vector<uint8_t> state(262144); uint32_t length=0;
     if (!checked(e,fisica_core_entitlement_export(entitlement(h),state.data(),state.size(),&length))) return nullptr;

@@ -14,9 +14,8 @@ run in the shared core. Host threads, transport reopening and callbacks stay in 
 - `fisica_sdk/parser.py`, `analyzer.py`, `device.py`: legacy API adapters.
 - `wrappers/flutter`: Dart FFI package for a future Flutter host application's OS transport.
 - USB/BLE connections are OS adapters in each wrapper. No firmware changes.
-- `native/src/fisica_entitlement.cpp`: runtime entitlement context (signature check and status);
-  see [entitlement](entitlement.md). It still contains usage-record code from the policy of
-  2026-10-13, which the current policy excludes and which is listed there for removal. Vendored Monocypher lives in
+- `native/src/fisica_entitlement.cpp`: runtime entitlement context (signature check and status,
+  no usage record); see [entitlement](entitlement.md). Vendored Monocypher lives in
   `native/src/third_party/` and is compiled into the private core only.
 - GUI/heatmap drawing is optional, public wrapper presentation code.
 

@@ -105,9 +105,6 @@ class NativeCore:
             'import': [ct.c_void_p,U8P,U32,U64,U32P],
             'status': [ct.c_void_p,U64,ct.POINTER(U64),U32],
             'text': [ct.c_void_p,U32,U8P,U32,U32P],
-            'mark_used': [ct.c_void_p,U64],
-            'report': [ct.c_void_p,U8P,U32,U8P,U32,U32P,U8P,U32,U32P],
-            'report_done': [ct.c_void_p],
             'export': [ct.c_void_p,U8P,U32,U32P],
             'restore': [ct.c_void_p,U8P,U32],
         }
@@ -326,8 +323,8 @@ class NativeSession:
 class NativeEntitlement:
     """Owned C ABI entitlement context. Serialize calls; wall-clock seconds are a host input.
 
-    Status and warnings only: nothing here enables or disables SDK features.
-    close() only frees memory.
+    Status and warnings only: nothing here enables or disables SDK features, and
+    no record of SDK use is kept. close() only frees memory.
     """
     STATUS_FIELDS = ('base_license','verification','contract_state','contract_kind','verified_at','refresh_by',
                      'contract_start','contract_end','revoked_at','last_import','key_environment','warning_bits')
@@ -383,26 +380,6 @@ class NativeEntitlement:
 
     def token(self):
         return self._text(5)
-
-    def mark_used(self, now_s=None):
-        self.core._check(self.core._lib.fisica_core_entitlement_mark_used(self._handle,self._time(now_s)))
-
-    def report(self, report_id):
-        """Pending usage report as (bearer token, JSON body bytes), or None."""
-        self._time(0)
-        identifier = _byte_array(report_id)
-        token, body = (ct.c_uint8 * 4096)(), (ct.c_uint8 * 256)()
-        token_length, body_length = U32(), U32()
-        status = self.core._lib.fisica_core_entitlement_report(self._handle,identifier,len(identifier),token,len(token),
-                                                               ct.byref(token_length),body,len(body),ct.byref(body_length))
-        if status == 3:
-            return None
-        self.core._check(status)
-        return bytes(token[:token_length.value]).decode('ascii'), bytes(body[:body_length.value])
-
-    def report_done(self):
-        self._time(0)
-        self.core._check(self.core._lib.fisica_core_entitlement_report_done(self._handle))
 
     def export_state(self):
         self._time(0)

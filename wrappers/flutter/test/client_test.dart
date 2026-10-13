@@ -140,19 +140,15 @@ void main() {
     expect((await client.start()).state, FisicaSessionState.measuring);
     await client.stop();
     await client.close();
-    final report = entitlement.pendingReport(Uint8List(16)..fillRange(0, 16, 9))!;
-    final body = jsonDecode(utf8.decode(report.body)) as Map<String, dynamic>;
-    expect(body.keys.toSet(), {
-      'report_id',
-      'client_last_used_at',
-      'observed_after_contract_end',
-    });
-    expect(body['observed_after_contract_end'], isTrue);
+    // Using the SDK leaves no trace: the stored state is still only the
+    // signed token.
+    expect(
+      ascii.decode(entitlement.exportState()),
+      'FSS1\nC ${vectors['revoked']}\n',
+    );
     final restored = FisicaEntitlement(core, clock: () => clock);
     restored.restoreState(entitlement.exportState());
     expect(restored.status().company, 'acme');
-    entitlement.reportDone();
-    expect(entitlement.pendingReport(Uint8List(16)), isNull);
     final expected =
         FisicaEntitlementWarning.importRejected |
         FisicaEntitlementWarning.testKey |
@@ -161,7 +157,7 @@ void main() {
     entitlement.close();
     restored.close();
   });
-  test('online confirmation, usage report and storage', () async {
+  test('online confirmation and storage', () async {
     // Runs against the reference mock server started by tools/verify_bindings.py.
     final environment = Platform.environment;
     final endpoint = environment['FISICA_ENTITLEMENT_ENDPOINT'];
@@ -192,11 +188,19 @@ void main() {
     expect(await entitlement.sync(), isNull);
     // Server-signed confirmation time.
     expect(entitlement.status().verifiedAt, now);
-    entitlement.markUsed();
+    entitlement.checkStatus();
     expect(await entitlement.sync(), isNull);
-    expect(entitlement.pendingReport(Uint8List(16)), isNull);
+    // A later start with the app's older token still finds the newer stored
+    // confirmation.
+    final reopened = FisicaEntitlement(
+      core,
+      clock: () => now,
+      storageDirectory: directory,
+    );
+    reopened.importToken(valid);
+    expect(reopened.status().verifiedAt, now);
     // A communication failure is recorded, raises nothing and changes no
-    // state; the record waits.
+    // state.
     final offline = FisicaEntitlement(
       core,
       clock: () => now,
@@ -204,19 +208,10 @@ void main() {
       storageDirectory: '$directory/offline',
     );
     offline.importToken(valid);
-    offline.markUsed();
+    offline.checkStatus();
     expect(await offline.sync(), startsWith('network:'));
     expect(offline.status().contract, FisicaContract.active);
     expect(offline.status().verification, FisicaVerification.fresh);
-    expect(offline.pendingReport(Uint8List(16)), isNotNull);
-    // A new instance finds the stored record and can report it later.
-    final reopened = FisicaEntitlement(
-      core,
-      clock: () => now,
-      storageDirectory: '$directory/offline',
-    );
-    reopened.importToken(valid);
-    expect(reopened.pendingReport(Uint8List(16)), isNotNull);
     entitlement.close();
     offline.close();
     reopened.close();

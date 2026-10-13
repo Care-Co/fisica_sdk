@@ -35,8 +35,6 @@ class EntitlementStatus {
       warnings = v[11];
 }
 
-typedef _EntitlementNowNative = Int32 Function(Pointer<Void>, Uint64);
-typedef _EntitlementNowDart = int Function(Pointer<Void>, int);
 typedef _EntitlementBytesNative =
     Int32 Function(Pointer<Void>, Pointer<Uint8>, Uint32, Pointer<Uint32>);
 typedef _EntitlementBytesDart =
@@ -55,7 +53,7 @@ class FisicaEntitlement {
   final bool online;
   Pointer<Void> _handle = nullptr;
   int _warned = 0;
-  // One exchange at a time, so a report is never confirmed twice.
+  // One exchange with the server at a time.
   Future<String?> _exchange = Future.value(null);
   DateTime _nextSync = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -65,10 +63,10 @@ class FisicaEntitlement {
   /// Last storage or network problem, or null. Never an entitlement state.
   String? lastSyncError;
 
-  /// [endpoint]: server base URL for online confirmation and the minimal usage
-  /// report; without it no network is used. [storageDirectory]: directory for
-  /// the state file (for example the app's support directory); null keeps state
-  /// in memory only.
+  /// [endpoint]: server base URL for online confirmation; without it no network
+  /// is used. [storageDirectory]: directory for the stored token (for example
+  /// the app's support directory); null keeps it in memory only. SDK use is not
+  /// tracked: nothing but the signed token is stored.
   FisicaEntitlement(
     this.core, {
     int Function()? clock,
@@ -122,7 +120,7 @@ class FisicaEntitlement {
       );
       final result = outcome.value;
       if (result == FisicaEntitlementOutcome.accepted) {
-        // Stored usage and a possibly newer confirmation win over an older file.
+        // A newer confirmation stored earlier wins over an older file.
         final file = _stateFile();
         if (file != null && file.existsSync()) {
           try {
@@ -236,14 +234,10 @@ class FisicaEntitlement {
     if (fresh != 0) onWarning?.call(fresh, current);
   }
 
-  /// Record real feature use (connect, measure, analyze). Does nothing
-  /// without a verified contract.
-  void markUsed() {
+  /// Re-evaluate warnings for the current time and refresh in the background
+  /// when online. Called from feature paths; it records nothing about the use.
+  void checkStatus() {
     if (_handle == nullptr) return;
-    core._library.lookupFunction<_EntitlementNowNative, _EntitlementNowDart>(
-      'fisica_core_entitlement_mark_used',
-    )(_handle, _clock());
-    _save();
     _notify();
     _autoSync();
   }
@@ -271,7 +265,7 @@ class FisicaEntitlement {
     if (!online || _endpoint == null || _handle == nullptr) return null;
     try {
       final token = _text(FisicaEntitlementText.token);
-      // Nothing verified: nothing to refresh, nothing attributable to report.
+      // Nothing verified: nothing to refresh.
       if (token.isEmpty) return null;
       final response =
           jsonDecode(utf8.decode(await _post('/sdk/v1/entitlement/refresh', token, utf8.encode('{}'))))
@@ -290,16 +284,6 @@ class FisicaEntitlement {
         calloc.free(input);
         calloc.free(outcome);
       }
-      final random = Random.secure();
-      while (_handle != nullptr) {
-        final report = pendingReport(
-          Uint8List.fromList(List.generate(16, (_) => random.nextInt(256))),
-        );
-        if (report == null) break;
-        await _post('/sdk/v1/usage', report.token, report.body);
-        // Cleared only after the server confirmed.
-        if (_handle != nullptr) reportDone();
-      }
       lastSyncError = null;
     } on Object catch (error) {
       // A communication failure is not an expiry or a revocation.
@@ -312,8 +296,8 @@ class FisicaEntitlement {
     return lastSyncError;
   }
 
-  /// Online confirmation, then the pending usage reports. Completes with null
-  /// or the problem and never throws. A failure changes no entitlement state.
+  /// Online confirmation. Completes with null or the problem and never throws.
+  /// A failure changes no entitlement state.
   Future<String?> sync() => _exchange = _exchange.then((_) => _exchangeOnce());
 
   // Background sync, at most hourly; never awaited by the feature that triggered it.
@@ -322,45 +306,6 @@ class FisicaEntitlement {
     _nextSync = DateTime.now().add(const Duration(hours: 1));
     unawaited(sync());
   }
-
-  /// Next pending usage report: bearer token and JSON body for the host to
-  /// send, or null. [reportId] is 16 random bytes naming this report for
-  /// retry de-duplication only.
-  ({String token, Uint8List body})? pendingReport(Uint8List reportId) {
-    final id = calloc<Uint8>(reportId.isEmpty ? 1 : reportId.length);
-    final token = calloc<Uint8>(4096);
-    final body = calloc<Uint8>(256);
-    final tokenLength = calloc<Uint32>();
-    final bodyLength = calloc<Uint32>();
-    try {
-      id.asTypedList(reportId.length).setAll(0, reportId);
-      final status = core._library.lookupFunction<
-        Int32 Function(Pointer<Void>, Pointer<Uint8>, Uint32, Pointer<Uint8>, Uint32, Pointer<Uint32>, Pointer<Uint8>, Uint32, Pointer<Uint32>),
-        int Function(Pointer<Void>, Pointer<Uint8>, int, Pointer<Uint8>, int, Pointer<Uint32>, Pointer<Uint8>, int, Pointer<Uint32>)
-      >('fisica_core_entitlement_report')(_open, id, reportId.length, token, 4096, tokenLength, body, 256, bodyLength);
-      if (status == 3) return null;
-      core._check(status);
-      return (
-        token: ascii.decode(token.asTypedList(tokenLength.value)),
-        body: Uint8List.fromList(body.asTypedList(bodyLength.value)),
-      );
-    } finally {
-      calloc.free(id);
-      calloc.free(token);
-      calloc.free(body);
-      calloc.free(tokenLength);
-      calloc.free(bodyLength);
-    }
-  }
-
-  /// Call only after the server confirmed the report; the local record is
-  /// then cleared.
-  void reportDone() => core._check(
-    core._library.lookupFunction<
-      Int32 Function(Pointer<Void>),
-      int Function(Pointer<Void>)
-    >('fisica_core_entitlement_report_done')(_open),
-  );
 
   /// Opaque state for the host to store. Restoring verifies every stored
   /// token again.

@@ -113,7 +113,7 @@ public final class FisicaClient {
             }
             self.readyDeadline = deadline
             self.queue.asyncAfter(deadline: .now() + timeout, execute: deadline)
-            self.entitlement?.markUsed()
+            self.entitlement?.checkStatus()
             self.transport.open()
         }
     }
@@ -191,7 +191,7 @@ public final class FisicaClient {
     }
     /// Start measuring; `durationMs` nil measures until `stop`. Completes when the Scale confirmed the start.
     public func start(durationMs: Int64? = nil, completion: @escaping Completion) {
-        entitlement?.markUsed()
+        entitlement?.checkStatus()
         request(.start, value: durationMs ?? -1, waitFor: .begin, completion: completion)
     }
     public func stop(completion: @escaping Completion) { request(.stop, value: 0, waitFor: .end, completion: completion) }
@@ -217,7 +217,7 @@ public final class FisicaClient {
     /// Analyze the frames collected so far; nil without a stable measurement.
     public func report() throws -> SessionReport? {
         guard !frames.isEmpty else { return nil }
-        entitlement?.markUsed()
+        entitlement?.checkStatus()
         guard let result = try core.analyzePackets(frames.map { $0.packet }) else { return nil }
         return SessionReport(weight: result[0], leftWidth: result[1], leftLength: result[2], rightWidth: result[3], rightLength: result[4], frames: frames)
     }

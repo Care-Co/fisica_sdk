@@ -94,9 +94,6 @@ internal static class Native {
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl,EntryPoint="fisica_core_entitlement_import")] internal static extern int fisica_core_entitlement_import(EntitlementHandle handle,byte[] token,uint length,ulong now,out uint outcome);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_status(EntitlementHandle handle,ulong now,[Out] ulong[] status,uint capacity);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_text(EntitlementHandle handle,uint field,[Out] byte[] output,uint capacity,out uint length);
-    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_mark_used(EntitlementHandle handle,ulong now);
-    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_report(EntitlementHandle handle,byte[] reportId,uint idLength,[Out] byte[] token,uint tokenCapacity,out uint tokenLength,[Out] byte[] body,uint bodyCapacity,out uint bodyLength);
-    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_report_done(EntitlementHandle handle);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_export(EntitlementHandle handle,[Out] byte[] output,uint capacity,out uint length);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_restore(EntitlementHandle handle,byte[] state,uint length);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_session_create(out IntPtr handle);

@@ -127,18 +127,15 @@ final class ClientTests: XCTestCase {
         waitFor("stop") { done in client.stop { _ in done() } }
         XCTAssertEqual(try client.report()?.weight, 70.5)
         waitFor("close") { done in client.close { _ in done() } }
-        let report = try XCTUnwrap(try entitlement.pendingReport(reportID: [UInt8](repeating: 9, count: 16)))
-        let body = try JSONSerialization.jsonObject(with: Data(report.body)) as! [String: Any]
-        XCTAssertEqual(Set(body.keys), ["report_id", "client_last_used_at", "observed_after_contract_end"])
-        XCTAssertEqual(body["observed_after_contract_end"] as? Bool, true)
+        // Using the SDK leaves no trace: the stored state is still only the signed token.
+        let state = String(decoding: try entitlement.exportState(), as: UTF8.self)
+        XCTAssertEqual(state, "FSS1\nC " + (tokens["revoked"] as! String) + "\n")
         let restored = try FisicaEntitlement(core: core, storage: nil, clock: { clock })
         try restored.restoreState(try entitlement.exportState())
         XCTAssertEqual(try restored.status().company, "acme")
-        try entitlement.reportDone()
-        XCTAssertNil(try entitlement.pendingReport(reportID: [UInt8](repeating: 1, count: 16)))
         XCTAssertTrue(seen.contains(.importRejected) && seen.contains(.testKey) && seen.contains(.contractRevoked))
     }
-    func testOnlineConfirmationUsageReportAndStorage() throws {
+    func testOnlineConfirmationAndStorage() throws {
         // Runs against the reference mock server started by tools/verify_bindings.py.
         let environment = ProcessInfo.processInfo.environment
         guard let address = environment["FISICA_ENTITLEMENT_ENDPOINT"], let endpoint = URL(string: address),
@@ -152,19 +149,17 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(try entitlement.importToken(valid), .accepted)
         XCTAssertNil(entitlement.syncNow(), entitlement.lastSyncError ?? "")
         XCTAssertEqual(try entitlement.status().verifiedAt, now)  // Server-signed confirmation time.
-        entitlement.markUsed()
+        entitlement.checkStatus()
         XCTAssertNil(entitlement.syncNow())
-        XCTAssertNil(try entitlement.pendingReport(reportID: [UInt8](repeating: 0, count: 16)))
-        // A communication failure is recorded, raises nothing and changes no state; the record waits.
-        let offlineStorage = storage.appendingPathComponent("offline", isDirectory: true)
-        let offline = try FisicaEntitlement(core: core, endpoint: URL(string: "http://127.0.0.1:9")!, storage: offlineStorage, clock: { now })
-        try offline.importToken(valid); offline.markUsed()
+        // A later start with the app's older token still finds the newer stored confirmation.
+        let reopened = try FisicaEntitlement(core: core, storage: storage, clock: { now })
+        try reopened.importToken(valid)
+        XCTAssertEqual(try reopened.status().verifiedAt, now)
+        // A communication failure is recorded, raises nothing and changes no state.
+        let offline = try FisicaEntitlement(core: core, endpoint: URL(string: "http://127.0.0.1:9")!,
+                                            storage: storage.appendingPathComponent("offline", isDirectory: true), clock: { now })
+        try offline.importToken(valid); offline.checkStatus()
         XCTAssertEqual(offline.syncNow()?.hasPrefix("network:"), true)
         XCTAssertEqual(try offline.status().contract, .active); XCTAssertEqual(try offline.status().verification, .fresh)
-        XCTAssertNotNil(try offline.pendingReport(reportID: [UInt8](repeating: 0, count: 16)))
-        // A new instance finds the stored record and can report it later.
-        let reopened = try FisicaEntitlement(core: core, storage: offlineStorage, clock: { now })
-        try reopened.importToken(valid)
-        XCTAssertNotNil(try reopened.pendingReport(reportID: [UInt8](repeating: 0, count: 16)))
     }
 }

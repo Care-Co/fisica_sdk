@@ -39,7 +39,7 @@ class FisicaClient {
   ({double weight, double leftWidth, double leftLength, double rightWidth, double rightLength, List<DecodedMeasurement> frames})?
   report() {
     if (_frames.isEmpty) return null;
-    entitlement?.markUsed();
+    entitlement?.checkStatus();
     final result = session.core.analyzePackets(
       _frames.map((frame) => frame.rawData).toList(),
     );
@@ -103,7 +103,7 @@ class FisicaClient {
 
   Future<FisicaSessionEvent> connect({int profile = 1}) async {
     if (_input != null) throw StateError('Already connected');
-    entitlement?.markUsed();
+    entitlement?.checkStatus();
     await transport.connect();
     _clock.start();
     _input = transport.received.listen((data) {
@@ -140,7 +140,7 @@ class FisicaClient {
   }
 
   Future<FisicaSessionEvent> start({Duration? duration}) {
-    entitlement?.markUsed();
+    entitlement?.checkStatus();
     return _checked(_action(2, duration?.inMilliseconds ?? -1));
   }
 

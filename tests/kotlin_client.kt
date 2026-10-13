@@ -98,12 +98,10 @@ fun main(args: Array<String>) {
         await<SessionEvent>("stop") { client.stop(it) }
         check(client.report()!!.weight == 70.5)
         await<SessionEvent>("close") { client.close(it) }
-        val report = entitlement.pendingReport(ByteArray(16) { 9 })!!
-        val body = String(report.body)
-        check(body.startsWith("{\"report_id\":\"" + "09".repeat(16) + "\",\"client_last_used_at\":") && body.endsWith(",\"observed_after_contract_end\":true}"))
+        // Using the SDK leaves no trace: the stored state is still only the signed token.
+        check(String(entitlement.exportState()) == "FSS1\nC " + values.getProperty("revoked") + "\n")
         val restored = FisicaEntitlement(core) { clock }
         restored.restoreState(entitlement.exportState()); check(restored.status().company == "acme")
-        entitlement.reportDone(); check(entitlement.pendingReport(ByteArray(16)) == null)
         val expected = FisicaEntitlementWarning.IMPORT_REJECTED or FisicaEntitlementWarning.TEST_KEY or FisicaEntitlementWarning.CONTRACT_REVOKED
         check(seen and expected == expected)
         entitlement.close(); restored.close()
@@ -122,25 +120,24 @@ fun main(args: Array<String>) {
         val order = ByteArray(50) { it.toByte() }; queue.enqueue(order)
         check(generateSequence { queue.next() }.flatMap { it.asSequence() }.toList() == order.toList())
     }
-    // Online confirmation, minimal usage report and local storage against the reference mock server.
+    // Online confirmation and token storage against the reference mock server.
     values.getProperty("endpoint")?.let { endpoint ->
         val directory = File(values.getProperty("storage")); var clock = values.getProperty("server_now").toLong()
         val entitlement = FisicaEntitlement(core, endpoint, directory) { clock }
         check(entitlement.importToken(values.getProperty("valid")) == FisicaEntitlementOutcome.ACCEPTED)
         check(entitlement.syncNow() == null) { "sync failed: ${entitlement.lastSyncError}" }
         check(entitlement.status().verifiedAt == clock) { "refresh did not adopt the server-signed time" }
-        entitlement.markUsed()
-        check(entitlement.syncNow() == null && entitlement.pendingReport(ByteArray(16)) == null)
-        // A communication failure is recorded, raises nothing and changes no state; the record waits.
+        entitlement.checkStatus()
+        check(entitlement.syncNow() == null)
+        // A later start with the app's older token still finds the newer stored confirmation.
+        val reopened = FisicaEntitlement(core, null, directory) { clock }
+        reopened.importToken(values.getProperty("valid"))
+        check(reopened.status().verifiedAt == clock && reopened.syncNow() == null)
+        // A communication failure is recorded, raises nothing and changes no state.
         val offline = FisicaEntitlement(core, "http://127.0.0.1:9", File(directory, "offline")) { clock }
-        offline.importToken(values.getProperty("valid")); offline.markUsed()
+        offline.importToken(values.getProperty("valid")); offline.checkStatus()
         check(offline.syncNow()!!.startsWith("network:"))
         check(offline.status().contract == FisicaContract.ACTIVE && offline.status().verification == FisicaVerification.FRESH)
-        check(offline.pendingReport(ByteArray(16)) != null)
-        // A new instance finds the stored record and can report it later.
-        val reopened = FisicaEntitlement(core, null, File(directory, "offline")) { clock }
-        reopened.importToken(values.getProperty("valid"))
-        check(reopened.pendingReport(ByteArray(16)) != null && reopened.syncNow() == null)
         entitlement.close(); offline.close(); reopened.close()
     }
     println("Kotlin client, transport and entitlement contract passed")

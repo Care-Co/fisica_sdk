@@ -118,7 +118,7 @@ public sealed class FisicaClient : IAsyncDisposable {
                 Transport.Close();
                 Finish(FisicaSessionOperation.Probe,null,new FisicaException(1001,"Transport was not ready in time"));
             }),TaskContinuationOptions.OnlyOnRanToCompletion);
-            Entitlement?.MarkUsed();
+            Entitlement?.CheckStatus();
             Transport.Open();
         });
         return waiter.Task;
@@ -182,7 +182,7 @@ public sealed class FisicaClient : IAsyncDisposable {
     }
     /// <summary>Start measuring; null duration measures until StopAsync. Completes when the Scale confirmed the start.</summary>
     public Task<SessionEvent> StartAsync(TimeSpan? duration=null) {
-        Entitlement?.MarkUsed();
+        Entitlement?.CheckStatus();
         return Request(FisicaSessionAction.Start,duration is {} d ? (long)d.TotalMilliseconds : -1,FisicaSessionOperation.Begin);
     }
     public Task<SessionEvent> StopAsync() => Request(FisicaSessionAction.Stop,0,FisicaSessionOperation.End);
@@ -213,7 +213,7 @@ public sealed class FisicaClient : IAsyncDisposable {
     /// <summary>Analyze the frames collected so far; null without a stable measurement.</summary>
     public SessionReport? Report() {
         var snapshot=Frames; if (snapshot.Count==0) return null;
-        Entitlement?.MarkUsed();
+        Entitlement?.CheckStatus();
         var result=Core.AnalyzePackets(snapshot.Select(f => f.Packet).ToArray());
         return result==null ? null : new(result[0],result[1],result[2],result[3],result[4],snapshot);
     }

@@ -124,8 +124,7 @@ Missing, outdated, rejected, ended or revoked entitlement information only produ
 a status and a `FisicaEntitlementWarning`; connection, measurement and analysis keep
 working. Online refresh of the information runs only when an `endpoint` is given. The
 SDK does not track its own use: no usage, last-use time or call counts are collected
-or reported (policy of 2026-10-14; code written for the earlier usage-record policy is
-still present and listed for removal in [entitlement](doc/entitlement.md)).
+or reported. See [entitlement](doc/entitlement.md).
 
 ```sh
 python tools/build_release.py --validation

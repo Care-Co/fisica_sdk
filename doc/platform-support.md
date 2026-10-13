@@ -81,25 +81,24 @@ BLE 측정 경로: 프로토콜 문서는 연속 측정(0x51)이 USB 전용이�
 
 ## 검증과 한계
 
-2026-10-13 실행 결과:
+2026-10-14 실행 결과:
 
 | 항목 | 결과 | 종류 |
 |---|---|---|
-| Python 테스트 | 175 passed | 로컬 macOS, Mock. Windows CI에서도 실행 |
+| Python 테스트 | 172 passed | 로컬 macOS, Mock. Windows CI에서도 실행 |
 | 네이티브 C ABI 계약 | UBSan, ASan+UBSan 통과. 토큰 1글자 변조 3144건·무작위 입력 2만 건 모두 거절 | 로컬 macOS, GitHub macOS CI(UBSan) |
 | Swift `swift test` | 8 passed (공통 벡터 2, 클라이언트·확인 정보 5, 온라인 갱신·저장 1) | 로컬 macOS XCTest, GitHub macOS CI |
 | Kotlin/JNI | 공통 벡터, 클라이언트·확인 정보·온라인 갱신·저장·MTU 분할 규칙 통과 | 로컬 JVM. `BleTransport`는 android-35로 컴파일만 |
 | C# | 공통 벡터, 클라이언트·Serial 오류 처리·확인 정보·온라인 갱신·저장 통과. Windows BLE는 컴파일 + 장치 없는 실패 경로 | 로컬 macOS .NET 8, GitHub Windows CI |
 | Dart | analyze 문제 없음, 16 tests passed (온라인 갱신·저장 포함) | 로컬 macOS Dart 3.11 |
-| 온라인 갱신 | 네 언어와 Python이 같은 Mock 서버에서 확인 정보를 갱신 | 로컬, CI(Swift·C#). 실제 서버 아님 |
+| 온라인 갱신 | 네 언어와 Python이 같은 Mock 서버에서 확인 정보를 갱신. 빈 갱신 요청 외에는 아무것도 보내지 않음을 서버 쪽에서 확인 | 로컬, CI(Swift·C#). 실제 서버 아님 |
 | Windows x64 MSVC | 코어 빌드, 전체 테스트, 휠 감사, Python 3.9/3.11/3.13/3.14 설치 검증 | GitHub Actions `windows-2022` |
 | Windows ARM64 MSVC | 코어·휠 교차 빌드와 감사 | GitHub Actions. ARM64 실행은 안 함 |
 | Apple | 코어 빌드, 테스트, XCFramework, universal2 | GitHub Actions `macos-15` |
 
 재현: `python tools/verify_bindings.py swift kotlin dotnet dart`.
 
-위 실행에는 2026-10-13 정책의 사용 보고 교환과 그 테스트도 포함돼 있었다. 2026-10-14 정책은 SDK 사용
-추적을 제외하므로 해당 코드와 테스트는 제거 대상이다([확인 정보](entitlement.md)의 "구현 상태").
+2026-10-14에 사용 기록 코드를 제거한 뒤 위 항목을 다시 실행한 결과다.
 
 검증하지 않은 것:
 

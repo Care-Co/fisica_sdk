@@ -28,7 +28,6 @@ int main(int argc, char **argv) {
     uint32_t outcome = 0;
     assert(fisica_core_entitlement_import(context, nullptr, 4, now, &outcome) == FISICA_INVALID_ARGUMENT);
     assert(fisica_core_entitlement_import(nullptr, nullptr, 0, now, &outcome) == FISICA_INVALID_ARGUMENT);
-    assert(fisica_core_entitlement_mark_used(context, now) == FISICA_OK);
 
     // Every single-character change must be rejected and must leave the context unverified.
     const char replacements[] = {'A', 'B', '-', '_', '.', '=', ' ', '\n', '\0', '{', '\x7f', char(0xff)};
@@ -61,24 +60,21 @@ int main(int argc, char **argv) {
     assert(fisica_core_entitlement_text(context, FISICA_ENTITLEMENT_COMPANY, text.data(), 4, &length) == FISICA_OK && std::memcmp(text.data(), "acme", 4) == 0 && text[4] == 99);
     assert(fisica_core_entitlement_text(context, 99, text.data(), 8, &length) == FISICA_INVALID_ARGUMENT);
 
-    std::array<uint8_t,16> id{}; std::vector<uint8_t> token(4096), body(256); uint32_t token_length = 0, body_length = 0;
-    assert(fisica_core_entitlement_report(context, id.data(), 16, token.data(), 4096, &token_length, body.data(), 256, &body_length) == FISICA_NO_RESULT);
-    assert(fisica_core_entitlement_report_done(context) == FISICA_INVALID_STATE);
-    assert(fisica_core_entitlement_mark_used(context, now + 1) == FISICA_OK);
-    assert(fisica_core_entitlement_report(context, id.data(), 15, token.data(), 4096, &token_length, body.data(), 256, &body_length) == FISICA_INVALID_ARGUMENT);
-    assert(fisica_core_entitlement_report(context, id.data(), 16, token.data(), 4096, &token_length, body.data(), 8, &body_length) == FISICA_BUFFER_TOO_SMALL);
-    assert(fisica_core_entitlement_report(context, id.data(), 16, token.data(), 4096, &token_length, body.data(), 256, &body_length) == FISICA_OK);
-    assert(token_length == valid.size() && body_length > 0);
-
     std::vector<uint8_t> state(262144, 99);
     assert(fisica_core_entitlement_export(context, state.data(), 4, &length) == FISICA_BUFFER_TOO_SMALL);
     assert(state[0] == 99);
     assert(fisica_core_entitlement_export(context, state.data(), uint32_t(state.size()), &length) == FISICA_OK);
     const std::vector<uint8_t> saved(state.begin(), state.begin() + length);
+    // The stored state is the signed token and nothing else: no time or count of use.
+    assert(std::string(saved.begin(), saved.end()) == "FSS1\nC " + valid + "\n");
     FisicaEntitlement *other = nullptr;
     assert(fisica_core_entitlement_create(&other) == FISICA_OK);
     assert(fisica_core_entitlement_restore(other, saved.data(), uint32_t(saved.size())) == FISICA_OK);
     assert(fisica_core_entitlement_status(other, now, status, 12) == FISICA_OK && status[2] == FISICA_CONTRACT_ACTIVE);
+    // Usage lines from earlier development builds are ignored and not written back.
+    const std::string legacy = std::string(saved.begin(), saved.end()) + "U " + valid + " 1800000007 0 1\n";
+    assert(fisica_core_entitlement_restore(other, reinterpret_cast<const uint8_t*>(legacy.data()), uint32_t(legacy.size())) == FISICA_OK);
+    assert(fisica_core_entitlement_export(other, state.data(), uint32_t(state.size()), &length) == FISICA_OK && length == saved.size());
     // A stored state edited byte by byte is either refused or loses the entries whose tokens no longer verify.
     for (size_t i = 0; i < saved.size(); i += 3) {
         std::vector<uint8_t> edited = saved; edited[i] ^= 0x21;

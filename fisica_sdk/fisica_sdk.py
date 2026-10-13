@@ -116,11 +116,12 @@ class FisicaSDK:
         from .entitlement import UNVERIFIED_STATUS
         return dict(UNVERIFIED_STATUS)
 
-    def _note_use(self):
-        # Real feature use only. Entitlement problems must never reach the measurement path.
+    def _check_entitlement(self):
+        # Status notice only; nothing about the use is recorded. Problems here must never
+        # reach the measurement path.
         try:
             if self._entitlement:
-                self._entitlement.mark_used()
+                self._entitlement.check_status()
             elif not self._unverified_notice:
                 self._unverified_notice = True
                 import warnings
@@ -300,7 +301,7 @@ class FisicaSDK:
         """
         if self._receiver:
             raise RuntimeError('Disconnect the current device before connecting another Scale')
-        self._note_use()
+        self._check_entitlement()
         try:
             if not isinstance(device, dict):
                 raise TypeError("Device must be a dictionary returned from scan_devices().")
@@ -415,7 +416,7 @@ class FisicaSDK:
             )
             self._starting = False
             raise RuntimeError("Not connected to a device.")
-        self._note_use()
+        self._check_entitlement()
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         loop = asyncio.new_event_loop()
@@ -700,7 +701,7 @@ class FisicaSDK:
         if not self._session or not self._session.frames:
             log.warning("It seems that measurement was not performed or data was not collected. Analyze will be skipped.")
             return
-        self._note_use()
+        self._check_entitlement()
 
         metadata = self._session.metadata
         frames = self._session.frames

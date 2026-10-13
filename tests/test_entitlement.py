@@ -1,4 +1,4 @@
-"""Entitlement: status and warnings only. Real C ABI and a mock server, no hardware."""
+"""Entitlement: status and warnings only, and no usage tracking. Real C ABI and a mock server."""
 import json
 from pathlib import Path
 import time
@@ -47,8 +47,25 @@ def test_unverified_context_keeps_base_license_and_attributes_nothing():
         status = context.status(NOW)
         assert (status['base_license'], status['verification'], status['contract_state']) == (1, 0, 0)
         assert status['warning_bits'] == 1 and status['company'] == ''
-        context.mark_used(NOW)
-        assert context.report(bytes(16)) is None  # Unverified use belongs to no company or shared id.
+        assert context.export_state() == b'FSS1\n'
+
+
+def test_sdk_has_no_usage_tracking_surface():
+    """Policy of 2026-10-14: nothing records or reports whether, when or how often the SDK is used."""
+    library = NativeCore()._lib
+    for name in ('mark_used', 'report', 'report_done'):
+        assert not hasattr(library, 'fisica_core_entitlement_' + name)
+    for name in ('mark_used', 'report', 'report_done', 'pending_report'):
+        assert not hasattr(NativeEntitlement, name) and not hasattr(Entitlement, name)
+    header = (Path(__file__).resolve().parents[1] / 'native' / 'include' / 'fisica_core.h').read_text(encoding='utf-8')
+    assert 'mark_used' not in header and 'entitlement_report' not in header
+    token = issue_token('acme', 'ctr-1', NOW)
+    with NativeEntitlement() as context:
+        context.import_token(token, NOW)
+        for later in (NOW + 5, NOW + 90 * DAY):
+            context.status(later)
+        # The only stored state is the signed token itself: no times of use, no counters.
+        assert context.export_state() == b'FSS1\nC ' + token.encode() + b'\n'
 
 
 def test_valid_token_is_fresh_and_three_states_are_independent():
@@ -132,64 +149,24 @@ def test_instances_are_isolated():
         first.import_token(issue_token('acme', 'ctr-1', NOW), NOW)
         assert second.status(NOW)['company'] == '' and second.status(NOW)['contract_state'] == 0
         second.import_token(issue_token('other', 'ctr-2', NOW), NOW)
-        first.mark_used(NOW)
-        assert second.report(bytes(16)) is None
         assert first.status(NOW)['company'] == 'acme' and second.status(NOW)['company'] == 'other'
-
-
-def test_usage_record_is_minimal_and_frozen_until_acknowledged():
-    with NativeEntitlement() as context:
-        context.import_token(issue_token('acme', 'ctr-1', NOW, kind='special', contract_end=NOW + DAY), NOW)
-        assert context.report(bytes(16)) is None  # Import/refresh alone is not use.
-        for offset in (10, 30, 20):
-            context.mark_used(NOW + offset)
-        token, body = context.report(b'\x01' * 16)
-        report = json.loads(body)
-        assert report == {'report_id': '01' * 16, 'client_last_used_at': NOW + 30, 'observed_after_contract_end': False}
-        assert token == context.token()
-        # A retry resends identical bytes under the same temporary id, even after newer use.
-        context.mark_used(NOW + 2 * DAY)
-        assert context.report(b'\x02' * 16) == (token, body)
-        context.report_done()
-        newer = json.loads(context.report(b'\x03' * 16)[1])
-        assert newer == {'report_id': '03' * 16, 'client_last_used_at': NOW + 2 * DAY, 'observed_after_contract_end': True}
-        context.report_done()
-        assert context.report(b'\x04' * 16) is None
-
-
-def test_refresh_due_alone_is_not_an_after_end_observation():
-    with NativeEntitlement() as context:
-        context.import_token(issue_token('acme', 'ctr-1', NOW), NOW)
-        context.mark_used(NOW + 90 * DAY)
-        assert json.loads(context.report(bytes(16))[1])['observed_after_contract_end'] is False
-
-
-def test_changing_contract_keeps_earlier_records_with_their_own_contract():
-    with NativeEntitlement() as context:
-        old = issue_token('acme', 'ctr-1', NOW)
-        context.import_token(old, NOW)
-        context.mark_used(NOW + 1)
-        context.import_token(issue_token('acme', 'ctr-2', NOW + 2), NOW + 2)
-        context.mark_used(NOW + 3)
-        token, body = context.report(bytes(16))
-        assert token == old and json.loads(body)['client_last_used_at'] == NOW + 1
-        context.report_done()
-        token, body = context.report(bytes(16))
-        assert token != old and json.loads(body)['client_last_used_at'] == NOW + 3
+        assert b'other' not in first.export_state() and first.token() != second.token()
 
 
 def test_state_restore_verifies_tokens_again_and_cannot_forge_attribution():
     with NativeEntitlement() as context, NativeEntitlement() as restored, NativeEntitlement() as forged:
-        context.import_token(issue_token('acme', 'ctr-1', NOW), NOW)
-        context.mark_used(NOW + 7)
-        context.report(b'\x05' * 16)
+        token = issue_token('acme', 'ctr-1', NOW)
+        context.import_token(token, NOW)
         state = context.export_state()
         restored.restore_state(state)
-        assert restored.status(NOW)['company'] == 'acme'
-        assert json.loads(restored.report(b'\x06' * 16)[1])['report_id'] == '05' * 16
+        assert restored.status(NOW)['company'] == 'acme' and restored.status(NOW)['verified_at'] == NOW
         tampered = state.replace(b'C FSE1.', b'C FSE1.x', 1)
         forged.restore_state(tampered)
         assert forged.status(NOW)['contract_state'] == 0 and forged.status(NOW)['company'] == ''
+        # Usage lines written by earlier development builds are ignored and not kept.
+        legacy = state + b'U ' + token.encode() + b' 1800000007 0 1\nR ' + b'05' * 16 + b' ' + token.encode() + b' 1800000007 0\n'
+        restored.restore_state(legacy)
+        assert restored.status(NOW)['company'] == 'acme' and restored.export_state() == state
 
 
 def test_offline_file_on_a_pc_that_was_never_online(tmp_path):
@@ -200,51 +177,50 @@ def test_offline_file_on_a_pc_that_was_never_online(tmp_path):
     status = entitlement.status()
     assert (status['verification'], status['contract_state'], status['company']) == ('fresh', 'active', 'acme')
     assert status['key_environment'] == 'test' and 'test_key' in status['warnings']
-    entitlement.mark_used()
-    # No endpoint: nothing leaves the PC, the record waits locally.
+    entitlement.check_status()
+    # No endpoint: nothing leaves the PC.
     assert entitlement.sync(wait=True) is None
     clock.now = NOW + 31 * DAY
     assert entitlement.import_file(file) == 'accepted'  # Same file again: window is not extended.
     assert entitlement.status()['verification'] == 'refresh_due'
-    reopened = quiet(file=file, storage=tmp_path / 'state', clock=clock)
-    assert json.loads(reopened._native.report(bytes(16))[1])['client_last_used_at'] == NOW
+    # What is stored is the signed token, nothing about use.
+    assert (tmp_path / 'state').read_bytes() == b'FSS1\nC ' + file.read_bytes().strip() + b'\n'
 
 
-def test_online_refresh_and_minimal_usage_report(server, tmp_path):
+def test_online_refresh_sends_only_the_token_and_stores_the_newer_confirmation(server, tmp_path):
     mock, url = server
     clock = Clock(NOW + 29 * DAY)
     mock.clock.now = clock.now
-    entitlement = quiet(token=issue_token('acme', 'ctr-1', NOW), endpoint=url, storage=tmp_path / 'state', clock=clock)
-    entitlement.mark_used()
+    old = issue_token('acme', 'ctr-1', NOW)
+    entitlement = quiet(token=old, endpoint=url, storage=tmp_path / 'state', clock=clock)
+    entitlement.check_status()
     result = entitlement.sync(wait=True)
-    assert result['error'] is None
+    assert result == {'refreshed': True, 'error': None}
     assert entitlement.status()['verified_at'] == NOW + 29 * DAY  # Server-signed confirmation time.
-    record = mock.usage[('acme', 'ctr-1')]
-    assert record == {'client_last_used_at': NOW + 29 * DAY, 'observed_after_contract_end': False, 'reported_at': NOW + 29 * DAY}
-    bodies = [body for path, body in mock.requests if path == '/sdk/v1/usage']
-    assert all(set(body) == {'report_id', 'client_last_used_at', 'observed_after_contract_end'} for body in bodies)
-    assert entitlement.sync(wait=True)['reported'] == 0  # Local record was cleared after confirmation.
+    # Every request is a refresh with an empty body: no usage, time or count is sent.
+    assert mock.requests and all(path == '/sdk/v1/entitlement/refresh' and body == {} for path, body in mock.requests)
+    assert not hasattr(mock, 'usage')
+    # A later start with the app's older token still finds the newer stored confirmation.
+    reopened = quiet(token=old, storage=tmp_path / 'state', clock=clock)
+    assert reopened.status()['verified_at'] == NOW + 29 * DAY
 
 
-def test_network_failure_is_not_expiry_and_keeps_the_record(server, tmp_path):
+def test_network_failure_is_not_expiry(server, tmp_path):
     mock, url = server
     clock = Clock()
     entitlement = quiet(token=issue_token('acme', 'ctr-1', NOW), endpoint=url, storage=tmp_path / 'state', clock=clock)
     entitlement.sync(wait=True)
     before = entitlement.status()
     mock.fail_requests = 100
-    entitlement.mark_used()
     result = entitlement.sync(wait=True)
     after = entitlement.status()
     assert result['error'] and after['last_sync_error']
     assert (after['verification'], after['contract_state'], after['verified_at']) == ('fresh', 'active', before['verified_at'])
-    assert ('acme', 'ctr-1') not in mock.usage
     mock.fail_requests = 0
     assert entitlement.sync(wait=True)['error'] is None
-    assert mock.usage[('acme', 'ctr-1')]['client_last_used_at'] == NOW
 
 
-def test_server_signed_revocation_and_end_are_observed_without_blocking(server, tmp_path):
+def test_server_signed_revocation_is_shown_without_blocking(server, tmp_path):
     mock, url = server
     mock.add_contract('acme', 'ctr-1', kind='special', revoked_at=NOW)
     entitlement = quiet(token=issue_token('acme', 'ctr-1', NOW - DAY, kind='special'), endpoint=url,
@@ -252,31 +228,19 @@ def test_server_signed_revocation_and_end_are_observed_without_blocking(server, 
     entitlement.sync(wait=True)
     status = entitlement.status()
     assert (status['base_license'], status['contract_state']) == ('granted', 'revoked')
-    entitlement.mark_used()
-    entitlement.sync(wait=True)
-    assert mock.usage[('acme', 'ctr-1')]['observed_after_contract_end'] is True
+    entitlement.check_status()  # Use after revocation raises a warning only and is not recorded anywhere.
+    assert all(body == {} for _, body in mock.requests)
 
 
-def test_duplicate_and_delayed_reports_do_not_double_count_or_move_time_back(server):
+def test_server_accepts_nothing_but_an_empty_refresh(server):
     mock, _ = server
     token = issue_token('acme', 'ctr-1', NOW)
-    newer = {'report_id': 'a' * 32, 'client_last_used_at': NOW + 500, 'observed_after_contract_end': False}
-    older = {'report_id': 'b' * 32, 'client_last_used_at': NOW + 100, 'observed_after_contract_end': False}
-    assert mock.handle('/sdk/v1/usage', token, newer)[0] == 204
-    assert mock.handle('/sdk/v1/usage', token, newer)[0] == 204
-    assert mock.handle('/sdk/v1/usage', token, older)[0] == 204
-    assert mock.usage[('acme', 'ctr-1')]['client_last_used_at'] == NOW + 500 and len(mock.report_ids) == 2
-
-
-def test_server_refuses_body_identity_and_extra_fields(server):
-    mock, _ = server
-    token = issue_token('acme', 'ctr-1', NOW)
-    report = {'report_id': 'c' * 32, 'client_last_used_at': NOW, 'observed_after_contract_end': False}
-    assert mock.handle('/sdk/v1/usage', token, {**report, 'company': 'other'})[0] == 400
-    assert mock.handle('/sdk/v1/usage', token, {**report, 'measurement_count': 3})[0] == 400
-    assert mock.handle('/sdk/v1/usage', None, report)[0] == 401
-    assert mock.handle('/sdk/v1/usage', token[:-2] + 'zz', report)[0] == 401
-    assert mock.usage == {}
+    assert mock.handle('/sdk/v1/entitlement/refresh', token, {})[0] == 200
+    assert mock.handle('/sdk/v1/entitlement/refresh', token, {'client_last_used_at': NOW})[0] == 400
+    assert mock.handle('/sdk/v1/entitlement/refresh', token, {'company': 'other'})[0] == 400
+    assert mock.handle('/sdk/v1/usage', token, {})[0] == 404  # There is no usage endpoint.
+    assert mock.handle('/sdk/v1/entitlement/refresh', None, {})[0] == 401
+    assert mock.handle('/sdk/v1/entitlement/refresh', token[:-2] + 'zz', {})[0] == 401
 
 
 def test_warnings_are_distinct_from_errors_and_issued_once(tmp_path):
@@ -285,8 +249,8 @@ def test_warnings_are_distinct_from_errors_and_issued_once(tmp_path):
         entitlement = Entitlement(token=issue_token('acme', 'ctr-1', NOW), storage=None, clock=clock)
     clock.now = NOW + 31 * DAY
     with pytest.warns(FisicaEntitlementWarning, match='30 days') as caught:
-        entitlement.mark_used()
-        entitlement.mark_used()
+        entitlement.check_status()
+        entitlement.check_status()
     assert len(caught) == 1
     with pytest.warns(FisicaEntitlementWarning, match='rejected'):
         assert entitlement.import_token('not a token') == 'rejected_format'

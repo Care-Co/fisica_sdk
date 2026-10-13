@@ -131,7 +131,7 @@ class FisicaClient(
                 finish(FisicaSessionOperation.PROBE, null, FisicaException(1001, "Transport was not ready in time"))
             }
         }, timeoutMs, TimeUnit.MILLISECONDS)
-        entitlement?.markUsed()
+        entitlement?.checkStatus()
         transport.open()
     }
 
@@ -197,7 +197,7 @@ class FisicaClient(
     /** Start measuring; null [durationMs] measures until [stop]. Completes when the Scale confirmed the start. */
     @JvmOverloads
     fun start(durationMs: Long? = null, completion: (SessionEvent?, Throwable?) -> Unit) {
-        entitlement?.markUsed()
+        entitlement?.checkStatus()
         request(FisicaSessionAction.START, durationMs ?: -1, FisicaSessionOperation.BEGIN, completion)
     }
     fun stop(completion: (SessionEvent?, Throwable?) -> Unit) = request(FisicaSessionAction.STOP, 0, FisicaSessionOperation.END, completion)
@@ -229,7 +229,7 @@ class FisicaClient(
     fun report(): SessionReport? {
         val snapshot = frames
         if (snapshot.isEmpty()) return null
-        entitlement?.markUsed()
+        entitlement?.checkStatus()
         val result = core.analyzePackets(snapshot.map { it.packet }) ?: return null
         return SessionReport(result[0], result[1], result[2], result[3], result[4], snapshot)
     }

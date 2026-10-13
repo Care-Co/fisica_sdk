@@ -3,6 +3,9 @@
 Signature checks and every status decision are made by the native core. Nothing in
 this module enables or disables SDK features; failures here are reported as status
 and warnings and never interrupt connection, measurement or analysis.
+
+The SDK does not track its own use: nothing here records or reports whether, when or
+how often it is used. The stored state is the signed token, kept for offline checks.
 """
 import hashlib
 import json
@@ -73,7 +76,7 @@ class Entitlement:
         self._on_status = on_status
         self._warned = 0
         self._sync_thread = None
-        self._sync_lock = threading.Lock()  # One exchange at a time, so a report is never confirmed twice.
+        self._sync_lock = threading.Lock()  # One exchange with the server at a time.
         self._next_sync = 0.0
         self.last_sync_error = None
         if file is not None:
@@ -115,7 +118,7 @@ class Entitlement:
                 try:
                     path = self._path(self._native.status(now))
                     if path and path.is_file():
-                        # Stored usage and a possibly newer confirmation win over an older file.
+                        # A newer confirmation stored earlier wins over an older file.
                         self._native.restore_state(path.read_bytes())
                         self._native.import_token(token, now)
                 except (OSError, ValueError):
@@ -165,16 +168,17 @@ class Entitlement:
             except Exception:
                 pass
 
-    def mark_used(self):
-        """Record real feature use. Safe to call from measurement paths: never blocks or raises."""
+    def check_status(self):
+        """Re-evaluate warnings for the current time and refresh in the background when online.
+
+        Called from feature paths so a long-running app notices outdated information.
+        It records nothing about the use and never blocks or raises.
+        """
         try:
-            with self._lock:
-                self._native.mark_used(self._now())
-                self._save()
-                self._notify()
+            self._notify()
             self.sync()
         except Exception as error:
-            self.last_sync_error = 'usage: ' + str(error)
+            self.last_sync_error = 'check: ' + str(error)
 
     def _post(self, path, token, body):
         request = urllib.request.Request(self._endpoint + path, data=json.dumps(body).encode() if isinstance(body, dict) else body,
@@ -184,29 +188,20 @@ class Entitlement:
             return json.loads(data) if data else None
 
     def _sync(self):
-        """Refresh, then report pending usage. A failure changes no entitlement state."""
+        """Ask the server for newer confirmation. A failure changes no entitlement state."""
         with self._sync_lock:
             return self._sync_locked()
 
     def _sync_locked(self):
-        result = {'refreshed': False, 'reported': 0, 'error': None}
+        result = {'refreshed': False, 'error': None}
         try:
             with self._lock:
                 token = self._native.token()
             if not token:
-                return result  # Nothing verified: nothing to refresh and nothing attributable to report.
+                return result  # Nothing verified: nothing to refresh.
             response = self._post('/sdk/v1/entitlement/refresh', token, {})
             with self._lock:
                 result['refreshed'] = self._native.import_token(response['token'], self._now()) == 1
-            while True:
-                with self._lock:
-                    pending = self._native.report(os.urandom(16))
-                if pending is None:
-                    break
-                self._post('/sdk/v1/usage', pending[0], pending[1])
-                with self._lock:
-                    self._native.report_done()  # Local record is cleared only after the server confirmed.
-                result['reported'] += 1
             self.last_sync_error = None
         except Exception as error:
             # A communication failure is not an expiry or a revocation.
@@ -220,7 +215,7 @@ class Entitlement:
         return result
 
     def sync(self, wait=False, force=False):
-        """Online confirmation and usage report. Background by default; never raises."""
+        """Online confirmation. Background by default; never raises."""
         if not (self._online and self._endpoint):
             return None
         if wait:

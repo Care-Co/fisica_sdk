@@ -80,7 +80,7 @@ print(sdk.entitlement_status())
 ```
 
 - `endpoint`를 주지 않으면 네트워크를 전혀 쓰지 않는다. `online=False`로도 끌 수 있다.
-- `endpoint`가 있으면 백그라운드에서 확인 정보를 갱신한다(최대 시간당 1회).
+- `endpoint`가 있으면 가져오기 직후와 기능 사용 시점에 백그라운드에서 확인 정보를 갱신한다(최대 시간당 1회).
   통신 실패는 `last_sync_error`에만 남고 상태를 바꾸지 않는다. 측정 루프·종료·자원 정리를 막지 않는다.
 - 토큰은 기본으로 사용자 앱 데이터 폴더에 회사+계약별 파일로 저장한다. `storage=경로` 또는 `None` 지정 가능.
 - 확인 정보를 설정하지 않으면 첫 실제 사용 때 `FisicaEntitlementWarning`이 한 번 나온다.
@@ -126,29 +126,15 @@ Mock 서버와 테스트 서명기는 테스트 키만 쓴다. 서명기는 RFC 
 6. 기존 조직·계약·결제·장비 기능을 재사용할 수 있는지 먼저 확인한다. 계약 종료를 구독·결제
    NONE 상태나 장비 REVOKED로 표현하지 않는다.
 
-## 구현 상태 (2026-10-14): 코드에 사용 기록 기능이 남아 있다
+## 구현 상태 (2026-10-14)
 
-위 정책은 2026-10-14에 확정됐다. 현재 코드는 2026-10-13 정책으로 작성돼 **사용 기록 누적, 로컬 저장,
-재시도용 보고 고정, `/sdk/v1/usage` 전송과 그 테스트를 아직 포함한다.** `endpoint`를 지정하면 실제로 전송을
-시도한다. 문서만 바뀐 상태이므로 코드에서 제거하기 전에는 이 브랜치를 고객에게 제공하지 않는다.
+2026-10-13 정책으로 만들었던 사용 기록 기능은 코드에서 제거했다.
 
-제거 대상(토큰 저장, 온라인 갱신, 서명 검증, 파트너의 측정 보고서 저장은 대상이 아니다):
-
-| 위치 | 제거할 것 |
-|---|---|
-| `native/include/fisica_core.h` | `fisica_core_entitlement_mark_used`, `_report`, `_report_done` 선언과 설명 |
-| `native/src/fisica_entitlement.cpp` | `Usage`·`Report` 구조와 위 세 함수, 상태 직렬화의 `U`·`R` 줄(토큰 `C` 줄만 유지) |
-| `fisica_sdk/native.py`, `entitlement.py`, `fisica_sdk.py` | `mark_used`/`report`/`report_done` 바인딩, 갱신 뒤의 보고 루프, `_note_use`의 사용 표시 |
-| `wrappers/swift` `Entitlement.swift`, `Client.swift` | `markUsed`, `pendingReport`, `reportDone`, 보고 루프, 클라이언트의 `markUsed` 호출 |
-| `wrappers/kotlin` `Entitlement.kt`, `Client.kt`, `Core.kt`, `bridge/fisica_jni.cpp` | 같은 API와 JNI 함수 3개 |
-| `wrappers/dotnet` `Entitlement.cs`, `Client.cs`, `Core.cs` | 같은 API와 P/Invoke 3개 |
-| `wrappers/flutter` `entitlement.dart`, `client.dart`, podspec 2개 | 같은 API. podspec 심볼 목록은 재생성 |
-| `tools/entitlement_dev.py` | Mock 서버의 `/sdk/v1/usage`, `usage`, `report_ids`. 갱신 요청은 빈 body만 받도록 명세에 맞춤 |
-| `tools/verify_bindings.py` | Mock 서버가 사용 보고를 받았는지 확인하는 부분 |
-| `tests/test_entitlement.py`, `native_entitlement.cpp`, `kotlin_client.kt`, `dotnet/Program.cs`, Swift `ContractTests.swift`, Dart `client_test.dart` | 사용 기록·보고 테스트. 갱신·저장·상태 테스트는 유지 |
-
-함께 정할 것:
-
-- 실제 사용 시점에 하던 일 중 유지할 것은 백그라운드 갱신 시도와 경고 갱신뿐이다. 호출 지점은 남기되 기록은 하지 않는다.
-- ABI 1.4는 아직 배포한 적이 없으므로 세 함수를 그대로 삭제한다. 배포 후였다면 major 변경이 필요했다.
-- 이미 저장된 상태 파일의 `U`·`R` 줄은 복원 시 무시한다.
+- 코어: `fisica_core_entitlement_mark_used`, `_report`, `_report_done` 삭제. 컨텍스트의 상태는 마지막으로
+  확인한 토큰뿐이고, 저장용 상태도 토큰 한 줄이다. 이전 개발 빌드가 쓴 사용 기록 줄은 복원 시 무시한다.
+- 래퍼(Python·Swift·Kotlin·C#·Dart): 사용 표시, 대기 보고 조회·완료, 보고 전송 삭제.
+  기능 사용 시점에는 `check_status()`/`checkStatus()`가 경고를 다시 계산하고 백그라운드 갱신을 시도할 뿐 아무것도 기록하지 않는다.
+- Mock 서버: `/sdk/v1/usage` 삭제(404). 갱신 요청은 빈 body만 받는다.
+- 검증: 헤더와 바이너리에 해당 심볼이 없음, 저장 상태가 토큰뿐임, 각 언어가 서버에 **빈 갱신 요청 외에는 아무것도
+  보내지 않음**을 Mock 서버 쪽에서 확인한다(`tests/test_entitlement.py`, `python tools/verify_bindings.py ...`).
+- ABI 1.4는 배포한 적이 없어 함수 삭제에 major 변경을 하지 않았다.

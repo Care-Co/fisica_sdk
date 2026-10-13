@@ -24,15 +24,16 @@ public sealed class FisicaEntitlement : IDisposable {
     static readonly HttpClient http=new() { Timeout=TimeSpan.FromSeconds(5) };
     readonly EntitlementHandle handle=new(); readonly object gate=new(); readonly Func<ulong> clock; readonly FisicaCore owner;
     readonly string? endpoint, storage; readonly bool online;
-    readonly SemaphoreSlim exchange=new(1,1);  // One exchange at a time, so a report is never confirmed twice.
+    readonly SemaphoreSlim exchange=new(1,1);  // One exchange with the server at a time.
     long nextSync; int syncing;
     FisicaEntitlementWarning warned;
     /// <summary>Raised with newly appeared warnings so the app can show or log them.</summary>
     public event Action<FisicaEntitlementWarning,EntitlementStatus>? Warning;
     /// <summary>Last storage or network problem, or null. Never an entitlement state.</summary>
     public string? LastSyncError { get; private set; }
-    /// <param name="endpoint">Server base URL for online confirmation and the minimal usage report. Without it no network is used.</param>
-    /// <param name="storage">Directory for the state file, AutoStorage for the default location, or null for memory only.</param>
+    /// <param name="endpoint">Server base URL for online confirmation. Without it no network is used.</param>
+    /// <param name="storage">Directory for the stored token, AutoStorage for the default location, or null for memory only.
+    /// SDK use is not tracked: nothing but the signed token is stored.</param>
     /// <param name="online">False keeps a configured endpoint unused.</param>
     public FisicaEntitlement(FisicaCore core,Func<ulong>? clock=null,string? endpoint=null,string? storage=AutoStorage,bool online=true) {
         owner=core; this.clock=clock ?? (() => (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -49,7 +50,7 @@ public sealed class FisicaEntitlement : IDisposable {
             Open(); var data=Encoding.UTF8.GetBytes(token);
             FisicaCore.Check(Native.fisica_core_entitlement_import(handle,data,(uint)data.Length,clock(),out outcome));
             if (outcome==(uint)FisicaEntitlementOutcome.Accepted) {
-                // Stored usage and a possibly newer confirmation win over an older file.
+                // A newer confirmation stored earlier wins over an older file.
                 try {
                     if (StateFile() is {} file && File.Exists(file)) {
                         var state=File.ReadAllBytes(file);
@@ -98,9 +99,10 @@ public sealed class FisicaEntitlement : IDisposable {
         var status=Status(); var fresh=status.Warnings & ~warned; warned=status.Warnings;
         if (fresh!=0) Warning?.Invoke(fresh,status);
     }
-    /// <summary>Record real feature use (connect, measure, analyze). Does nothing without a verified contract.</summary>
-    public void MarkUsed() {
-        lock(gate) { if(handle.IsClosed) return; Native.fisica_core_entitlement_mark_used(handle,clock()); Save(); Notify(); }
+    /// <summary>Re-evaluate warnings for the current time and refresh in the background when online.
+    /// Called from feature paths; it records nothing about the use and never blocks.</summary>
+    public void CheckStatus() {
+        lock(gate) { if(handle.IsClosed) return; Notify(); }
         Sync();
     }
 
@@ -111,23 +113,17 @@ public sealed class FisicaEntitlement : IDisposable {
         response.EnsureSuccessStatusCode();
         return await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
     }
-    /// <summary>Online confirmation, then the pending usage reports. Returns null or the problem. A failure
-    /// changes no entitlement state: it is never an expiry or a revocation.</summary>
+    /// <summary>Online confirmation. Returns null or the problem. A failure changes no entitlement state:
+    /// it is never an expiry or a revocation.</summary>
     public async Task<string?> SyncAsync() {
         if (!online || endpoint==null) return null;
         await exchange.WaitAsync().ConfigureAwait(false);
         try {
             string token; lock(gate) { if(handle.IsClosed) return null; token=Text(FisicaEntitlementText.Token); }
-            if (token.Length==0) return null;  // Nothing verified: nothing to refresh, nothing attributable to report.
+            if (token.Length==0) return null;  // Nothing verified: nothing to refresh.
             using var refreshed=System.Text.Json.JsonDocument.Parse(await Post("/sdk/v1/entitlement/refresh",token,"{}"u8.ToArray()).ConfigureAwait(false));
             var data=Encoding.ASCII.GetBytes(refreshed.RootElement.GetProperty("token").GetString()!);
             lock(gate) { if(!handle.IsClosed) Native.fisica_core_entitlement_import(handle,data,(uint)data.Length,clock(),out _); }
-            while (true) {
-                (string Token,byte[] Body)? report; lock(gate) report=handle.IsClosed ? null : PendingReport(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16));
-                if (report is not {} pending) break;
-                await Post("/sdk/v1/usage",pending.Token,pending.Body).ConfigureAwait(false);
-                lock(gate) { if(!handle.IsClosed) ReportDone(); }  // Cleared only after the server confirmed.
-            }
             LastSyncError=null;
         } catch (Exception error) when (error is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException or FisicaException) {
             LastSyncError="network: "+error.Message;
@@ -144,16 +140,6 @@ public sealed class FisicaEntitlement : IDisposable {
         Interlocked.Exchange(ref nextSync,now+3_600_000);
         _=Task.Run(async () => { try { await SyncAsync().ConfigureAwait(false); } catch (Exception) { /* Recorded in LastSyncError. */ } finally { Volatile.Write(ref syncing,0); } });
     }
-    /// <summary>Next pending usage report: bearer token and JSON body for the host to send. reportId is 16 random
-    /// bytes naming this report for retry de-duplication only. Null when nothing is pending.</summary>
-    public (string Token,byte[] Body)? PendingReport(byte[] reportId) { lock(gate) {
-        Open(); var token=new byte[4096]; var body=new byte[256];
-        int status=Native.fisica_core_entitlement_report(handle,reportId,(uint)reportId.Length,token,(uint)token.Length,out uint tokenLength,body,(uint)body.Length,out uint bodyLength);
-        if (status==3) return null; FisicaCore.Check(status);
-        return (Encoding.ASCII.GetString(token,0,(int)tokenLength),body[..(int)bodyLength]);
-    } }
-    /// <summary>Call only after the server confirmed the report; the local record is then cleared.</summary>
-    public void ReportDone() { lock(gate) { Open(); FisicaCore.Check(Native.fisica_core_entitlement_report_done(handle)); } }
     /// <summary>Opaque state for the host to store. Restoring verifies every stored token again.</summary>
     public byte[] ExportState() { lock(gate) {
         Open(); var data=new byte[262144];

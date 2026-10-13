@@ -20,12 +20,13 @@ public struct EntitlementStatus {
 
 /// One SDK instance's verified company/contract context. Calls are serialized.
 /// Import a server-signed token or file; status and warnings never block features.
+/// It does not track SDK use: the only stored state is the signed token.
 public final class FisicaEntitlement {
     private var handle: OpaquePointer?
     private let lock = NSRecursiveLock()
     private let clock: () -> UInt64
     private let endpoint: URL?, storage: URL?, online: Bool
-    // Serial: one exchange at a time, so a report is never confirmed twice.
+    // Serial: one exchange with the server at a time.
     private let exchange = DispatchQueue(label: "fisica.entitlement.sync")
     private var nextSync = DispatchTime.now(), syncing = false
     /// Called whenever a new warning appears, so the app can show or log it.
@@ -61,7 +62,7 @@ public final class FisicaEntitlement {
             try check(fisica_core_entitlement_import(try open(), bytes, UInt32(bytes.count), clock(), &outcome))
         } catch { lock.unlock(); throw error }
         if outcome == FisicaEntitlementOutcome.accepted.rawValue {
-            // Stored usage and a possibly newer confirmation win over an older file.
+            // A newer confirmation stored earlier wins over an older file.
             if let file = stateFile(), let state = try? Data(contentsOf: file) {
                 let stored = [UInt8](state); var ignored: UInt32 = 0
                 if fisica_core_entitlement_restore(handle, stored, UInt32(stored.count)) == 0 {
@@ -120,13 +121,10 @@ public final class FisicaEntitlement {
         warned = bits
         if !new.isEmpty { onWarning?(new, status) }
     }
-    /// Record real feature use (connect, measure, analyze). Does nothing without a verified contract.
-    public func markUsed() {
-        lock.lock()
-        guard let handle else { lock.unlock(); return }
-        _ = fisica_core_entitlement_mark_used(handle, clock())
-        save(); notify()
-        lock.unlock()
+    /// Re-evaluate warnings for the current time and refresh in the background when online.
+    /// Called from feature paths; it records nothing about the use and never blocks.
+    public func checkStatus() {
+        lock.lock(); if handle != nil { notify() }; lock.unlock()
         sync()
     }
 
@@ -153,24 +151,19 @@ public final class FisicaEntitlement {
         guard online, endpoint != nil else { return nil }
         do {
             lock.lock(); let token = handle == nil ? "" : ((try? text(.token)) ?? ""); lock.unlock()
-            if token.isEmpty { return nil }  // Nothing verified: nothing to refresh, nothing attributable to report.
+            if token.isEmpty { return nil }  // Nothing verified: nothing to refresh.
             let response = try JSONSerialization.jsonObject(with: try post("/sdk/v1/entitlement/refresh", token: token, body: Data("{}".utf8))) as? [String: Any]
             guard let refreshed = response?["token"] as? String else { throw FisicaError(code: 1001, message: "Unexpected refresh response") }
             lock.lock()
             if handle != nil { let bytes = Array(refreshed.utf8); var ignored: UInt32 = 0; _ = fisica_core_entitlement_import(handle, bytes, UInt32(bytes.count), clock(), &ignored) }
             lock.unlock()
-            while let report = try pendingReport(reportID: (0..<16).map { _ in UInt8.random(in: 0...255) }) {
-                _ = try post("/sdk/v1/usage", token: report.token, body: Data(report.body))
-                try reportDone()  // Cleared only after the server confirmed.
-            }
             lastSyncError = nil
         } catch { lastSyncError = "network: \((error as? FisicaError)?.message ?? error.localizedDescription)" }
         lock.lock(); if handle != nil { save(); notify() }; lock.unlock()
         return lastSyncError
     }
-    /// Online confirmation, then the pending usage reports, on the calling thread (do not call on the
-    /// main thread). Returns nil or the problem. A failure changes no entitlement state: it is never
-    /// an expiry or a revocation.
+    /// Online confirmation on the calling thread (do not call on the main thread). Returns nil or
+    /// the problem. A failure changes no entitlement state: it is never an expiry or a revocation.
     @discardableResult public func syncNow() -> String? { exchange.sync { exchangeOnce() } }
     /// Background `syncNow`, at most hourly unless forced. Never blocks or throws into the caller.
     public func sync(force: Bool = false) {
@@ -185,19 +178,6 @@ public final class FisicaEntitlement {
             self.lock.lock(); self.syncing = false; self.lock.unlock()
         }
     }
-    /// Next pending usage report: bearer token and JSON body for the host to send.
-    /// `reportID` is 16 random bytes naming this report for retry de-duplication only.
-    public func pendingReport(reportID: [UInt8]) throws -> (token: String, body: [UInt8])? {
-        lock.lock(); defer { lock.unlock() }
-        var token = [UInt8](repeating: 0, count: 4096), body = [UInt8](repeating: 0, count: 256)
-        var tokenLength: UInt32 = 0, bodyLength: UInt32 = 0
-        let status = fisica_core_entitlement_report(try open(), reportID, UInt32(reportID.count), &token, UInt32(token.count),
-                                                    &tokenLength, &body, UInt32(body.count), &bodyLength)
-        if status == 3 { return nil }; try check(status)
-        return (String(decoding: token.prefix(Int(tokenLength)), as: UTF8.self), Array(body.prefix(Int(bodyLength))))
-    }
-    /// Call only after the server confirmed the report; the local record is then cleared.
-    public func reportDone() throws { lock.lock(); defer { lock.unlock() }; try check(fisica_core_entitlement_report_done(try open())) }
     /// Opaque state for the host to store. Restoring verifies every stored token again.
     public func exportState() throws -> [UInt8] {
         lock.lock(); defer { lock.unlock() }

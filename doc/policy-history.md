@@ -16,8 +16,8 @@
 수집하지 않고, 임시 `report_id`로 재시도를 중복 제거하며, 서버 확인 후 로컬 기록을 지우는 규칙을 두었다.
 
 2026-10-14에 이 기능 전체를 제외했다. 전체 문장은 git 이력(커밋 `427d400`의 `doc/entitlement.md`,
-`doc/entitlement-api.yaml`, `LICENSE` 9조)에 있다. 이 정책으로 작성된 코드의 제거 상태는
-[entitlement.md](entitlement.md)의 "구현 상태" 절을 따른다.
+`doc/entitlement-api.yaml`, `LICENSE` 9조)에 있다. 이 정책으로 작성했던 코드도 2026-10-14에 제거했다
+([entitlement.md](entitlement.md)의 "구현 상태").
 
 ## 이전 정책을 담고 있는 기록 문서
 

@@ -124,12 +124,11 @@ class MockEntitlementServer:
     """In-memory reference for the server API contract (doc/entitlement-api.md).
 
     Company and contract always come from the verified bearer token, never from the body.
+    It keeps no usage data: a refresh is not a record of SDK use.
     """
     def __init__(self, clock=time.time):
         self.clock = clock
         self.contracts = {}   # (company, contract) -> dict(kind, contract_start, contract_end, revoked_at, grants)
-        self.usage = {}       # (company, contract) -> dict(client_last_used_at, reported_at, observed_after_contract_end)
-        self.report_ids = set()
         self.fail_requests = 0
         self.requests = []
         self._lock = threading.Lock()
@@ -152,23 +151,11 @@ class MockEntitlementServer:
             key = (claims['company'], claims['contract']) if claims else None
             if key not in self.contracts:
                 return 401, {'error': 'invalid_token'}
-            if path == '/sdk/v1/entitlement/refresh':
-                return 200, {'token': self.issue(*key)}
-            if path == '/sdk/v1/usage':
-                if (set(body) != {'report_id', 'client_last_used_at', 'observed_after_contract_end'}
-                        or not isinstance(body['report_id'], str) or len(body['report_id']) != 32
-                        or not isinstance(body['client_last_used_at'], int)
-                        or not isinstance(body['observed_after_contract_end'], bool)):
-                    return 400, {'error': 'invalid_report'}  # Anything beyond the minimal fields is refused.
-                if body['report_id'] not in self.report_ids:
-                    self.report_ids.add(body['report_id'])
-                    record = self.usage.setdefault(key, {'client_last_used_at': 0, 'observed_after_contract_end': False})
-                    # A delayed report never moves the latest use time backwards.
-                    record['client_last_used_at'] = max(record['client_last_used_at'], body['client_last_used_at'])
-                    record['observed_after_contract_end'] |= body['observed_after_contract_end']
-                    record['reported_at'] = int(self.clock())
-                return 204, None
-            return 404, {'error': 'not_found'}
+            if path != '/sdk/v1/entitlement/refresh':
+                return 404, {'error': 'not_found'}  # Refresh is the only SDK call; there is no usage endpoint.
+            if body:
+                return 400, {'error': 'unexpected_body'}  # No activity or device data is accepted.
+            return 200, {'token': self.issue(*key)}
 
     def start(self, port=0):
         server = self

@@ -22,9 +22,6 @@ internal object Bridge {
     external fun entitlementImport(handle: Long, token: ByteArray, now: Long): Int
     external fun entitlementStatus(handle: Long, now: Long): LongArray
     external fun entitlementText(handle: Long, field: Int): ByteArray
-    external fun entitlementMarkUsed(handle: Long, now: Long)
-    external fun entitlementReport(handle: Long, reportId: ByteArray, body: Array<ByteArray?>): ByteArray?
-    external fun entitlementReportDone(handle: Long)
     external fun entitlementExport(handle: Long): ByteArray
     external fun entitlementRestore(handle: Long, state: ByteArray)
 }

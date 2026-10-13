@@ -19,10 +19,10 @@ class EntitlementStatus(
  * One SDK instance's verified company/contract context. Import a server-signed token or
  * file; status and warnings never block connection, measurement or analysis.
  *
- * [endpoint]: server base URL for online confirmation and the minimal usage report. Without
- * it no network is used; [online] false keeps a configured endpoint unused. The app needs
- * the INTERNET permission for it. [storage]: directory for the state file (for example
- * `context.filesDir`); null keeps state in memory only.
+ * [endpoint]: server base URL for online confirmation. Without it no network is used;
+ * [online] false keeps a configured endpoint unused. The app needs the INTERNET permission
+ * for it. [storage]: directory for the stored token (for example `context.filesDir`); null
+ * keeps it in memory only. SDK use is not tracked: nothing but the signed token is stored.
  */
 class FisicaEntitlement @JvmOverloads constructor(
     @Suppress("unused") private val core: FisicaCore,
@@ -35,7 +35,7 @@ class FisicaEntitlement @JvmOverloads constructor(
     private var warned = 0
     private val endpoint = endpoint?.trimEnd('/')
     private var syncing = false
-    private val syncLock = Any()  // One exchange at a time, so a report is never confirmed twice.
+    private val syncLock = Any()  // One exchange with the server at a time.
     private var nextSync = 0L
     /** Last storage or network problem, or null. Never an entitlement state. */
     @Volatile var lastSyncError: String? = null; private set
@@ -51,7 +51,7 @@ class FisicaEntitlement @JvmOverloads constructor(
             val bytes = token.toByteArray(Charsets.UTF_8)
             val result = Bridge.entitlementImport(open(), bytes, clock())
             if (result == FisicaEntitlementOutcome.ACCEPTED) {
-                // Stored usage and a possibly newer confirmation win over an older file.
+                // A newer confirmation stored earlier wins over an older file.
                 try { stateFile()?.takeIf { it.isFile }?.let { Bridge.entitlementRestore(handle, it.readBytes()); Bridge.entitlementImport(handle, bytes, clock()) } }
                 catch (error: Exception) { lastSyncError = "storage: ${error.message}" }
                 save()
@@ -94,9 +94,12 @@ class FisicaEntitlement @JvmOverloads constructor(
         val status = status(); val fresh = status.warnings and warned.inv(); warned = status.warnings
         if (fresh != 0) onWarning(fresh, status)
     }
-    /** Record real feature use (connect, measure, analyze). Does nothing without a verified contract. */
-    fun markUsed() {
-        synchronized(this) { if (handle == 0L) return; Bridge.entitlementMarkUsed(handle, clock()); save(); notifyWarnings() }
+    /**
+     * Re-evaluate warnings for the current time and refresh in the background when online.
+     * Called from feature paths; it records nothing about the use and never blocks.
+     */
+    fun checkStatus() {
+        synchronized(this) { if (handle == 0L) return; notifyWarnings() }
         sync()
     }
 
@@ -112,23 +115,18 @@ class FisicaEntitlement @JvmOverloads constructor(
         } finally { connection.disconnect() }
     }
     /**
-     * Online confirmation, then the pending usage reports, on the calling thread. Returns null
-     * or the problem. A failure changes no entitlement state: it is never an expiry or a revocation.
+     * Online confirmation on the calling thread. Returns null or the problem. A failure changes
+     * no entitlement state: it is never an expiry or a revocation.
      */
     fun syncNow(): String? = synchronized(syncLock) { syncLocked() }
     private fun syncLocked(): String? {
         if (!online || endpoint == null) return null
         try {
             val token = synchronized(this) { if (handle == 0L) return null; String(Bridge.entitlementText(handle, FisicaEntitlementText.TOKEN), Charsets.US_ASCII) }
-            if (token.isEmpty()) return null  // Nothing verified: nothing to refresh, nothing attributable to report.
+            if (token.isEmpty()) return null  // Nothing verified: nothing to refresh.
             val response = String(post("/sdk/v1/entitlement/refresh", token, "{}".toByteArray()), Charsets.UTF_8)
             val refreshed = Regex("\"token\"\\s*:\\s*\"([A-Za-z0-9_.-]+)\"").find(response)?.groupValues?.get(1) ?: throw java.io.IOException("Unexpected refresh response")
             synchronized(this) { if (handle != 0L) Bridge.entitlementImport(handle, refreshed.toByteArray(Charsets.US_ASCII), clock()) }
-            while (true) {
-                val report = synchronized(this) { if (handle == 0L) null else pendingReport(ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }) } ?: break
-                post("/sdk/v1/usage", report.token, report.body)
-                synchronized(this) { if (handle != 0L) reportDone() }  // Cleared only after the server confirmed.
-            }
             lastSyncError = null
         } catch (error: Exception) { lastSyncError = "network: ${error.message ?: error.javaClass.simpleName}" }
         synchronized(this) { if (handle != 0L) { save(); notifyWarnings() } }
@@ -145,18 +143,6 @@ class FisicaEntitlement @JvmOverloads constructor(
         Thread({ try { syncNow() } finally { synchronized(this) { syncing = false } } }, "fisica-entitlement-sync").apply { isDaemon = true }.start()
     }
 
-    class Report(val token: String, val body: ByteArray)
-    /**
-     * Next pending usage report: bearer token and JSON body for the host to send.
-     * [reportId] is 16 random bytes naming this report for retry de-duplication only.
-     */
-    @Synchronized fun pendingReport(reportId: ByteArray): Report? {
-        val body = arrayOfNulls<ByteArray>(1)
-        val token = Bridge.entitlementReport(open(), reportId, body) ?: return null
-        return Report(String(token, Charsets.US_ASCII), body[0]!!)
-    }
-    /** Call only after the server confirmed the report; the local record is then cleared. */
-    @Synchronized fun reportDone() = Bridge.entitlementReportDone(open())
     /** Opaque state for the host to store. Restoring verifies every stored token again. */
     @Synchronized fun exportState(): ByteArray = Bridge.entitlementExport(open())
     @Synchronized fun restoreState(state: ByteArray) { Bridge.entitlementRestore(open(), state); notifyWarnings() }

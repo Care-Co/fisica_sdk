@@ -31,7 +31,8 @@ def entitlement_server(output):
     """Reference mock server for the online part of each binding's contract.
 
     Yields the values a binding needs; afterwards checks what the server received:
-    use recorded for the token's own contract, and nothing beyond the minimal fields.
+    refresh requests with an empty body and nothing else, so no binding sends usage
+    or activity data.
     """
     from entitlement_dev import MockEntitlementServer
     now = json.loads((FIXTURES / 'entitlement.json').read_text())['now'] + 86400
@@ -41,11 +42,10 @@ def entitlement_server(output):
     shutil.rmtree(storage, ignore_errors=True)
     try:
         yield {'endpoint': server.start(), 'storage': storage.as_posix(), 'server_now': now}
-        record = server.usage.get(('acme', 'ctr-1'))
-        assert record and record['client_last_used_at'] == now, f'usage was not reported: {server.usage}'
-        bodies = [body for path, body in server.requests if path == '/sdk/v1/usage']
-        assert bodies and all(set(body) == {'report_id', 'client_last_used_at', 'observed_after_contract_end'} for body in bodies)
-        print('mock server: refresh and minimal usage report received')
+        assert server.requests, 'the binding never contacted the server'
+        unexpected = [(path, body) for path, body in server.requests if path != '/sdk/v1/entitlement/refresh' or body]
+        assert not unexpected, f'binding sent more than an empty refresh: {unexpected}'
+        print('mock server: only empty refresh requests received')
     finally:
         server.stop()
 

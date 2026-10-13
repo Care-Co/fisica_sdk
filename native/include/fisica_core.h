@@ -157,7 +157,9 @@ FISICA_API int32_t fisica_core_session_poll(FisicaSession *session,
  *   verification   - how recently the server confirmed this info (30 days at most)
  *   contract       - state of the verified company's contract, by signed dates only
  * A token is only attributed to a company/contract after its signature verifies.
- * A token does not prove device authenticity, code origin or contract compliance. */
+ * A token does not prove device authenticity, code origin or contract compliance.
+ * No usage tracking: this context keeps no record of whether, when or how often the
+ * SDK is used, and has nothing to report. */
 typedef struct FisicaEntitlement FisicaEntitlement;
 enum FisicaEntitlementOutcome {
     FISICA_ENTITLEMENT_NONE = 0, FISICA_ENTITLEMENT_ACCEPTED = 1,
@@ -199,19 +201,9 @@ FISICA_API int32_t fisica_core_entitlement_status(FisicaEntitlement *context,
     uint64_t now_s, uint64_t *status, uint32_t capacity);
 FISICA_API int32_t fisica_core_entitlement_text(FisicaEntitlement *context, uint32_t field,
     uint8_t *output, uint32_t capacity, uint32_t *length);
-/* Call on real feature use (connect, measure, analyze), not on import or refresh.
- * Keeps only "used", the last local use time and whether use was observed while the
- * contract was ended/revoked. No counts. Does nothing without a verified contract. */
-FISICA_API int32_t fisica_core_entitlement_mark_used(FisicaEntitlement *context, uint64_t now_s);
-/* Next pending usage report: the token authenticates the company/contract to the
- * server and body is the JSON to send. report_id: 16 host-random bytes naming this
- * report for retry de-duplication only. A report stays frozen until report_done, so a
- * retry resends identical bytes. NO_RESULT when nothing is pending. */
-FISICA_API int32_t fisica_core_entitlement_report(FisicaEntitlement *context,
-    const uint8_t *report_id, uint32_t id_length, uint8_t *token, uint32_t token_capacity,
-    uint32_t *token_length, uint8_t *body, uint32_t body_capacity, uint32_t *body_length);
-FISICA_API int32_t fisica_core_entitlement_report_done(FisicaEntitlement *context);
-/* Opaque text state for the host to store. Restore verifies every stored token again. */
+/* Opaque text state for the host to store: the verified token only, so the latest
+ * confirmation can be checked offline. It is not a record of SDK use. Restore
+ * verifies the stored token again. */
 FISICA_API int32_t fisica_core_entitlement_export(FisicaEntitlement *context,
     uint8_t *output, uint32_t capacity, uint32_t *length);
 FISICA_API int32_t fisica_core_entitlement_restore(FisicaEntitlement *context,
