@@ -87,9 +87,22 @@ def desktop(output,target):
         if previous is None: os.environ.pop('FISICA_BUILD_PLATFORM',None)
         else: os.environ['FISICA_BUILD_PLATFORM']=previous
 
+def artifact_paths(output,targets):
+    # Names come from release metadata so CI never hardcodes a version.
+    release=release_metadata();wrappers=release['wrappers'];paths=[]
+    for target in targets:
+        if target=='apple': paths.append(output/'apple'/f"fisica-swift-{wrappers['swift']['version']}.zip")
+        elif target=='android': paths += [output/'android'/f"fisica-scale-{wrappers['kotlin']['version']}.aar",output/'android'/f"fisica-kotlin-{wrappers['kotlin']['version']}.zip"]
+        else: paths.append(output/f"fisica-core-{release['core_version']}-{target}.zip")
+    return paths
+
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--target',choices=['apple','android','macosx_11_0_universal2','win_arm64','win_amd64'],required=True)
+    targets=['apple','android','macosx_11_0_universal2','win_arm64','win_amd64']
+    p=argparse.ArgumentParser();group=p.add_mutually_exclusive_group(required=True)
+    group.add_argument('--target',choices=targets);group.add_argument('--print-artifacts',nargs='+',choices=targets,metavar='TARGET')
     p.add_argument('--output',type=Path,default=ROOT/'.build/platforms');p.add_argument('--ndk',type=Path,default=Path.home()/'Library/Android/sdk/ndk/26.3.11579264');args=p.parse_args()
+    if args.print_artifacts:
+        print(' '.join(path.relative_to(Path.cwd()).as_posix() if path.is_relative_to(Path.cwd()) else str(path) for path in artifact_paths(args.output,args.print_artifacts)));return
     args.output.mkdir(parents=True,exist_ok=True)
     if args.target=='apple': apple(args.output/'apple')
     elif args.target=='android': android(args.output/'android',args.ndk)

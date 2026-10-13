@@ -2,6 +2,22 @@ name: Windows binary wheels
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'fisica_sdk/**'
+      - 'native/**'
+      - 'tools/**'
+      - 'tests/**'
+      - 'wrappers/**/wrapper.json'
+      - 'wrappers/flutter/lib/src/version.dart'
+      - 'wrappers/flutter/pubspec.yaml'
+      - 'sdk-release.json'
+      - 'setup.py'
+      - 'LICENSE'
+      - 'MANIFEST.in'
+      - 'pyproject.toml'
+      - '.github/workflows/windows-wheel.yml'
   pull_request:
     paths:
       - 'fisica_sdk/**'

@@ -1,0 +1,2 @@
+# Packaged text (LICENSE, headers, metadata) must be byte-identical on every build host.
+* text=auto eol=lf

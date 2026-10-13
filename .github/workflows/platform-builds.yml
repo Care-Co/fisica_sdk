@@ -1,6 +1,9 @@
 name: Multi-platform core and bindings
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
   pull_request:
     paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
 permissions:
@@ -25,7 +28,7 @@ jobs:
         working-directory: wrappers/swift
       - run: python tools/build_platforms.py --target macosx_11_0_universal2
       - name: Audit public Apple artifacts
-        run: python tools/audit_artifacts.py .build/platforms/apple/fisica-swift-0.1.0.zip .build/platforms/fisica-core-1.3.0-macosx_11_0_universal2.zip
+        run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts apple macosx_11_0_universal2)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: fisica-apple-binaries
