@@ -22,8 +22,38 @@ class FisicaClient {
   Future<void> _writes = Future.value();
   bool _closed = false;
   Future<void>? _closing;
-  FisicaClient(FisicaCore core, this.transport) : session = FisicaSession(core);
+  /// Optional company/contract context; real use is recorded there, nothing is gated.
+  final FisicaEntitlement? entitlement;
+  final _frames = <DecodedMeasurement>[];
+  FisicaClient(FisicaCore core, this.transport, {this.entitlement})
+    : session = FisicaSession(core);
   Stream<FisicaSessionEvent> get events => _events.stream;
+
+  /// Frames collected since the last [clearFrames].
+  List<DecodedMeasurement> get frames => List.unmodifiable(_frames);
+  void clearFrames() => _frames.clear();
+
+  /// Analyze the collected frames in the shared core: weight and left/right
+  /// foot width and length in nominal centimetres, or null without a stable
+  /// measurement.
+  ({double weight, double leftWidth, double leftLength, double rightWidth, double rightLength, List<DecodedMeasurement> frames})?
+  report() {
+    if (_frames.isEmpty) return null;
+    entitlement?.markUsed();
+    final result = session.core.analyzePackets(
+      _frames.map((frame) => frame.rawData).toList(),
+    );
+    if (result == null) return null;
+    return (
+      weight: result[0],
+      leftWidth: result[1],
+      leftLength: result[2],
+      rightWidth: result[3],
+      rightLength: result[4],
+      frames: frames,
+    );
+  }
+
   int get now => _clock.elapsedMilliseconds;
   void _failure(Object error, {bool sendFailure = false}) {
     if (_closed) return;
@@ -48,6 +78,9 @@ class FisicaClient {
             });
       }
       if (event.kind == 3) _waiters.remove(event.operation)?.complete(event);
+      if (event.kind == FisicaSessionEventKind.measurement) {
+        _frames.add(session.core.decodePacket(event.payload));
+      }
       _events.add(event);
     }
   }
@@ -70,6 +103,7 @@ class FisicaClient {
 
   Future<FisicaSessionEvent> connect({int profile = 1}) async {
     if (_input != null) throw StateError('Already connected');
+    entitlement?.markUsed();
     await transport.connect();
     _clock.start();
     _input = transport.received.listen((data) {
@@ -105,8 +139,11 @@ class FisicaClient {
     return event;
   }
 
-  Future<FisicaSessionEvent> start({Duration? duration}) =>
-      _checked(_action(2, duration?.inMilliseconds ?? -1));
+  Future<FisicaSessionEvent> start({Duration? duration}) {
+    entitlement?.markUsed();
+    return _checked(_action(2, duration?.inMilliseconds ?? -1));
+  }
+
   Future<FisicaSessionEvent> stop() => _checked(_action(3, 0));
   Future<void> close() => _closing ??= _close();
   Future<void> _close() async {

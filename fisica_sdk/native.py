@@ -77,6 +77,7 @@ class NativeCore:
             'decode_response': [U8P,U32,I32P,U32],
             'response_payload': [U8P,U32,U8P,U32,U32P],
             'analyze': [DOUBLEP,DOUBLEP,U32,U32,U32,DOUBLEP,U32],
+            'analyze_packets': [U8P,U32,DOUBLEP,U32],
             'dimensions': [DOUBLEP,U32,ct.c_double,ct.c_double,DOUBLEP,U32],
             'cop': [DOUBLEP,U32,U32,ct.c_double,ct.c_double,DOUBLEP,U32],
             'command': [ct.c_char_p,ct.c_double,U8P,U32,U8P,U32,U32P],
@@ -196,6 +197,19 @@ class NativeCore:
             raise FisicaArgumentError(1, 'Expected matching frame matrices and weights')
         output = np.empty(5)
         status = self._lib.fisica_core_analyze(_ptr(data),_ptr(weights),*data.shape,_ptr(output),output.size)
+        if status == 3:
+            return None
+        self._check(status)
+        return tuple(output.tolist())
+
+    def analyze_packets(self, packets):
+        """Analyze 645-byte measurement packets as received; same result as analyze(frames)."""
+        packets = [bytes(packet) for packet in packets]
+        if not packets or any(len(packet) != 645 for packet in packets):
+            raise FisicaArgumentError(1, 'Expected 645-byte measurement packets')
+        data = _byte_array(b''.join(packets))
+        output = np.empty(5)
+        status = self._lib.fisica_core_analyze_packets(data,len(packets),_ptr(output),output.size)
         if status == 3:
             return None
         self._check(status)

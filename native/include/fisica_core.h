@@ -81,6 +81,12 @@ FISICA_API int32_t fisica_core_response_payload(const uint8_t *packet, uint32_t 
  * Preserves legacy stabilization policy and nominal 1cm cells; not clinical calibration. */
 FISICA_API int32_t fisica_core_analyze(const double *matrices, const double *weights,
     uint32_t count, uint32_t rows, uint32_t cols, double *result, uint32_t capacity);
+/* ABI 1.4: the same analysis from measurement packets exactly as received
+ * (count * 645 bytes), for hosts that only keep MEASUREMENT payloads. Each packet
+ * is decoded to its 29x29 display grid and weight; the 29x22 raw grid is not used.
+ * Same result and limits as fisica_core_analyze. */
+FISICA_API int32_t fisica_core_analyze_packets(const uint8_t *packets, uint32_t count,
+    double *result, uint32_t capacity);
 /* xy contains count coordinate pairs. Result: width,length,cx,cy then 4 corner xy pairs. */
 FISICA_API int32_t fisica_core_dimensions(const double *xy, uint32_t count,
     double cell_width, double cell_height, double *result, uint32_t capacity);

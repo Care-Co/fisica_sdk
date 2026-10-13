@@ -30,3 +30,112 @@ final class ContractTests: XCTestCase {
         XCTAssertThrowsError(try core.command("unknown")) { XCTAssertEqual(($0 as! FisicaError).code,4) }
     }
 }
+
+/// High-level client and entitlement against the same core, without hardware.
+final class ClientTests: XCTestCase {
+    func bytes(_ hex: String) -> [UInt8] { stride(from: 0, to: hex.count, by: 2).map { i in let start = hex.index(hex.startIndex, offsetBy: i); return UInt8(hex[start..<hex.index(start, offsetBy: 2)], radix: 16)! } }
+    func fixture(_ name: String) throws -> [[String: Any]] {
+        let path = ProcessInfo.processInfo.environment["FISICA_FIXTURES"]!
+        return try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path + "/" + name))) as! [[String: Any]]
+    }
+    func scale(_ core: FisicaCore, frames: Int = 12) throws -> MockTransport {
+        let packet = bytes(try fixture("legacy-processing.json").first { $0["id"] as? String == "synthetic-recorded-layout" }!["packet_hex"] as! String)
+        var exchanges: [[UInt8]: [[UInt8]]] = [try core.command("GET_FIRMWARE_VERSION"): [bytes("24434701322e302e31fff0")]]
+        for name in ["SET_DEVICE_USB", "SET_DEVICE_BLE", "START_CONTINUOUS_MEASUREMENT", "STOP_CONTINUOUS_MEASUREMENT", "SET_DEVICE_STOP"] {
+            let command = try core.command(name)
+            exchanges[command] = [[0x24, command[1], command[2], 1, 0, 0, 0xff, 0xf0]]
+        }
+        exchanges[try core.command("START_CONTINUOUS_MEASUREMENT")]![0] += Array(repeating: packet, count: frames).flatMap { $0 }
+        return MockTransport(exchanges: exchanges)
+    }
+    func waitFor(_ name: String, _ body: (@escaping () -> Void) -> Void) { let done = expectation(description: name); body { done.fulfill() }; wait(for: [done], timeout: 5) }
+    func ok(_ result: Result<SessionEvent, Error>, _ line: UInt = #line) { if case .failure(let error) = result { XCTFail("\(error)", line: line) } }
+    func failure(_ result: Result<SessionEvent, Error>) -> Error? { if case .failure(let error) = result { return error }; XCTFail("Expected failure"); return nil }
+
+    func testConnectMeasureStopReportClose() throws {
+        let core = try FisicaCore(), transport = try scale(core)
+        let client = try FisicaClient(core: core, transport: transport)
+        var received = 0
+        client.onFrame = { _ in received += 1 }
+        waitFor("connect") { done in client.connect(.usb) { result in self.ok(result); done() } }
+        XCTAssertEqual(client.firmwareVersion, "2.0.1")
+        waitFor("start") { done in client.start { result in self.ok(result); done() } }
+        XCTAssertEqual(client.state, .measuring)
+        waitFor("stop") { done in client.stop { result in self.ok(result); done() } }
+        XCTAssertEqual(received, 12)
+        let report = try XCTUnwrap(try client.report())
+        XCTAssertEqual(report.weight, 70.5); XCTAssertEqual(report.frameCount, 12)
+        XCTAssertEqual(report.frames[0].raw.count, 638); XCTAssertEqual(report.frames[0].display.count, 841); XCTAssertEqual(report.frames[0].packet.count, 645)
+        waitFor("close") { done in client.close { result in XCTAssertNotNil(result); done() } }
+        XCTAssertTrue(transport.sent.contains(try core.command("SET_DEVICE_USB")))
+        XCTAssertEqual(transport.sent.last, try core.command("SET_DEVICE_STOP"))
+        XCTAssertFalse(transport.isOpen)
+    }
+    func testTransportThatNeverBecomesReadyFailsInsteadOfHanging() throws {
+        let core = try FisicaCore(), transport = MockTransport(); transport.becomesReady = false
+        let client = try FisicaClient(core: core, transport: transport)
+        waitFor("timeout") { done in client.connect(.ble, timeout: 0.2) { result in
+            XCTAssertEqual((self.failure(result) as? FisicaError)?.code, 1001); done() } }
+        XCTAssertFalse(transport.isOpen)
+    }
+    func testRejectedStartIsAnErrorWithDeviceCodeAndCloseStillReleases() throws {
+        let core = try FisicaCore(), transport = try scale(core)
+        let start = try core.command("START_CONTINUOUS_MEASUREMENT")
+        transport.exchanges[start] = [[0x24, start[1], start[2], 0, 0, 7, 0xff, 0xf0]]
+        let client = try FisicaClient(core: core, transport: transport)
+        waitFor("connect") { done in client.connect(.usb) { _ in done() } }
+        waitFor("start") { done in client.start { result in
+            let error = self.failure(result) as? FisicaCommandError
+            XCTAssertEqual(error?.deviceCode, 7); XCTAssertEqual(error?.code, FisicaStatus.deviceRejected.rawValue); done() } }
+        waitFor("close") { done in client.close { _ in done() } }
+        XCTAssertFalse(transport.isOpen)
+    }
+    func testLinkLossAsksHostToReconnect() throws {
+        let core = try FisicaCore(), transport = try scale(core)
+        let client = try FisicaClient(core: core, transport: transport)
+        waitFor("connect") { done in client.connect(.usb) { _ in done() } }
+        waitFor("lost") { done in client.onLinkLost = { done() }; transport.drop() }
+        XCTAssertEqual(client.state, .recovering)
+        waitFor("reconnect") { done in client.connect(.usb) { result in self.ok(result); done() } }
+        XCTAssertEqual(client.state, .idle)
+        waitFor("close") { done in client.close { _ in done() } }
+    }
+    func testEntitlementIsStatusOnlyAndNeverBlocksMeasurement() throws {
+        let core = try FisicaCore()
+        let tokens = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: ProcessInfo.processInfo.environment["FISICA_FIXTURES"]! + "/entitlement.json"))) as! [String: Any]
+        let now = (tokens["now"] as! NSNumber).uint64Value
+        var clock = now
+        let entitlement = try FisicaEntitlement(core: core, clock: { clock })
+        var seen: [FisicaEntitlementWarning] = []
+        entitlement.onWarning = { new, _ in seen += new }
+        XCTAssertEqual(try entitlement.status().contract, .unverified)
+        XCTAssertEqual(try entitlement.importToken(tokens["tampered"] as! String), .rejectedSignature)
+        XCTAssertEqual(try entitlement.status().company, "")
+        XCTAssertEqual(try entitlement.importToken(tokens["valid"] as! String), .accepted)
+        var status = try entitlement.status()
+        XCTAssertEqual(status.baseLicense, .granted); XCTAssertEqual(status.verification, .fresh); XCTAssertEqual(status.contract, .active)
+        XCTAssertEqual(status.company, "acme"); XCTAssertEqual(status.contractReference, "ctr-1"); XCTAssertEqual(status.keyEnvironment, .test)
+        clock = now + 31 * 86400
+        status = try entitlement.status()
+        XCTAssertEqual(status.baseLicense, .granted); XCTAssertEqual(status.verification, .refreshDue); XCTAssertEqual(status.contract, .active)
+        XCTAssertEqual(try entitlement.importToken(tokens["revoked"] as! String), .accepted)
+        XCTAssertEqual(try entitlement.status().contract, .revoked)
+        // Measurement still runs with a revoked contract and outdated confirmation.
+        let transport = try scale(core), client = try FisicaClient(core: core, transport: transport, entitlement: entitlement)
+        waitFor("connect") { done in client.connect(.usb) { _ in done() } }
+        waitFor("start") { done in client.start { result in self.ok(result); done() } }
+        waitFor("stop") { done in client.stop { _ in done() } }
+        XCTAssertEqual(try client.report()?.weight, 70.5)
+        waitFor("close") { done in client.close { _ in done() } }
+        let report = try XCTUnwrap(try entitlement.pendingReport(reportID: [UInt8](repeating: 9, count: 16)))
+        let body = try JSONSerialization.jsonObject(with: Data(report.body)) as! [String: Any]
+        XCTAssertEqual(Set(body.keys), ["report_id", "client_last_used_at", "observed_after_contract_end"])
+        XCTAssertEqual(body["observed_after_contract_end"] as? Bool, true)
+        let restored = try FisicaEntitlement(core: core, clock: { clock })
+        try restored.restoreState(try entitlement.exportState())
+        XCTAssertEqual(try restored.status().company, "acme")
+        try entitlement.reportDone()
+        XCTAssertNil(try entitlement.pendingReport(reportID: [UInt8](repeating: 1, count: 16)))
+        XCTAssertTrue(seen.contains(.importRejected) && seen.contains(.testKey) && seen.contains(.contractRevoked))
+    }
+}

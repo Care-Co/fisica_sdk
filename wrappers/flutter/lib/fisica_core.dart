@@ -7,7 +7,9 @@ import 'package:ffi/ffi.dart';
 import 'src/compatibility.dart';
 import 'src/version.dart' as release;
 export 'src/compatibility.dart';
+part 'src/codes.dart';
 part 'src/session.dart';
+part 'src/entitlement.dart';
 part 'src/client.dart';
 
 typedef _StringNative = Pointer<Utf8> Function();
@@ -220,7 +222,7 @@ class FisicaCore {
     'abi_minor': abiVersion & 65535,
     'result_schema_version': policy['result_schema_version'],
     'license': policy['license'],
-    'distribution': policy['distribution'],
+    'entitlement': policy['entitlement'],
   };
 
   void _check(int status) {
@@ -405,6 +407,34 @@ class FisicaCore {
     } finally {
       calloc.free(input);
       calloc.free(nativeWeights);
+      calloc.free(output);
+    }
+  }
+
+  /// Weight and foot dimensions from measurement packets as received:
+  /// `[weight_kg, left_width_cm, left_length_cm, right_width_cm, right_length_cm]`,
+  /// or null without a stable measurement. The analysis runs in the shared core.
+  List<double>? analyzePackets(List<Uint8List> packets) {
+    if (packets.isEmpty || packets.any((packet) => packet.length != 645)) {
+      throw FisicaArgumentError(1, 'Expected 645-byte measurement packets');
+    }
+    final input = calloc<Uint8>(packets.length * 645);
+    final output = calloc<Double>(5);
+    try {
+      final bytes = input.asTypedList(packets.length * 645);
+      for (var i = 0; i < packets.length; i++) {
+        bytes.setAll(i * 645, packets[i]);
+      }
+      final status = _library
+          .lookupFunction<
+            Int32 Function(Pointer<Uint8>, Uint32, Pointer<Double>, Uint32),
+            int Function(Pointer<Uint8>, int, Pointer<Double>, int)
+          >('fisica_core_analyze_packets')(input, packets.length, output, 5);
+      if (status == 3) return null;
+      _check(status);
+      return output.asTypedList(5).toList();
+    } finally {
+      calloc.free(input);
       calloc.free(output);
     }
   }

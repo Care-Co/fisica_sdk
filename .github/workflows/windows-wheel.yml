@@ -61,6 +61,8 @@ jobs:
           python tools/native_build.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pytest -q
+      - name: Verify the C# binding, client and serial transport on Windows
+        run: python tools/verify_bindings.py dotnet
       - name: Build and audit binary release artifacts
         run: python tools/build_release.py --validation --output release
       - name: Install and test the release wheel outside the source tree

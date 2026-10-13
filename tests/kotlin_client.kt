@@ -1,0 +1,112 @@
+// JVM contract for the Kotlin high-level client and entitlement binding (no Android, no hardware).
+import com.carenco.fisica.*
+import java.io.File
+import java.util.Properties
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+
+fun hex(text: String) = ByteArray(text.length / 2) { text.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
+fun <T> await(name: String, body: ((T?, Throwable?) -> Unit) -> Unit): Pair<T?, Throwable?> {
+    val latch = CountDownLatch(1); var result: Pair<T?, Throwable?> = null to null
+    body { value, error -> result = value to error; latch.countDown() }
+    check(latch.await(5, TimeUnit.SECONDS)) { "$name did not complete" }
+    return result
+}
+fun scale(core: FisicaCore, packet: ByteArray, frames: Int = 12): MockTransport {
+    val transport = MockTransport()
+    transport.reply(core.command("GET_FIRMWARE_VERSION"), hex("24434701322e302e31fff0"))
+    for (name in listOf("SET_DEVICE_USB", "SET_DEVICE_BLE", "START_CONTINUOUS_MEASUREMENT", "STOP_CONTINUOUS_MEASUREMENT", "SET_DEVICE_STOP")) {
+        val command = core.command(name)
+        var ack = byteArrayOf(0x24, command[1], command[2], 1, 0, 0, 0xff.toByte(), 0xf0.toByte())
+        if (name == "START_CONTINUOUS_MEASUREMENT") repeat(frames) { ack += packet }
+        transport.reply(command, ack)
+    }
+    return transport
+}
+
+fun main(args: Array<String>) {
+    val values = Properties().apply { File(args[1]).inputStream().use { load(it) } }
+    val core = FisicaCore(args[0]) { System.err.println(it) }
+    val packet = hex(values.getProperty("packet"))
+
+    // Connect -> measure -> stop -> report -> close.
+    run {
+        val transport = scale(core, packet); val client = FisicaClient(core, transport)
+        var received = 0; client.onFrame = { received++ }
+        check(await<SessionEvent>("connect") { client.connect(FisicaLink.USB, completion = it) }.second == null)
+        check(client.firmwareVersion == "2.0.1")
+        check(await<SessionEvent>("start") { client.start(completion = it) }.second == null)
+        check(client.state == FisicaSessionState.MEASURING)
+        check(await<SessionEvent>("stop") { client.stop(it) }.second == null)
+        check(received == 12 && client.frames.size == 12)
+        val report = client.report()!!
+        check(report.weight == 70.5 && report.frameCount == 12)
+        check(report.frames[0].raw.size == 638 && report.frames[0].display.size == 841 && report.frames[0].packet.size == 645)
+        check(await<SessionEvent>("close") { client.close(it) }.second == null)
+        check(!transport.isOpen && transport.sent.last().contentEquals(core.command("SET_DEVICE_STOP")))
+        check(transport.sent.any { it.contentEquals(core.command("SET_DEVICE_USB")) })
+    }
+    // A transport that never becomes ready fails instead of hanging.
+    run {
+        val transport = MockTransport().apply { becomesReady = false }; val client = FisicaClient(core, transport)
+        val error = await<SessionEvent>("timeout") { client.connect(FisicaLink.BLE, 200, it) }.second
+        check((error as FisicaException).code == 1001 && !transport.isOpen)
+        client.close()
+    }
+    // A rejected start is an error carrying the device code; close still releases.
+    run {
+        val transport = scale(core, packet); val start = core.command("START_CONTINUOUS_MEASUREMENT")
+        transport.reply(start, byteArrayOf(0x24, start[1], start[2], 0, 0, 7, 0xff.toByte(), 0xf0.toByte()))
+        val client = FisicaClient(core, transport)
+        await<SessionEvent>("connect") { client.connect(FisicaLink.USB, completion = it) }
+        val error = await<SessionEvent>("start") { client.start(completion = it) }.second as FisicaCommandException
+        check(error.deviceCode == 7 && error.code == FisicaStatus.DEVICE_REJECTED)
+        await<SessionEvent>("close") { client.close(it) }
+        check(!transport.isOpen)
+    }
+    // Link loss asks the host to reconnect the same Scale.
+    run {
+        val transport = scale(core, packet); val client = FisicaClient(core, transport)
+        await<SessionEvent>("connect") { client.connect(FisicaLink.USB, completion = it) }
+        val lost = CountDownLatch(1); client.onLinkLost = { lost.countDown() }
+        transport.drop(); check(lost.await(5, TimeUnit.SECONDS) && client.state == FisicaSessionState.RECOVERING)
+        check(await<SessionEvent>("reconnect") { client.connect(FisicaLink.USB, completion = it) }.second == null)
+        check(client.state == FisicaSessionState.IDLE)
+        await<SessionEvent>("close") { client.close(it) }
+    }
+    // Entitlement is status only and never blocks measurement.
+    run {
+        var clock = values.getProperty("now").toLong(); val now = clock
+        val entitlement = FisicaEntitlement(core) { clock }
+        var seen = 0; entitlement.onWarning = { bits, _ -> seen = seen or bits }
+        check(entitlement.status().contract == FisicaContract.UNVERIFIED)
+        check(entitlement.importToken(values.getProperty("tampered")) == FisicaEntitlementOutcome.REJECTED_SIGNATURE)
+        check(entitlement.status().company == "")
+        check(entitlement.importToken(values.getProperty("valid")) == FisicaEntitlementOutcome.ACCEPTED)
+        var status = entitlement.status()
+        check(status.baseLicense == FisicaBaseLicense.GRANTED && status.verification == FisicaVerification.FRESH && status.contract == FisicaContract.ACTIVE)
+        check(status.company == "acme" && status.contractReference == "ctr-1" && status.keyEnvironment == FisicaKeyEnvironment.TEST)
+        check(entitlement.importToken(values.getProperty("older")) == FisicaEntitlementOutcome.IGNORED_OLDER)
+        clock = now + 31 * 86400
+        status = entitlement.status()
+        check(status.baseLicense == FisicaBaseLicense.GRANTED && status.verification == FisicaVerification.REFRESH_DUE && status.contract == FisicaContract.ACTIVE)
+        check(entitlement.importToken(values.getProperty("revoked")) == FisicaEntitlementOutcome.ACCEPTED)
+        check(entitlement.status().contract == FisicaContract.REVOKED)
+        val transport = scale(core, packet); val client = FisicaClient(core, transport, entitlement)
+        await<SessionEvent>("connect") { client.connect(FisicaLink.USB, completion = it) }
+        check(await<SessionEvent>("start") { client.start(completion = it) }.second == null)
+        await<SessionEvent>("stop") { client.stop(it) }
+        check(client.report()!!.weight == 70.5)
+        await<SessionEvent>("close") { client.close(it) }
+        val report = entitlement.pendingReport(ByteArray(16) { 9 })!!
+        val body = String(report.body)
+        check(body.startsWith("{\"report_id\":\"" + "09".repeat(16) + "\",\"client_last_used_at\":") && body.endsWith(",\"observed_after_contract_end\":true}"))
+        val restored = FisicaEntitlement(core) { clock }
+        restored.restoreState(entitlement.exportState()); check(restored.status().company == "acme")
+        entitlement.reportDone(); check(entitlement.pendingReport(ByteArray(16)) == null)
+        val expected = FisicaEntitlementWarning.IMPORT_REJECTED or FisicaEntitlementWarning.TEST_KEY or FisicaEntitlementWarning.CONTRACT_REVOKED
+        check(seen and expected == expected)
+        entitlement.close(); restored.close()
+    }
+    println("Kotlin client, transport and entitlement contract passed")
+}

@@ -247,6 +247,21 @@ int32_t fisica_core_response_payload(const uint8_t *packet,uint32_t length,uint8
     if (capacity<*output_length) return FISICA_BUFFER_TOO_SMALL;
     std::memcpy(output,packet+4,*output_length); return FISICA_OK;
 }
+int32_t fisica_core_analyze_packets(const uint8_t *packets,uint32_t count,double *result,uint32_t capacity) {
+    if (!packets || !result || !count || count>max_cells/cells_display) return FISICA_INVALID_ARGUMENT;
+    if (capacity<5) return FISICA_BUFFER_TOO_SMALL;
+    return protect([&]() -> int32_t {
+        std::vector<double> matrices(uint64_t(count)*cells_display), weights(count);
+        std::array<double,cells_raw> raw{}; std::array<double,2> metrics{};
+        for (uint32_t i=0;i<count;++i) {
+            const auto status=fisica_core_decode_packet(packets+uint64_t(i)*packet_size,packet_size,raw.data(),cells_raw,
+                matrices.data()+uint64_t(i)*cells_display,cells_display,metrics.data(),2);
+            if (status) return status;
+            weights[i]=metrics[0];
+        }
+        return fisica_core_analyze(matrices.data(),weights.data(),count,rows_raw,cols_display,result,capacity);
+    });
+}
 int32_t fisica_core_dimensions(const double *xy,uint32_t count,double cw,double ch,double *result,uint32_t capacity) {
     if (!result || (!xy && count) || count>max_cells || !std::isfinite(cw) || !std::isfinite(ch) || cw<=0 || ch<=0)
         return FISICA_INVALID_ARGUMENT;

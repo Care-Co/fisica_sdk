@@ -144,3 +144,19 @@ def test_core_is_required_not_silently_replaced_by_python(tmp_path):
     from fisica_sdk import CoreCompatibilityError
     with pytest.raises(CoreCompatibilityError,match='Native core is missing'):
         NativeCore(tmp_path / 'missing.so')
+
+
+def test_packet_analysis_matches_frame_analysis():
+    """Other languages keep packets only; the result must equal the Python frame path."""
+    from fisica_sdk import FisicaError
+    from fisica_sdk.parser import parse_frame_from_chunk
+    fixtures = json.loads((Path(__file__).parent / 'fixtures' / 'legacy-processing.json').read_text())
+    packets = [bytes.fromhex(f['packet_hex']) for f in fixtures if 'packet_hex' in f]
+    synthetic = bytes.fromhex(next(f['packet_hex'] for f in fixtures if f.get('id') == 'synthetic-recorded-layout'))
+    core = NativeCore()
+    for sequence in ([synthetic] * 12, packets[:1] * 11, packets[:1] * 5 + [synthetic] * 12, packets):
+        frames = [parse_frame_from_chunk(packet.hex()) for packet in sequence]
+        assert core.analyze_packets(sequence) == core.analyze(frames)
+    assert core.analyze_packets([synthetic] * 12)[0] == 70.5
+    with pytest.raises(FisicaError):
+        core.analyze_packets([synthetic[:-1]])

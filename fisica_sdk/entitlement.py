@@ -14,24 +14,28 @@ import time
 import urllib.request
 import warnings
 
+from . import codes
 from .errors import FisicaEntitlementWarning
 from .native import NativeEntitlement
 
 AUTO = object()
-VERIFICATION = {0: 'none', 1: 'fresh', 2: 'refresh_due'}
-CONTRACT_STATE = {0: 'unverified', 1: 'active', 2: 'not_started', 3: 'ended', 4: 'revoked'}
-CONTRACT_KIND = {0: None, 1: 'basic', 2: 'special'}
-IMPORT_OUTCOME = {0: None, 1: 'accepted', 2: 'ignored_older', 3: 'rejected_format', 4: 'rejected_key', 5: 'rejected_signature'}
-KEY_ENVIRONMENT = {0: None, 1: 'production', 2: 'test'}
-WARNINGS = {
-    1: ('unverified', 'No verified company/contract information. Register and import the entitlement file for commercial use.'),
-    2: ('refresh_due', 'Entitlement information was last confirmed more than 30 days ago; connect to refresh it or import a new file. The base SDK license has not expired.'),
-    4: ('contract_ended', 'The separate contract recorded in the entitlement information has ended. The base SDK license is unaffected.'),
-    8: ('contract_revoked', 'The server reported the separate contract as revoked. The base SDK license is unaffected.'),
-    16: ('contract_not_started', 'The contract recorded in the entitlement information has not started yet.'),
-    32: ('import_rejected', 'The last entitlement token or file was rejected (format, unknown key or signature).'),
-    64: ('test_key', 'Entitlement information is signed with a TEST key; this is not production verification.'),
+# Names follow the shared C header (fisica_sdk/codes.py is generated from it).
+_names = lambda enum: {member.value: member.name.lower() for member in enum}
+VERIFICATION = _names(codes.FisicaVerification)
+CONTRACT_STATE = _names(codes.FisicaContract)
+CONTRACT_KIND = {**_names(codes.FisicaContractKind), 0: None}
+IMPORT_OUTCOME = {**_names(codes.FisicaEntitlementOutcome), 0: None}
+KEY_ENVIRONMENT = {**_names(codes.FisicaKeyEnvironment), 0: None}
+_MESSAGES = {
+    'unverified': 'No verified company/contract information. Register and import the entitlement file for commercial use.',
+    'refresh_due': 'Entitlement information was last confirmed more than 30 days ago; connect to refresh it or import a new file. The base SDK license has not expired.',
+    'contract_ended': 'The separate contract recorded in the entitlement information has ended. The base SDK license is unaffected.',
+    'contract_revoked': 'The server reported the separate contract as revoked. The base SDK license is unaffected.',
+    'contract_not_started': 'The contract recorded in the entitlement information has not started yet.',
+    'import_rejected': 'The last entitlement token or file was rejected (format, unknown key or signature).',
+    'test_key': 'Entitlement information is signed with a TEST key; this is not production verification.',
 }
+WARNINGS = {member.value: (member.name.lower(), _MESSAGES[member.name.lower()]) for member in codes.FisicaEntitlementWarning}
 UNVERIFIED_STATUS = {
     'base_license': 'granted', 'verification': 'none', 'contract_state': 'unverified', 'contract_kind': None,
     'company': None, 'contract': None, 'grants': [], 'verified_at': None, 'refresh_by': None,

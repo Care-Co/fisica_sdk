@@ -62,6 +62,54 @@ JNIEXPORT jdoubleArray JNICALL Java_com_carenco_fisica_Bridge_decode(JNIEnv *e,j
     if (!checked(e,fisica_core_decode_packet(data.data(),data.size(),values.data(),638,values.data()+638,841,values.data()+1479,2))) return nullptr;
     auto result=e->NewDoubleArray(values.size()); if (result) e->SetDoubleArrayRegion(result,0,values.size(),values.data()); return result;
 }
+JNIEXPORT jdoubleArray JNICALL Java_com_carenco_fisica_Bridge_analyzePackets(JNIEnv *e,jobject,jbyteArray input,jint count) {
+    auto data=bytes(e,input); std::array<double,5> result{};
+    if (count<=0 || uint64_t(count)*645!=data.size()) { checked(e,FISICA_INVALID_ARGUMENT); return nullptr; }
+    const auto status=fisica_core_analyze_packets(data.data(),count,result.data(),result.size());
+    if (status==FISICA_NO_RESULT) return nullptr; if (!checked(e,status)) return nullptr;
+    auto output=e->NewDoubleArray(5); if (output) e->SetDoubleArrayRegion(output,0,5,result.data()); return output;
+}
+JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_responsePayload(JNIEnv *e,jobject,jbyteArray input) {
+    auto data=bytes(e,input); std::array<uint8_t,4096> payload{}; uint32_t length=0;
+    if (!checked(e,fisica_core_response_payload(data.data(),data.size(),payload.data(),payload.size(),&length))) return nullptr;
+    return output(e,payload.data(),length);
+}
+static FisicaEntitlement *entitlement(jlong handle) { return reinterpret_cast<FisicaEntitlement*>(intptr_t(handle)); }
+JNIEXPORT jlong JNICALL Java_com_carenco_fisica_Bridge_entitlementCreate(JNIEnv *e,jobject) {
+    FisicaEntitlement *handle=nullptr; checked(e,fisica_core_entitlement_create(&handle)); return reinterpret_cast<intptr_t>(handle);
+}
+JNIEXPORT void JNICALL Java_com_carenco_fisica_Bridge_entitlementDestroy(JNIEnv *,jobject,jlong h) { fisica_core_entitlement_destroy(entitlement(h)); }
+JNIEXPORT jint JNICALL Java_com_carenco_fisica_Bridge_entitlementImport(JNIEnv *e,jobject,jlong h,jbyteArray token,jlong now) {
+    auto data=bytes(e,token); uint32_t outcome=0;
+    checked(e,fisica_core_entitlement_import(entitlement(h),data.data(),data.size(),now,&outcome)); return outcome;
+}
+JNIEXPORT jlongArray JNICALL Java_com_carenco_fisica_Bridge_entitlementStatus(JNIEnv *e,jobject,jlong h,jlong now) {
+    std::array<uint64_t,12> status{};
+    if (!checked(e,fisica_core_entitlement_status(entitlement(h),now,status.data(),status.size()))) return nullptr;
+    auto result=e->NewLongArray(12); if (result) e->SetLongArrayRegion(result,0,12,reinterpret_cast<const jlong*>(status.data())); return result;
+}
+JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_entitlementText(JNIEnv *e,jobject,jlong h,jint field) {
+    std::array<uint8_t,4096> text{}; uint32_t length=0;
+    if (!checked(e,fisica_core_entitlement_text(entitlement(h),field,text.data(),text.size(),&length))) return nullptr;
+    return output(e,text.data(),length);
+}
+JNIEXPORT void JNICALL Java_com_carenco_fisica_Bridge_entitlementMarkUsed(JNIEnv *e,jobject,jlong h,jlong now) { checked(e,fisica_core_entitlement_mark_used(entitlement(h),now)); }
+// Returns the bearer token; body receives the JSON to send. Null when nothing is pending.
+JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_entitlementReport(JNIEnv *e,jobject,jlong h,jbyteArray id,jobjectArray body) {
+    auto identifier=bytes(e,id); std::array<uint8_t,4096> token{}; std::array<uint8_t,256> json{}; uint32_t token_length=0,json_length=0;
+    const auto status=fisica_core_entitlement_report(entitlement(h),identifier.data(),identifier.size(),token.data(),token.size(),&token_length,json.data(),json.size(),&json_length);
+    if (status==FISICA_NO_RESULT) return nullptr; if (!checked(e,status)) return nullptr;
+    e->SetObjectArrayElement(body,0,output(e,json.data(),json_length)); return output(e,token.data(),token_length);
+}
+JNIEXPORT void JNICALL Java_com_carenco_fisica_Bridge_entitlementReportDone(JNIEnv *e,jobject,jlong h) { checked(e,fisica_core_entitlement_report_done(entitlement(h))); }
+JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_entitlementExport(JNIEnv *e,jobject,jlong h) {
+    std::vector<uint8_t> state(262144); uint32_t length=0;
+    if (!checked(e,fisica_core_entitlement_export(entitlement(h),state.data(),state.size(),&length))) return nullptr;
+    return output(e,state.data(),length);
+}
+JNIEXPORT void JNICALL Java_com_carenco_fisica_Bridge_entitlementRestore(JNIEnv *e,jobject,jlong h,jbyteArray state) {
+    auto data=bytes(e,state); checked(e,fisica_core_entitlement_restore(entitlement(h),data.data(),data.size()));
+}
 JNIEXPORT jdoubleArray JNICALL Java_com_carenco_fisica_Bridge_analyze(JNIEnv *e,jobject,jdoubleArray input,jdoubleArray weights,jint rows,jint cols) {
     const auto count=e->GetArrayLength(weights),length=e->GetArrayLength(input);
     if (rows<=0 || cols<=0 || uint64_t(count)*uint32_t(rows)*uint32_t(cols)!=uint64_t(length)) { checked(e,FISICA_INVALID_ARGUMENT); return nullptr; }

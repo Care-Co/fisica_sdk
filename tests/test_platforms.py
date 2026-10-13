@@ -34,3 +34,26 @@ def test_ble_handler_has_native_input_queue():
     from fisica_sdk.bluetooth_handler import BluetoothHandler
     handler=BluetoothHandler('unused')
     assert handler.raw_queue.empty() and not handler.session_input
+
+
+def test_generated_language_codes_match_the_public_header():
+    """One definition for every language: regenerate with tools/sync_binding_metadata.py."""
+    from tools.sync_binding_metadata import generated, header_enums, podspecs
+    stale = [path.name for path, text in {**generated(), **podspecs()}.items() if not path.is_file() or path.read_text() != text]
+    assert not stale, 'Run python tools/sync_binding_metadata.py: ' + ', '.join(stale)
+    enums = header_enums()
+    assert dict(enums['FisicaSessionAction'])['CONNECTED'] == 1 and dict(enums['FisicaContractKind'])['SPECIAL'] == 2
+    from fisica_sdk import FisicaErrorCode, codes
+    assert all(FisicaErrorCode[member.name] == member.value for member in codes.FisicaStatus)
+
+
+def test_default_ble_profile_covers_the_python_transport_characteristics():
+    import re
+    from fisica_sdk import codes
+    ROOT = Path(__file__).resolve().parents[1]
+    source = (ROOT / 'fisica_sdk' / 'bluetooth_handler.py').read_text()
+    block = source[source.index('known_uuids = ['):source.index(']', source.index('known_uuids = ['))]
+    known = set(re.findall(r'"([0-9a-f-]{36})"', block))
+    generated = {value for profile in codes.BLE_PROFILES.values() for value in profile.values()}
+    assert known and known == generated
+    assert codes.BLE_NAME_CONTAINS.lower() in (ROOT / 'fisica_sdk' / 'port_scanner.py').read_text().lower()
