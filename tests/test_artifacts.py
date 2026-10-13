@@ -1,7 +1,7 @@
 import zipfile
 import pytest
 from tools.audit_artifacts import audit_archive
-from tools.native_build import release_metadata
+from tools.native_build import prepare_release, release_metadata, require_release_keys
 
 
 def make_archive(path,extras=None):
@@ -59,22 +59,22 @@ def test_private_headers_other_core_languages_and_unsafe_paths_are_rejected(tmp_
         audit_archive(archive)
 
 
-def test_partner_distribution_metadata_requires_both_identifiers(monkeypatch):
+def test_core_metadata_is_identical_for_every_company(monkeypatch, tmp_path):
+    """No company, contract or delivery identifier may reach the compiled core."""
+    baseline = prepare_release(tmp_path / 'a')
     monkeypatch.setenv('FISICA_PARTNER_ID', 'partner-test')
-    monkeypatch.delenv('FISICA_DISTRIBUTION_ID', raising=False)
-    with pytest.raises(ValueError, match='together'):
-        release_metadata()
     monkeypatch.setenv('FISICA_DISTRIBUTION_ID', 'delivery-test')
-    metadata = release_metadata()
-    assert metadata['distribution'] == {'partner_id': 'partner-test', 'distribution_id': 'delivery-test'}
-    monkeypatch.setenv('FISICA_PARTNER_ID', '../../private')
-    with pytest.raises(ValueError, match='ASCII'):
-        release_metadata()
+    assert prepare_release(tmp_path / 'b') == baseline
+    assert (tmp_path / 'a' / 'fisica_release.h').read_bytes() == (tmp_path / 'b' / 'fisica_release.h').read_bytes()
+    assert 'distribution' not in baseline and b'partner' not in (tmp_path / 'a' / 'fisica_release.h').read_bytes()
+    assert baseline['entitlement']['max_refresh_days'] == 30
 
 
-@pytest.mark.parametrize('identifier', ['.', '..', 'CON', 'COM1.txt', 'trailing.'])
-def test_distribution_identifier_is_a_safe_windows_directory_component(monkeypatch, identifier):
-    monkeypatch.setenv('FISICA_PARTNER_ID', 'partner-test')
-    monkeypatch.setenv('FISICA_DISTRIBUTION_ID', identifier)
-    with pytest.raises(ValueError, match='ASCII'):
-        release_metadata()
+def test_customer_packages_refuse_test_entitlement_keys():
+    keys = release_metadata()['entitlement']['keys']
+    if any(key['environment'] == 'test' for key in keys):
+        with pytest.raises(SystemExit, match='test entitlement keys'):
+            require_release_keys(validation=False)
+        assert require_release_keys(validation=True) is True
+    else:
+        assert require_release_keys(validation=False) is False

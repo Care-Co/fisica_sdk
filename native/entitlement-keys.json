@@ -1,0 +1,9 @@
+{
+  "keys": [
+    {
+      "kid": "test-2026-10",
+      "environment": "test",
+      "public_key": "a975adcba3aabfdfea0768b9598916b7d0183eb751aa46c7c19426a3fbaee854"
+    }
+  ]
+}

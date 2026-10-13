@@ -62,7 +62,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pytest -q
       - name: Build and audit binary release artifacts
-        run: python tools/build_release.py --output release
+        run: python tools/build_release.py --validation --output release
       - name: Install and test the release wheel outside the source tree
         run: |
           $wheel = Get-ChildItem release -Recurse -Filter '*-win_amd64.whl'
@@ -75,7 +75,7 @@ jobs:
           path: |
             release/**/*-win_amd64.whl
             release/**/fisica-core-*-win_amd64.zip
-            release/**/delivery-manifest.json
+            release/**/artifact-manifest.json
           if-no-files-found: error
           retention-days: 14
 

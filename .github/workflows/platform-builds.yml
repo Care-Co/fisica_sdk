@@ -21,12 +21,12 @@ jobs:
       - run: python -m pip install build pytest numpy packaging pyserial bleak
       - run: python tools/native_build.py
       - run: python -m pytest tests -q
-      - run: python tools/build_platforms.py --target apple
+      - run: python tools/build_platforms.py --validation --target apple
         env:
           FISICA_XCODE_DEVELOPER: /Applications/Xcode.app/Contents/Developer
       - run: FISICA_FIXTURES="$GITHUB_WORKSPACE/tests/fixtures" swift test
         working-directory: wrappers/swift
-      - run: python tools/build_platforms.py --target macosx_11_0_universal2
+      - run: python tools/build_platforms.py --validation --target macosx_11_0_universal2
       - name: Audit public Apple artifacts
         run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts apple macosx_11_0_universal2)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -48,7 +48,7 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
         with: {arch: amd64_arm64}
       - run: python -m pip install build
-      - run: python tools/build_release.py --output release
+      - run: python tools/build_release.py --validation --output release
         env: {FISICA_BUILD_PLATFORM: win_arm64}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -56,5 +56,5 @@ jobs:
           path: |
             release/**/*-win_arm64.whl
             release/**/fisica-core-*-win_arm64.zip
-            release/**/delivery-manifest.json
+            release/**/artifact-manifest.json
           retention-days: 14

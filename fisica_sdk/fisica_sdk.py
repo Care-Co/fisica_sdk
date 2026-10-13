@@ -76,11 +76,60 @@ class FisicaSDK:
         self._counter = 0
         self._debug = debug
         self._last_error = None
+        self._entitlement = None
+        self._unverified_notice = False
         log.level = self._debug
 
     def version_info(self):
         """Report independent SDK, Python wrapper, core and ABI versions."""
         return self._core.version_info()
+
+    def configure_entitlement(self, token=None, file=None, endpoint=None, online=True, **options):
+        """
+    Fisica SDK: configure_entitlement
+
+        Parameters:
+            token (str): Server-signed entitlement information.
+            file (str): Path of an entitlement file; works on a PC that was never online.
+            endpoint (str): Server URL for online confirmation. No network is used without it.
+            online (bool): Set False to keep a configured endpoint unused.
+
+        Returns:
+            dict: Same content as entitlement_status().
+
+        Notes:
+            Entitlement information identifies the registered company and contract.
+            It never blocks connection, measurement, analysis or reports; missing,
+            outdated or rejected information only produces a status and a warning.
+        """
+        from .entitlement import Entitlement
+        previous, self._entitlement = self._entitlement, Entitlement(
+            token=token, file=file, endpoint=endpoint, online=online, **options)
+        if previous:
+            previous.close()
+        return self._entitlement.status()
+
+    def entitlement_status(self):
+        """Base license, confirmation freshness and contract state as three separate values."""
+        if self._entitlement:
+            return self._entitlement.status()
+        from .entitlement import UNVERIFIED_STATUS
+        return dict(UNVERIFIED_STATUS)
+
+    def _note_use(self):
+        # Real feature use only. Entitlement problems must never reach the measurement path.
+        try:
+            if self._entitlement:
+                self._entitlement.mark_used()
+            elif not self._unverified_notice:
+                self._unverified_notice = True
+                import warnings
+                from .errors import FisicaEntitlementWarning
+                from .entitlement import WARNINGS
+                warnings.warn('Fisica SDK entitlement: ' + WARNINGS[1][1] + ' Local SDK features keep working.',
+                              FisicaEntitlementWarning, stacklevel=3)
+        except Exception as error:
+            log.debug(f"Entitlement notice skipped: {error}")
 
     def _set_metadata(self, **kwargs):
         default_metadata = {
@@ -251,6 +300,7 @@ class FisicaSDK:
         """
         if self._receiver:
             raise RuntimeError('Disconnect the current device before connecting another Scale')
+        self._note_use()
         try:
             if not isinstance(device, dict):
                 raise TypeError("Device must be a dictionary returned from scan_devices().")
@@ -365,6 +415,7 @@ class FisicaSDK:
             )
             self._starting = False
             raise RuntimeError("Not connected to a device.")
+        self._note_use()
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         loop = asyncio.new_event_loop()
@@ -649,6 +700,7 @@ class FisicaSDK:
         if not self._session or not self._session.frames:
             log.warning("It seems that measurement was not performed or data was not collected. Analyze will be skipped.")
             return
+        self._note_use()
 
         metadata = self._session.metadata
         frames = self._session.frames

@@ -7,7 +7,7 @@ import plistlib
 import shutil
 import subprocess
 import zipfile
-from native_build import ROOT,build_native,prepare_release,release_metadata
+from native_build import ROOT,build_native,prepare_release,release_metadata,require_release_keys
 from audit_artifacts import audit_archive
 
 def run(args): subprocess.run([str(a) for a in args],check=True)
@@ -100,9 +100,11 @@ def main():
     targets=['apple','android','macosx_11_0_universal2','win_arm64','win_amd64']
     p=argparse.ArgumentParser();group=p.add_mutually_exclusive_group(required=True)
     group.add_argument('--target',choices=targets);group.add_argument('--print-artifacts',nargs='+',choices=targets,metavar='TARGET')
-    p.add_argument('--output',type=Path,default=ROOT/'.build/platforms');p.add_argument('--ndk',type=Path,default=Path.home()/'Library/Android/sdk/ndk/26.3.11579264');args=p.parse_args()
+    p.add_argument('--output',type=Path,default=ROOT/'.build/platforms');p.add_argument('--ndk',type=Path,default=Path.home()/'Library/Android/sdk/ndk/26.3.11579264')
+    p.add_argument('--validation',action='store_true',help='QA-only build that may trust test entitlement keys');args=p.parse_args()
     if args.print_artifacts:
         print(' '.join(path.relative_to(Path.cwd()).as_posix() if path.is_relative_to(Path.cwd()) else str(path) for path in artifact_paths(args.output,args.print_artifacts)));return
+    require_release_keys(args.validation)
     args.output.mkdir(parents=True,exist_ok=True)
     if args.target=='apple': apple(args.output/'apple')
     elif args.target=='android': android(args.output/'android',args.ndk)

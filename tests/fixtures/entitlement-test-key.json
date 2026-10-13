@@ -1,0 +1,6 @@
+{
+  "note": "TEST key only. Tokens signed with it are reported as test-key verification and release builds must not trust it.",
+  "kid": "test-2026-10",
+  "secret": "5168034b16daf5d8c8121ef8af78c8c9571cadcba7d47e18debda6c41af02514",
+  "public_key": "a975adcba3aabfdfea0768b9598916b7d0183eb751aa46c7c19426a3fbaee854"
+}

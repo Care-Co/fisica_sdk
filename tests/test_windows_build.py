@@ -74,7 +74,7 @@ def test_cross_target_packaging_copies_only_validated_dll_and_metadata(tmp_path,
     library=native_build.build_native(output)
     assert library.name=='fisica_core.dll' and library.read_bytes()==dll.read_bytes()
     assert sorted(path.name for path in output.iterdir())==['fisica_core.dll','release.json']
-    assert json.loads((output / 'release.json').read_text())['core_version']=='1.3.0'
+    assert json.loads((output / 'release.json').read_text())['core_version']==native_build.release_metadata()['core_version']
 
 
 def test_unvalidated_dll_cannot_enter_package(tmp_path,monkeypatch):
@@ -112,5 +112,6 @@ sdk=FisicaSDK()
 assert sdk.version_info()['core_version']=='1.3.0'
 assert 'bleak' not in sys.modules
 '''
+    script=script.replace('1.3.0',native_build.release_metadata()['core_version'])
     result=subprocess.run([sys.executable,'-c',script],capture_output=True,text=True)
     assert result.returncode==0,result.stderr

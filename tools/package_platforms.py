@@ -1,11 +1,11 @@
 """Assemble binary-only mobile/desktop bindings from trusted prebuilt cores."""
 import argparse,hashlib,json,shutil,zipfile
 from pathlib import Path
-from native_build import ROOT,release_metadata
+from native_build import ROOT,release_metadata,require_release_keys
 from build_platforms import archive,public_files
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--input',type=Path,default=ROOT/'.build/platforms');p.add_argument('--output',type=Path,default=ROOT/'.build/multiplatform-releases');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--input',type=Path,default=ROOT/'.build/platforms');p.add_argument('--output',type=Path,default=ROOT/'.build/multiplatform-releases');p.add_argument('--validation',action='store_true');a=p.parse_args();require_release_keys(a.validation)
  release=release_metadata();out=a.output/release['sdk_version'];out.mkdir(parents=True,exist_ok=True)
  for file in a.input.rglob('*'):
   if file.suffix in ('.zip','.aar'): shutil.copyfile(file,out/file.name)

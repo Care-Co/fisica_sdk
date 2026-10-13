@@ -6,28 +6,19 @@ import sys
 import tempfile
 import zipfile
 import json
-import os
 import hashlib
-import uuid
-from native_build import ROOT, build_native, release_metadata, platform_tag
+from native_build import ROOT, build_native, release_metadata, platform_tag, require_release_keys
 from audit_artifacts import audit_archive
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', default=str(ROOT / '.build' / 'releases'))
-    parser.add_argument('--partner-id', help='Opaque partner identifier; no personal information')
-    parser.add_argument('--distribution-id', help='Delivery identifier; defaults to a new UUID for a partner build')
+    parser.add_argument('--validation', action='store_true', help='QA-only build that may trust test entitlement keys')
     args = parser.parse_args()
-    if args.distribution_id and not args.partner_id:
-        parser.error('--distribution-id requires --partner-id')
-    if args.partner_id:
-        os.environ['FISICA_PARTNER_ID'] = args.partner_id
-        os.environ['FISICA_DISTRIBUTION_ID'] = args.distribution_id or str(uuid.uuid4())
+    validation = require_release_keys(args.validation)
     release = release_metadata()
     output = Path(args.output).resolve() / release['sdk_version']
-    if release['distribution']['distribution_id']:
-        output /= release['distribution']['distribution_id']
     output.mkdir(parents=True, exist_ok=True)
     subprocess.run([sys.executable, '-m', 'build', '--wheel', '--outdir', str(output)], check=True, cwd=ROOT)
     with tempfile.TemporaryDirectory() as temporary:
@@ -53,9 +44,9 @@ def main():
     manifest = {'sdk_version': release['sdk_version'], 'license': release['license'],
                 'core_version': release['core_version'],
                 'abi': {'major': release['abi_major'], 'minor': release['abi_minor']},
-                'distribution': release['distribution'],
+                'entitlement': release['entitlement'], 'validation_build': validation,
                 'artifacts': {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in artifacts}}
-    (output / 'delivery-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+    (output / 'artifact-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(f'Binary artifacts audited: {output}')
 
 
