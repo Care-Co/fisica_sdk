@@ -35,10 +35,13 @@ Browser/Flutter Web is not supported by this native FFI package.
 checks SDK, core, ABI and wrapper support policy offline before decoding or analysis.
 Supported older versions produce warnings; unsupported versions fail explicitly.
 
-The wrapper and compiled core use the Fisica Scale SDK License, included in the
-wrapper ZIP and core bundle. Wrapper modifications and application redistribution
-are allowed within the applicable non-commercial grant or commercial agreement;
-private core sources are never included. `versionInfo` reports release and entitlement
+The wrapper and compiled core use the Fisica Scale SDK License Version 2.0, included
+in the wrapper ZIP and core bundle. The base SDK license comes with genuine Fisica
+hardware, has no date-based expiry and covers non-commercial and ordinary commercial
+use. Wrapper modifications and inclusion in your own applications are allowed under
+its terms; OEM supply, rebranding, standalone SDK resale and use with other hardware
+require a separate agreement. Private core sources are never included.
+`versionInfo` reports release and entitlement
 key information; the binary carries no company or delivery identifier. Native errors retain their numeric `code`. `decodeResponse` exposes
 fixed and variable query payloads without reimplementing the protocol in Dart.
 
@@ -73,9 +76,9 @@ confirmed on production firmware) for the BLE plugin your app uses.
 
 `FisicaEntitlement` imports a server-signed token or file and reports three separate
 values (base license, confirmation freshness, contract state) plus warning bits. Pass
-it as `FisicaClient(core, transport, entitlement: ...)` to record real use. It never
-blocks a feature. Pass `storageDirectory` (for example the app support directory) to
-keep state across launches. With `endpoint` it refreshes the information and sends the
-minimal usage report in the background (`await sync()` to run it now); without an
-endpoint no network is used. A failed exchange only sets `lastSyncError`.
-See `doc/entitlement.md`.
+it as `FisicaClient(core, transport, entitlement: ...)` so warnings follow real use. It
+never blocks a feature. Pass `storageDirectory` (for example the app support directory)
+to keep the signed token across launches for offline verification. With `endpoint` it
+refreshes the information in the background (`await sync()` to run it now); without an
+endpoint no network is used. A failed exchange only sets `lastSyncError`. The SDK does
+not track its own use; see `doc/entitlement.md`.

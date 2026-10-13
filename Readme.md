@@ -101,7 +101,7 @@ The [SDK requirements](doc/sdk-requirements.md) define Windows 10/11 x64
 first, BLE/USB access, unrestricted partner calibration/raw data, offline use,
 and the remaining hardware/platform validation work.
 
-Policy (2026-10-13): the base SDK license comes with genuine hardware, has no date
+Policy (2026-10-14): the base SDK license comes with genuine hardware, has no date
 expiry and covers ordinary commercial apps and services after registration. Separate
 agreements are only for exceptions such as OEM supply, rebranding or SDK resale.
 The [LICENSE](LICENSE) is Version 2.0, written to this policy and marked as a draft
@@ -122,8 +122,10 @@ print(sdk.entitlement_status())   # base license, confirmation freshness, contra
 
 Missing, outdated, rejected, ended or revoked entitlement information only produces
 a status and a `FisicaEntitlementWarning`; connection, measurement and analysis keep
-working. Online confirmation and the minimal usage report run only when an `endpoint`
-is given. See [entitlement](doc/entitlement.md).
+working. Online refresh of the information runs only when an `endpoint` is given. The
+SDK does not track its own use: no usage, last-use time or call counts are collected
+or reported (policy of 2026-10-14; code written for the earlier usage-record policy is
+still present and listed for removal in [entitlement](doc/entitlement.md)).
 
 ```sh
 python tools/build_release.py --validation

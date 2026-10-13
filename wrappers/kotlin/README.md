@@ -42,23 +42,23 @@ before discovery, splits writes by the negotiated MTU, falls back to 23 when the
 request is refused and resets on reconnect (the splitting rule is unit-tested on a JVM). `FisicaBleProfile.SCALE` comes from the
 existing Python SDK and is not yet confirmed on production firmware
 (`FisicaBleProfile.VERIFIED` is false). Grant BLUETOOTH_SCAN/CONNECT on Android 12+ and
-the legacy location permissions where required. Online entitlement refresh, when the
-app adds it, needs the INTERNET permission; the AAR does not declare it.
+the legacy location permissions where required. Online entitlement refresh needs the
+INTERNET permission in the app; the AAR does not declare it.
 
 Entitlement: `FisicaEntitlement` imports a server-signed token or file and reports
 three separate values (base license, confirmation freshness, contract state) plus
-warning bits through `onWarning`. Pass it to `FisicaClient` to record real use. It
-never blocks a feature. Pass `storage` (for example `context.filesDir`) to keep state
-across launches. With `endpoint` it refreshes the information and sends the minimal
-usage report in the background (`sync()`, or `syncNow()` on a worker thread); without
-an endpoint no network is used. A failed exchange only sets `lastSyncError`.
-See `doc/entitlement.md`.
+warning bits through `onWarning`. Pass it to `FisicaClient` so warnings follow real use.
+It never blocks a feature. Pass `storage` (for example `context.filesDir`) to keep the
+signed token across launches for offline verification. With `endpoint` it refreshes the
+information in the background (`sync()`, or `syncNow()` on a worker thread); without an
+endpoint no network is used. A failed exchange only sets `lastSyncError`. The SDK does
+not track its own use; see `doc/entitlement.md`.
 
 Keep `com.carenco.fisica.Bridge` and the `FisicaException` constructor in R8 (consumer
 rules are included). The low-level `FisicaSession` remains available.
 
-Verified: shared vectors, client, entitlement (including online refresh, usage report
-and storage against the mock server) and MTU write splitting on a JVM through JNI;
+Verified: shared vectors, client, entitlement (including online refresh and storage
+against the mock server) and MTU write splitting on a JVM through JNI;
 `BleTransport` compiles against android-35. Not verified: any Android device, real
 BLE, MTU negotiation with a Scale, and BLE continuous measurement, which the protocol
 document describes as USB-only. Android USB and Wi-Fi adapters are not supplied.

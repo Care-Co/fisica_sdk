@@ -53,17 +53,18 @@ Python SDK and is not yet confirmed on production firmware.
 
 Entitlement: `FisicaEntitlement` imports a server-signed token or file and reports
 three separate values (base license, confirmation freshness, contract state) plus
-warnings through `Warning`. Pass it to `FisicaClient` to record real use. It never
-blocks a feature. State is stored under LocalApplicationData by default (`storage`).
-With `endpoint` it refreshes the information and sends the minimal usage report in the
-background (`Sync()` or `await SyncAsync()`); without an endpoint no network is used.
-A failed exchange only sets `LastSyncError`. See `doc/entitlement.md`.
+warnings through `Warning`. Pass it to `FisicaClient` so warnings follow real use. It
+never blocks a feature. The signed token is stored under LocalApplicationData by default
+(`storage`) for offline verification. With `endpoint` it refreshes the information in
+the background (`Sync()` or `await SyncAsync()`); without an endpoint no network is
+used. A failed exchange only sets `LastSyncError`. The SDK does not track its own use;
+see `doc/entitlement.md`.
 
 `new FisicaCore()` loads the packaged core; an explicit trusted path can be supplied.
 One core binary is loaded per process. The low-level `FisicaSession` remains available.
 
-Verified: shared vectors, client, entitlement (including online refresh, usage report
-and storage against the mock server) and serial open-failure handling on macOS and on
+Verified: shared vectors, client, entitlement (including online refresh and storage
+against the mock server) and serial open-failure handling on macOS and on
 the Windows CI runner; `BleTransport` compiles on both and its failure paths run on
 the Windows runner, which has no Bluetooth device. Not verified: a real COM port or BLE
 connection with a Scale, real Windows drivers, and Windows ARM64 execution.

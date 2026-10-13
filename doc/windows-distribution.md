@@ -98,7 +98,7 @@ Windows after packaging to confirm runtime compatibility and versions.
 Public wrappers and private compiled core use the Fisica Scale SDK License. The
 wheel uses `License-Expression: LicenseRef-Fisica-Scale-SDK` and includes the license;
 core and Flutter ZIPs also include it. The packaged text is Version 2.0, written to the
-policy of 2026-10-13 and marked as a draft for review ([review notes](license-review.md)). Third-party libraries retain their own licenses; PyQt5 GUI redistribution
+policy of 2026-10-14 and marked as a draft for review ([review notes](license-review.md)). Third-party libraries retain their own licenses; PyQt5 GUI redistribution
 must meet its separate GPL/commercial conditions.
 
 ```sh

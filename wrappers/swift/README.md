@@ -45,14 +45,15 @@ entitlement.
 
 Entitlement: `FisicaEntitlement` imports a server-signed token or file and reports
 three separate values (base license, confirmation freshness, contract state) plus
-warnings through `onWarning`. Pass it to `FisicaClient` to record real use. It never
-blocks a feature. State is stored under Application Support by default (`storage:`).
-With `endpoint:` it refreshes the information and sends the minimal usage report in the
-background (`sync()`, or `syncNow()` off the main thread); without an endpoint no
-network is used. A failed exchange only sets `lastSyncError`. See `doc/entitlement.md`.
+warnings through `onWarning`. Pass it to `FisicaClient` so warnings follow real use. It
+never blocks a feature. The signed token is stored under Application Support by default
+(`storage:`) for offline verification. With `endpoint:` it refreshes the information in
+the background (`sync()`, or `syncNow()` off the main thread); without an endpoint no
+network is used. A failed exchange only sets `lastSyncError`. The SDK does not track
+its own use; see `doc/entitlement.md`.
 
 The low-level `FisicaSession` remains available for hosts that drive the core directly.
 
 Verified: `swift test` on macOS (shared vectors, client, entitlement through
-`MockTransport`; online refresh, usage report and storage against the mock server). Not verified: any real Scale over BLE, iOS devices, and BLE
+`MockTransport`; online refresh and storage against the mock server). Not verified: any real Scale over BLE, iOS devices, and BLE
 continuous measurement, which the protocol document describes as USB-only.

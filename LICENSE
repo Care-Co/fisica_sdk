@@ -1,7 +1,7 @@
 Fisica Scale SDK License
-Version 2.0 (draft for review, 2026-10-13)
+Version 2.0 (draft for review, revised 2026-10-14)
 
-This version states the product policy of 2026-10-13 and is published for review.
+This version states the product policy of 2026-10-14 and is published for review.
 It has not completed legal review. It does not change any existing agreement,
 any package already delivered under Version 1.0 (doc/LICENSE-1.0.txt), or any
 rights granted under an earlier license such as the MIT License.
@@ -99,25 +99,27 @@ License has expired. A communication failure is not treated as an expiry or a
 revocation. Entitlement Information does not prove that a device is genuine, where
 code came from, or that an agreement is being complied with.
 
-9. Usage records
+An online check sends the Entitlement Information to Care&Co and receives a newer
+confirmation. It carries no measurement data and no record of SDK activity. The
+signed Entitlement Information and the time it was confirmed may be stored on the
+device so that it can be verified offline; this is not a record of SDK use.
 
-When Entitlement Information for a company and contract has been verified and the
-application has enabled online reporting, the SDK reports to Care&Co, for that
-company and contract only: that the SDK was used, the time of the last use according
-to the device clock, and whether use was observed while that contract was ended or
-revoked.
+9. No SDK usage tracking
 
-The SDK does not report measurement data, weights, health information, information
-about individual users, hardware identifiers, counts of measurements or API calls, or
-detailed logs. Unverified use is not attributed to any company or contract.
+The SDK does not collect, retain or report activity records for the purpose of
+letting Care&Co track how the SDK is used. In particular it does not report whether
+the SDK was used, when it was last used, whether it was used after a contract ended
+or was revoked, or how many measurements or API calls were made, and it does not
+track use per application, installation or device.
 
-An observation of use after a contract ended is not, by itself, evidence that a
-special right was exercised or that these terms were breached; using the Base SDK
-License after a Separate Agreement ends is permitted. Usage records are not a billing
-or audit record.
+Information needed for registration, contract administration, online refresh of
+Entitlement Information and offline verification is handled separately, as described
+in sections 3 and 8. A record that Entitlement Information was refreshed is not a
+record of SDK use; it does not show whether the SDK was used or whether an agreement
+was complied with.
 
-Applications that enable online reporting are responsible for the disclosures their
-own users are entitled to under applicable privacy and platform rules.
+This license does not restrict an application from storing measurement data and
+reports for its own service.
 
 10. Earlier versions and third-party materials
 
