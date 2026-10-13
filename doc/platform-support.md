@@ -81,7 +81,8 @@ GATT 표, MTU, ACK/NACK, 프레임 수, 종료 결과를 JSON으로 기록한다
 
 | 항목 | 결과 | 종류 |
 |---|---|---|
-| Python 테스트 | 174 passed | 로컬 macOS, Mock |
+| Python 테스트 | 175 passed | 로컬 macOS, Mock. Windows CI에서도 실행 |
+| 네이티브 C ABI 계약 | UBSan, ASan+UBSan 통과. 토큰 1글자 변조 3144건·무작위 입력 2만 건 모두 거절 | 로컬 macOS, GitHub macOS CI(UBSan) |
 | Swift `swift test` | 7 passed (공통 벡터 2, 클라이언트·확인 정보 5) | 로컬 macOS XCTest, GitHub macOS CI |
 | Kotlin/JNI | 공통 벡터, 클라이언트·확인 정보 계약 통과 | 로컬 JVM. `BleTransport`는 android-35로 컴파일만 |
 | C# | 공통 벡터, 클라이언트·Serial 오류 처리·확인 정보 계약 통과 | 로컬 macOS .NET 8, GitHub Windows CI |
@@ -121,6 +122,9 @@ Apple SDK 경로는 FISICA_XCODE_DEVELOPER, Android SDK는 ANDROID_SDK_ROOT,
 Kotlin compiler runtime은 FISICA_GRADLE_LIB로 설정한다. 소비 앱은 private 코어를
 컴파일하지 않는다. `--validation`은 코어가 테스트 서명 키를 신뢰하는 동안 필요하며 QA용 빌드라는 뜻이다.
 운영 키를 `native/entitlement-keys.json`에 넣으면 플래그 없이 빌드한다.
+
+바이너리에 회사별 정보가 없으므로 Maven, SwiftPM, NuGet, pub 같은 레지스트리에 같은 패키지를 올리는 방식도
+가능하다. 실제 등록·퍼블리시는 하지 않았다.
 
 배포/권한 기준: [Apple binary Swift packages](https://developer.apple.com/documentation/xcode/distributing-binary-frameworks-as-swift-packages),
 [Android NDK prebuilt libraries](https://developer.android.com/ndk/guides/cmake),

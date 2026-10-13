@@ -98,7 +98,7 @@ class FisicaClient(
 
     private val now get() = (System.nanoTime() - started) / 1_000_000
     private fun post(block: () -> Unit) { try { callbacks.execute(block) } catch (_: Exception) {} }
-    private fun run(block: () -> Unit) { try { worker.execute { try { block() } catch (error: Throwable) { post { onError(error) } } } } catch (_: Exception) {} }
+    private fun serial(block: () -> Unit) { try { worker.execute { try { block() } catch (error: Throwable) { post { onError(error) } } } } catch (_: Exception) {} }
     private fun finish(operation: Int, event: SessionEvent?, error: Throwable?) {
         val waiter = waiters.remove(operation) ?: return
         // Release everything before the caller hears that close finished, confirmed or not.
@@ -115,15 +115,15 @@ class FisicaClient(
      * probe is reported in its status and does not prevent use.
      */
     @JvmOverloads
-    fun connect(link: Long = FisicaLink.BLE, timeoutMs: Long = 15000, completion: (SessionEvent?, Throwable?) -> Unit) = run {
+    fun connect(link: Long = FisicaLink.BLE, timeoutMs: Long = 15000, completion: (SessionEvent?, Throwable?) -> Unit) = serial {
         if (closed || linkReady || waiters.containsKey(FisicaSessionOperation.PROBE)) {
-            post { completion(null, FisicaException(FisicaStatus.BUSY, "Already connected or connecting")) }; return@run
+            post { completion(null, FisicaException(FisicaStatus.BUSY, "Already connected or connecting")) }; return@serial
         }
         waiters[FisicaSessionOperation.PROBE] = completion
-        transport.onReady = { run { ready(link) } }
-        transport.onBytes = { bytes -> run { received(bytes) } }
-        transport.onLost = { run { lost(false) } }
-        transport.onSendFailure = { error -> run { post { onError(error) }; lost(true) } }
+        transport.onReady = { serial { ready(link) } }
+        transport.onBytes = { bytes -> serial { received(bytes) } }
+        transport.onLost = { serial { lost(false) } }
+        transport.onSendFailure = { error -> serial { post { onError(error) }; lost(true) } }
         transport.onError = { error -> post { onError(error) } }
         readyDeadline = worker.schedule({
             if (!linkReady && !closed) {
@@ -186,9 +186,9 @@ class FisicaClient(
         post { onEvent(event) }
     }
 
-    private fun request(action: Int, value: Long, waitFor: Int, completion: (SessionEvent?, Throwable?) -> Unit) = run {
+    private fun request(action: Int, value: Long, waitFor: Int, completion: (SessionEvent?, Throwable?) -> Unit) = serial {
         if (closed || waiters.containsKey(waitFor)) {
-            post { completion(null, FisicaException(FisicaStatus.BUSY, "Another operation is pending")) }; return@run
+            post { completion(null, FisicaException(FisicaStatus.BUSY, "Another operation is pending")) }; return@serial
         }
         waiters[waitFor] = completion
         try { session.action(action, value, now); session.drain().forEach(::deliver) }
@@ -207,9 +207,9 @@ class FisicaClient(
      * Resources are released even when the Scale does not confirm.
      */
     @JvmOverloads
-    fun close(completion: (SessionEvent?, Throwable?) -> Unit = { _, _ -> }) = run {
-        if (closed) { post { completion(null, null) }; return@run }
-        if (!linkReady) { teardown(); post { completion(null, null) }; return@run }
+    fun close(completion: (SessionEvent?, Throwable?) -> Unit = { _, _ -> }) = serial {
+        if (closed) { post { completion(null, null) }; return@serial }
+        if (!linkReady) { teardown(); post { completion(null, null) }; return@serial }
         waiters[FisicaSessionOperation.CLOSE] = completion
         try { session.action(FisicaSessionAction.DISCONNECT, 0, now); session.drain().forEach(::deliver) }
         catch (error: Throwable) { finish(FisicaSessionOperation.CLOSE, null, error) }
