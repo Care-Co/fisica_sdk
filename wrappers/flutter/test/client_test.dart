@@ -161,6 +161,66 @@ void main() {
     entitlement.close();
     restored.close();
   });
+  test('online confirmation, usage report and storage', () async {
+    // Runs against the reference mock server started by tools/verify_bindings.py.
+    final environment = Platform.environment;
+    final endpoint = environment['FISICA_ENTITLEMENT_ENDPOINT'];
+    if (endpoint == null) {
+      markTestSkipped('Mock entitlement server not configured');
+      return;
+    }
+    final directory = environment['FISICA_ENTITLEMENT_STORAGE']!;
+    final now = int.parse(environment['FISICA_ENTITLEMENT_NOW']!);
+    final valid =
+        (jsonDecode(
+                  File(
+                    '../../tests/fixtures/entitlement.json',
+                  ).readAsStringSync(),
+                )
+                as Map<String, dynamic>)['valid']
+            as String;
+    final entitlement = FisicaEntitlement(
+      core,
+      clock: () => now,
+      endpoint: endpoint,
+      storageDirectory: directory,
+    );
+    expect(
+      entitlement.importToken(valid),
+      FisicaEntitlementOutcome.accepted,
+    );
+    expect(await entitlement.sync(), isNull);
+    // Server-signed confirmation time.
+    expect(entitlement.status().verifiedAt, now);
+    entitlement.markUsed();
+    expect(await entitlement.sync(), isNull);
+    expect(entitlement.pendingReport(Uint8List(16)), isNull);
+    // A communication failure is recorded, raises nothing and changes no
+    // state; the record waits.
+    final offline = FisicaEntitlement(
+      core,
+      clock: () => now,
+      endpoint: 'http://127.0.0.1:9',
+      storageDirectory: '$directory/offline',
+    );
+    offline.importToken(valid);
+    offline.markUsed();
+    expect(await offline.sync(), startsWith('network:'));
+    expect(offline.status().contract, FisicaContract.active);
+    expect(offline.status().verification, FisicaVerification.fresh);
+    expect(offline.pendingReport(Uint8List(16)), isNotNull);
+    // A new instance finds the stored record and can report it later.
+    final reopened = FisicaEntitlement(
+      core,
+      clock: () => now,
+      storageDirectory: '$directory/offline',
+    );
+    reopened.importToken(valid);
+    expect(reopened.pendingReport(Uint8List(16)), isNotNull);
+    entitlement.close();
+    offline.close();
+    reopened.close();
+  });
   test('close during start cancels pending future and disposes once', () async {
     final client = FisicaClient(core, MockBytes());
     await client.connect();

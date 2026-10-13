@@ -1,11 +1,17 @@
 """Record how a real Scale behaves over BLE: GATT table, MTU, ACK/NACK and measurement data.
 
-The protocol document describes continuous measurement as USB-only while the core
-sends the same continuous commands over BLE. This probe runs the core's current BLE
-sequence against one device and writes what actually happened, so the BLE path can be
-decided from evidence per firmware (planned production 2.0.1, interim 2.0.2).
+Three descriptions of BLE measurement disagree (doc/ble-measurement-path.md):
+the protocol document (continuous 0x51 is USB-only; BLE uses the single/general
+measurement 0x50), the published 1.0.1 SDK (BLE mode + continuous on every link) and
+the current core (link mode + continuous). This probe runs both candidate sequences
+against one device and writes what actually happened, so the BLE path can be decided
+from evidence per firmware (planned production 2.0.1, interim 2.0.2).
 
-It sends only: firmware query, BLE mode, start, stop, mode release. No zero,
+  continuous: the core's current session sequence (mode BLE, 0x51 start/stop, release)
+  single:     the documented sequence (mode BLE, 0x50 start with CTRL=1/UTYPE=1 in the
+              8-byte form of the 2025-03-10 revision, 0x50 stop, release)
+
+It sends only firmware query, mode, measurement start/stop and mode release. No zero,
 calibration, Wi-Fi or OTA command. Run it from a terminal that has Bluetooth
 permission, once per firmware version, with someone standing on the Scale:
 
@@ -96,6 +102,55 @@ async def drive(write, incoming, seconds, clock=time.monotonic):
             'final_state': final_state, 'log': log}
 
 
+async def drive_single(write, incoming, seconds, clock=time.monotonic):
+    """Documented BLE sequence with raw commands; the core has no session path for it yet."""
+    core = get_core()
+    log, frames, buffer = [], [], bytearray()
+    origin = clock()
+    now = lambda: int((clock() - origin) * 1000)
+
+    async def read(limit, header=None):
+        deadline = clock() + limit
+        while clock() < deadline:
+            try:
+                buffer.extend(await asyncio.wait_for(incoming.get(), 0.02))
+            except asyncio.TimeoutError:
+                continue
+            while buffer:
+                consumed, kind, packet = core.next_packet(bytes(buffer))
+                if not consumed:
+                    break
+                del buffer[:consumed]
+                if kind == 1:
+                    frames.append((now(), packet[0]))  # Byte 0 is the measurement count index.
+                elif kind == 2:
+                    response = core.decode_response(packet)
+                    entry = {'t_ms': now(), 'event': 'RESPONSE', 'header': response['header'], 'accepted': response['success'],
+                             'device_code': 0 if response['success'] else (response['data_high'] << 8) | response['data_low'], 'bytes': packet.hex()}
+                    log.append(entry)
+                    if header is not None and response['header'] == header:
+                        return entry
+        return None
+
+    async def command(step, data, header):
+        log.append({'t_ms': now(), 'event': 'TRANSMIT', 'step': step, 'bytes': data.hex()})
+        await write(data)
+        return await read(3, header)
+
+    mode = await command('mode_ble', core.command('SET_DEVICE_BLE'), 0x22)
+    start = await command('single_start', core.command('_legacy_fixed', payload=bytes([0x50, 0x53, 1, 1])), 0x50)
+    started = bool(start and start['accepted'])
+    if started:
+        await read(seconds)
+    stop = await command('single_stop', core.command('_legacy_fixed', payload=bytes([0x50, 0x53, 0, 0])), 0x50)
+    release = await command('release', core.command('SET_DEVICE_STOP'), 0x22)
+    intervals = [b[0] - a[0] for a, b in zip(frames, frames[1:])]
+    return {'mode_accepted': bool(mode and mode['accepted']), 'single_start_accepted': started, 'frames': len(frames),
+            'count_index_values': sorted({index for _, index in frames})[:64],
+            'frame_interval_ms': {'min': min(intervals), 'max': max(intervals)} if intervals else None,
+            'stop_accepted': bool(stop and stop['accepted']), 'release_accepted': bool(release and release['accepted']), 'log': log}
+
+
 async def probe(args):
     from bleak import BleakClient, BleakScanner
     found = await BleakScanner.discover(timeout=args.scan_seconds, return_adv=True)
@@ -120,7 +175,13 @@ async def probe(args):
             return report
         report['profile'] = profile
         await client.start_notify(profile['notify'], lambda _, data: incoming.put_nowait(bytes(data)))
-        report.update(await drive(lambda data: client.write_gatt_char(profile['write'], data), incoming, args.seconds))
+        write = lambda data: client.write_gatt_char(profile['write'], data)
+        if args.sequence in ('continuous', 'both'):
+            report['continuous'] = await drive(write, incoming, args.seconds)
+        if args.sequence in ('single', 'both'):
+            while not incoming.empty():
+                incoming.get_nowait()
+            report['single'] = await drive_single(write, incoming, args.seconds)
         await client.stop_notify(profile['notify'])
     return report
 
@@ -130,11 +191,16 @@ def main():
     parser.add_argument('--seconds', type=float, default=5, help='Measurement time after the start ACK')
     parser.add_argument('--scan-seconds', type=float, default=8)
     parser.add_argument('--address', help='Probe this device only')
+    parser.add_argument('--sequence', choices=['continuous', 'single', 'both'], default='both')
     parser.add_argument('--out', type=Path, default=Path('ble-probe.json'))
     args = parser.parse_args()
     report = asyncio.run(probe(args))
     args.out.write_text(json.dumps(report, indent=2) + '\n')
-    summary = {key: report.get(key) for key in ('firmware', 'mtu', 'default_profile_matches', 'continuous_start_accepted', 'frames', 'final_state', 'error')}
+    continuous, single = report.get('continuous', {}), report.get('single', {})
+    summary = {'firmware': continuous.get('firmware'), 'mtu': report.get('mtu'), 'default_profile_matches': report.get('default_profile_matches'),
+               'continuous_over_ble': {key: continuous.get(key) for key in ('continuous_start_accepted', 'frames', 'final_state')},
+               'documented_single': {key: single.get(key) for key in ('single_start_accepted', 'frames', 'count_index_values', 'stop_accepted')},
+               'error': report.get('error')}
     print(json.dumps(summary, indent=2))
     print('Full record:', args.out)
 

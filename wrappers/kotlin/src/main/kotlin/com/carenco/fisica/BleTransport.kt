@@ -7,7 +7,6 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import java.util.UUID
-import java.util.ArrayDeque
 
 /**
  * OS IO, not protocol policy. Host must grant permissions and select a Scale.
@@ -23,14 +22,14 @@ class BleTransport(private val context: Context, private val adapter: BluetoothA
     override var onSendFailure: (Throwable)->Unit = {}
     override var onError: (Throwable)->Unit = {}
     /** ATT MTU agreed with the Scale; 23 until negotiation succeeds. */
-    var mtu = DEFAULT_MTU; private set
+    val mtu get() = outgoing.mtu
     private val main = Handler(Looper.getMainLooper())
     private var gatt: BluetoothGatt? = null
     private var write: BluetoothGattCharacteristic? = null
     private var device: BluetoothDevice? = null
     private var writeID: UUID? = null; private var notifyID: UUID? = null
     private var busy = false; private var ready = false; private var scanning = false; private var discovering = false
-    private val outgoing = ArrayDeque<ByteArray>()
+    private val outgoing = BleWriteQueue()
     private val ccc = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     private fun fail(message: String) { onError(FisicaException(1001,message)) }
     private val scan = object: ScanCallback() {
@@ -68,18 +67,18 @@ class BleTransport(private val context: Context, private val adapter: BluetoothA
     }
     override fun send(bytes: ByteArray) { main.post {
         if (!ready) { onSendFailure(FisicaException(1001,"BLE is not ready")); return@post }
-        // A write carries at most the negotiated MTU minus the 3-byte ATT header.
-        bytes.asList().chunked(mtu-3).forEach { outgoing.add(it.toByteArray()) }; pump()
+        outgoing.enqueue(bytes); pump()
     } }
     private fun pump() {
         val g=gatt; val c=write
-        if (busy || outgoing.isEmpty() || g==null || c==null) return
-        c.writeType=if(c.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0) BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT else BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE; c.value=outgoing.removeFirst(); busy=true
+        if (busy || g==null || c==null) return
+        val chunk=outgoing.next() ?: return
+        c.writeType=if(c.properties and BluetoothGattCharacteristic.PROPERTY_WRITE != 0) BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT else BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE; c.value=chunk; busy=true
         val accepted=try { g.writeCharacteristic(c) } catch (error: SecurityException) { false }
         if (!accepted) { busy=false; outgoing.clear(); onSendFailure(FisicaException(1001,"BLE write failed")) }
     }
     /** State of one connection attempt; a reconnect must not inherit the previous MTU or queue. */
-    private fun reset() { ready=false; busy=false; discovering=false; outgoing.clear(); write=null; mtu=DEFAULT_MTU }
+    private fun reset() { ready=false; busy=false; discovering=false; outgoing.reset(); write=null }
     private fun closeGatt() {
         val g=gatt ?: return
         gatt=null
@@ -98,12 +97,12 @@ class BleTransport(private val context: Context, private val adapter: BluetoothA
             if (g!==gatt) return@post
             if (status==BluetoothGatt.GATT_SUCCESS && state==BluetoothProfile.STATE_CONNECTED) {
                 // Negotiate before discovery; a refused request leaves the default MTU in use.
-                if (!g.requestMtu(REQUESTED_MTU)) discover(g)
+                if (!g.requestMtu(BleWriteQueue.REQUESTED_MTU)) discover(g)
             } else { if(status!=0) fail("BLE connection error $status"); reset(); closeGatt(); onLost() }
         } }
         override fun onMtuChanged(g: BluetoothGatt,size: Int,status: Int) { main.post {
             if (g!==gatt) return@post
-            if (status==BluetoothGatt.GATT_SUCCESS) mtu=size.coerceAtLeast(DEFAULT_MTU)
+            outgoing.negotiated(size,status==BluetoothGatt.GATT_SUCCESS)
             discover(g)
         } }
         override fun onServicesDiscovered(g: BluetoothGatt,status: Int) { main.post {
@@ -133,10 +132,5 @@ class BleTransport(private val context: Context, private val adapter: BluetoothA
             if (g!==gatt) return@post
             busy=false; if(status!=0) { outgoing.clear(); onSendFailure(FisicaException(1001,"BLE write error $status")) } else pump()
         } }
-    }
-    companion object {
-        const val DEFAULT_MTU = 23
-        /** Largest ATT MTU Android will negotiate; the Scale answers with what it supports. */
-        const val REQUESTED_MTU = 517
     }
 }

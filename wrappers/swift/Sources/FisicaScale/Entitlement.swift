@@ -24,12 +24,27 @@ public final class FisicaEntitlement {
     private var handle: OpaquePointer?
     private let lock = NSRecursiveLock()
     private let clock: () -> UInt64
+    private let endpoint: URL?, storage: URL?, online: Bool
+    // Serial: one exchange at a time, so a report is never confirmed twice.
+    private let exchange = DispatchQueue(label: "fisica.entitlement.sync")
+    private var nextSync = DispatchTime.now(), syncing = false
     /// Called whenever a new warning appears, so the app can show or log it.
     public var onWarning: (([FisicaEntitlementWarning], EntitlementStatus) -> Void)?
     private var warned: UInt64 = 0
+    /// Last storage or network problem, or nil. Never an entitlement state.
+    public private(set) var lastSyncError: String?
+    /// Per-user Application Support directory used when no storage directory is given.
+    public static var defaultStorage: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?.appendingPathComponent("Fisica/sdk", isDirectory: true)
+    }
 
-    public init(core: FisicaCore, clock: @escaping () -> UInt64 = { UInt64(max(0, Date().timeIntervalSince1970)) }) throws {
-        self.clock = clock
+    /// - Parameters:
+    ///   - endpoint: Server base URL for online confirmation and the minimal usage report. Without it no network is used.
+    ///   - storage: Directory for the state file; nil keeps state in memory only.
+    ///   - online: false keeps a configured endpoint unused.
+    public init(core: FisicaCore, endpoint: URL? = nil, storage: URL? = FisicaEntitlement.defaultStorage, online: Bool = true,
+                clock: @escaping () -> UInt64 = { UInt64(max(0, Date().timeIntervalSince1970)) }) throws {
+        self.clock = clock; self.endpoint = endpoint; self.storage = storage; self.online = online
         try check(fisica_core_entitlement_create(&handle))
     }
     deinit { close() }
@@ -40,11 +55,38 @@ public final class FisicaEntitlement {
 
     /// Returns what happened to the token. A rejected or older token leaves verified information untouched.
     @discardableResult public func importToken(_ token: String) throws -> FisicaEntitlementOutcome {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         let bytes = Array(token.utf8); var outcome: UInt32 = 0
-        try check(fisica_core_entitlement_import(try open(), bytes, UInt32(bytes.count), clock(), &outcome))
+        do {
+            try check(fisica_core_entitlement_import(try open(), bytes, UInt32(bytes.count), clock(), &outcome))
+        } catch { lock.unlock(); throw error }
+        if outcome == FisicaEntitlementOutcome.accepted.rawValue {
+            // Stored usage and a possibly newer confirmation win over an older file.
+            if let file = stateFile(), let state = try? Data(contentsOf: file) {
+                let stored = [UInt8](state); var ignored: UInt32 = 0
+                if fisica_core_entitlement_restore(handle, stored, UInt32(stored.count)) == 0 {
+                    _ = fisica_core_entitlement_import(handle, bytes, UInt32(bytes.count), clock(), &ignored)
+                }
+            }
+            save()
+        }
         notify()
+        lock.unlock()
+        if outcome == FisicaEntitlementOutcome.accepted.rawValue { sync() }
         return FisicaEntitlementOutcome(rawValue: outcome) ?? .rejectedFormat
+    }
+    private func stateFile() -> URL? {
+        guard let storage, let company = try? text(.company), !company.isEmpty, let contract = try? text(.contract) else { return nil }
+        // Named by company and contract, the only attribution unit; never an installation or device id.
+        let name = String("\(company)-\(contract)".map { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") ? $0 : "_" })
+        return storage.appendingPathComponent("entitlement-\(name).state")
+    }
+    private func save() {
+        guard let file = stateFile(), let state = try? exportState() else { return }
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(state).write(to: file, options: .atomic)
+        } catch { lastSyncError = "storage: \(error.localizedDescription)" }
     }
     /// Offline setup: a file downloaded on another PC works on a device that was never online.
     @discardableResult public func importFile(_ url: URL) throws -> FisicaEntitlementOutcome {
@@ -80,10 +122,68 @@ public final class FisicaEntitlement {
     }
     /// Record real feature use (connect, measure, analyze). Does nothing without a verified contract.
     public func markUsed() {
-        lock.lock(); defer { lock.unlock() }
-        guard let handle else { return }
+        lock.lock()
+        guard let handle else { lock.unlock(); return }
         _ = fisica_core_entitlement_mark_used(handle, clock())
-        notify()
+        save(); notify()
+        lock.unlock()
+        sync()
+    }
+
+    private func post(_ path: String, token: String, body: Data) throws -> Data {
+        guard let endpoint, let url = URL(string: endpoint.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else {
+            throw FisicaError(code: 1001, message: "Invalid endpoint")
+        }
+        var request = URLRequest(url: url, timeoutInterval: 5)
+        request.httpMethod = "POST"; request.httpBody = body
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let done = DispatchSemaphore(value: 0)
+        var result: Result<Data, Error> = .failure(FisicaError(code: 1001, message: "No response"))
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error { result = .failure(error) }
+            else if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) { result = .success(data ?? Data()) }
+            else { result = .failure(FisicaError(code: 1001, message: "HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0)")) }
+            done.signal()
+        }.resume()
+        done.wait()
+        return try result.get()
+    }
+    private func exchangeOnce() -> String? {
+        guard online, endpoint != nil else { return nil }
+        do {
+            lock.lock(); let token = handle == nil ? "" : ((try? text(.token)) ?? ""); lock.unlock()
+            if token.isEmpty { return nil }  // Nothing verified: nothing to refresh, nothing attributable to report.
+            let response = try JSONSerialization.jsonObject(with: try post("/sdk/v1/entitlement/refresh", token: token, body: Data("{}".utf8))) as? [String: Any]
+            guard let refreshed = response?["token"] as? String else { throw FisicaError(code: 1001, message: "Unexpected refresh response") }
+            lock.lock()
+            if handle != nil { let bytes = Array(refreshed.utf8); var ignored: UInt32 = 0; _ = fisica_core_entitlement_import(handle, bytes, UInt32(bytes.count), clock(), &ignored) }
+            lock.unlock()
+            while let report = try pendingReport(reportID: (0..<16).map { _ in UInt8.random(in: 0...255) }) {
+                _ = try post("/sdk/v1/usage", token: report.token, body: Data(report.body))
+                try reportDone()  // Cleared only after the server confirmed.
+            }
+            lastSyncError = nil
+        } catch { lastSyncError = "network: \((error as? FisicaError)?.message ?? error.localizedDescription)" }
+        lock.lock(); if handle != nil { save(); notify() }; lock.unlock()
+        return lastSyncError
+    }
+    /// Online confirmation, then the pending usage reports, on the calling thread (do not call on the
+    /// main thread). Returns nil or the problem. A failure changes no entitlement state: it is never
+    /// an expiry or a revocation.
+    @discardableResult public func syncNow() -> String? { exchange.sync { exchangeOnce() } }
+    /// Background `syncNow`, at most hourly unless forced. Never blocks or throws into the caller.
+    public func sync(force: Bool = false) {
+        guard online, endpoint != nil else { return }
+        lock.lock()
+        if syncing || (!force && DispatchTime.now() < nextSync) { lock.unlock(); return }
+        syncing = true; nextSync = .now() + .seconds(3600)
+        lock.unlock()
+        exchange.async { [weak self] in
+            guard let self else { return }
+            _ = self.exchangeOnce()
+            self.lock.lock(); self.syncing = false; self.lock.unlock()
+        }
     }
     /// Next pending usage report: bearer token and JSON body for the host to send.
     /// `reportID` is 16 random bytes naming this report for retry de-duplication only.

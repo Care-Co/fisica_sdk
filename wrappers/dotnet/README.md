@@ -29,20 +29,41 @@ await client.CloseAsync();
   in the app. Codes are generated enums: `FisicaStatus`, `FisicaSessionState`, ...
 
 Transports: `SerialTransport` (USB virtual COM port, 9600 8N1 like the Python SDK),
-`MockTransport` (scripted, no hardware), or your own `IFisicaTransport`. A missing or
-busy port is reported through `Error` and `Lost`, never thrown into the caller.
-Finding the Scale's COM port by USB VID and a Windows BLE transport are not included
-yet; `FisicaBleProfile` carries the default GATT UUIDs for an app-provided BLE link.
+`BleTransport` (Windows BLE), `MockTransport` (scripted, no hardware), or your own
+`IFisicaTransport`. A missing or busy port is reported through `Error` and `Lost`,
+never thrown into the caller. Finding the Scale's COM port by USB VID is not included yet.
+
+`BleTransport` uses WinRT and is part of the package only for apps targeting
+`net8.0-windows10.0.19041.0` or later:
+
+```csharp
+var ble = new BleTransport();
+ble.Device += (address, name, rssi) => {
+    if (!name.Contains(FisicaBleProfile.NameContains)) return;
+    ble.StopScan(); ble.Select(address);          // default profile; pass your own if needed
+    _ = client.ConnectAsync(FisicaLink.Ble);
+};
+ble.Scan();
+```
+
+It reports a missing or switched-off radio, an unknown device, missing characteristic
+UUIDs and a ready timeout as events, splits writes by the MTU Windows negotiated
+(`Mtu`, 23 until known) and resets on reconnect. `FisicaBleProfile.Scale` comes from the
+Python SDK and is not yet confirmed on production firmware.
 
 Entitlement: `FisicaEntitlement` imports a server-signed token or file and reports
 three separate values (base license, confirmation freshness, contract state) plus
 warnings through `Warning`. Pass it to `FisicaClient` to record real use. It never
-blocks a feature. Sending `PendingReport` and storing `ExportState` are left to the app
-until the server API is final; see `doc/entitlement.md`.
+blocks a feature. State is stored under LocalApplicationData by default (`storage`).
+With `endpoint` it refreshes the information and sends the minimal usage report in the
+background (`Sync()` or `await SyncAsync()`); without an endpoint no network is used.
+A failed exchange only sets `LastSyncError`. See `doc/entitlement.md`.
 
 `new FisicaCore()` loads the packaged core; an explicit trusted path can be supplied.
 One core binary is loaded per process. The low-level `FisicaSession` remains available.
 
-Verified: shared vectors, client, entitlement and serial open-failure handling on
-macOS and on the Windows CI runner. Not verified: a real COM port with a Scale, real
-Windows drivers, and Windows ARM64 execution.
+Verified: shared vectors, client, entitlement (including online refresh, usage report
+and storage against the mock server) and serial open-failure handling on macOS and on
+the Windows CI runner; `BleTransport` compiles on both and its failure paths run on
+the Windows runner, which has no Bluetooth device. Not verified: a real COM port or BLE
+connection with a Scale, real Windows drivers, and Windows ARM64 execution.

@@ -105,7 +105,7 @@ final class ClientTests: XCTestCase {
         let tokens = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: ProcessInfo.processInfo.environment["FISICA_FIXTURES"]! + "/entitlement.json"))) as! [String: Any]
         let now = (tokens["now"] as! NSNumber).uint64Value
         var clock = now
-        let entitlement = try FisicaEntitlement(core: core, clock: { clock })
+        let entitlement = try FisicaEntitlement(core: core, storage: nil, clock: { clock })
         var seen: [FisicaEntitlementWarning] = []
         entitlement.onWarning = { new, _ in seen += new }
         XCTAssertEqual(try entitlement.status().contract, .unverified)
@@ -131,11 +131,40 @@ final class ClientTests: XCTestCase {
         let body = try JSONSerialization.jsonObject(with: Data(report.body)) as! [String: Any]
         XCTAssertEqual(Set(body.keys), ["report_id", "client_last_used_at", "observed_after_contract_end"])
         XCTAssertEqual(body["observed_after_contract_end"] as? Bool, true)
-        let restored = try FisicaEntitlement(core: core, clock: { clock })
+        let restored = try FisicaEntitlement(core: core, storage: nil, clock: { clock })
         try restored.restoreState(try entitlement.exportState())
         XCTAssertEqual(try restored.status().company, "acme")
         try entitlement.reportDone()
         XCTAssertNil(try entitlement.pendingReport(reportID: [UInt8](repeating: 1, count: 16)))
         XCTAssertTrue(seen.contains(.importRejected) && seen.contains(.testKey) && seen.contains(.contractRevoked))
+    }
+    func testOnlineConfirmationUsageReportAndStorage() throws {
+        // Runs against the reference mock server started by tools/verify_bindings.py.
+        let environment = ProcessInfo.processInfo.environment
+        guard let address = environment["FISICA_ENTITLEMENT_ENDPOINT"], let endpoint = URL(string: address),
+              let directory = environment["FISICA_ENTITLEMENT_STORAGE"], let now = UInt64(environment["FISICA_ENTITLEMENT_NOW"] ?? "") else {
+            throw XCTSkip("Mock entitlement server not configured")
+        }
+        let core = try FisicaCore()
+        let tokens = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: environment["FISICA_FIXTURES"]! + "/entitlement.json"))) as! [String: Any]
+        let valid = tokens["valid"] as! String, storage = URL(fileURLWithPath: directory, isDirectory: true)
+        let entitlement = try FisicaEntitlement(core: core, endpoint: endpoint, storage: storage, clock: { now })
+        XCTAssertEqual(try entitlement.importToken(valid), .accepted)
+        XCTAssertNil(entitlement.syncNow(), entitlement.lastSyncError ?? "")
+        XCTAssertEqual(try entitlement.status().verifiedAt, now)  // Server-signed confirmation time.
+        entitlement.markUsed()
+        XCTAssertNil(entitlement.syncNow())
+        XCTAssertNil(try entitlement.pendingReport(reportID: [UInt8](repeating: 0, count: 16)))
+        // A communication failure is recorded, raises nothing and changes no state; the record waits.
+        let offlineStorage = storage.appendingPathComponent("offline", isDirectory: true)
+        let offline = try FisicaEntitlement(core: core, endpoint: URL(string: "http://127.0.0.1:9")!, storage: offlineStorage, clock: { now })
+        try offline.importToken(valid); offline.markUsed()
+        XCTAssertEqual(offline.syncNow()?.hasPrefix("network:"), true)
+        XCTAssertEqual(try offline.status().contract, .active); XCTAssertEqual(try offline.status().verification, .fresh)
+        XCTAssertNotNil(try offline.pendingReport(reportID: [UInt8](repeating: 0, count: 16)))
+        // A new instance finds the stored record and can report it later.
+        let reopened = try FisicaEntitlement(core: core, storage: offlineStorage, clock: { now })
+        try reopened.importToken(valid)
+        XCTAssertNotNil(try reopened.pendingReport(reportID: [UInt8](repeating: 0, count: 16)))
     }
 }

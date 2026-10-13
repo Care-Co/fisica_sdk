@@ -315,6 +315,29 @@ def test_ble_probe_tool_drives_the_core_sequence_and_records_ack_and_frames():
     assert accepted['firmware'] == '2.0.1' and accepted['continuous_start_accepted'] and accepted['frames'] == 4
     assert accepted['final_state'] == 'DISCONNECTED' and core.command('SET_DEVICE_BLE') in sent
     assert sent[-1] == core.command('SET_DEVICE_STOP')
+    # The documented BLE sequence (single measurement 0x50) is probed with raw commands.
+    from tools.ble_probe import drive_single
+
+    async def single(start_ack):
+        incoming, sent = asyncio.Queue(), []
+        ack = lambda header, ret=(1, 0, 0): bytes([0x24, header, 0x53, *ret, 0xff, 0xf0])
+        counted = b''.join(bytes([index]) + frame[1:] for index in range(1, 4))
+
+        async def write(data):
+            sent.append(bytes(data))
+            if data[1] == 0x50 and data[5] == 1:
+                incoming.put_nowait(ack(0x50, start_ack) + (counted if start_ack[0] else b''))
+            else:
+                incoming.put_nowait(ack(data[1]))
+        return await drive_single(write, incoming, 0.1), sent
+
+    documented, sent = asyncio.run(single((1, 0, 0)))
+    assert sent[1] == bytes.fromhex('2450530001 01fff0'.replace(' ', '')) and sent[2] == bytes.fromhex('245053000000fff0')
+    assert documented['single_start_accepted'] and documented['frames'] == 3 and documented['count_index_values'] == [1, 2, 3]
+    assert documented['stop_accepted'] and documented['release_accepted']
+    refused, _ = asyncio.run(single((0, 0, 6)))
+    assert not refused['single_start_accepted'] and refused['frames'] == 0
+    assert any(e.get('device_code') == 6 for e in refused['log'])
     rejected, _ = asyncio.run(scenario((0, 0, 3)))
     assert not rejected['continuous_start_accepted'] and rejected['frames'] == 0
     assert any(e.get('status') == 'DEVICE_REJECTED' and e.get('device_code') == 3 for e in rejected['log'])

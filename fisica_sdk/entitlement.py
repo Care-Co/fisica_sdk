@@ -73,6 +73,7 @@ class Entitlement:
         self._on_status = on_status
         self._warned = 0
         self._sync_thread = None
+        self._sync_lock = threading.Lock()  # One exchange at a time, so a report is never confirmed twice.
         self._next_sync = 0.0
         self.last_sync_error = None
         if file is not None:
@@ -184,6 +185,10 @@ class Entitlement:
 
     def _sync(self):
         """Refresh, then report pending usage. A failure changes no entitlement state."""
+        with self._sync_lock:
+            return self._sync_locked()
+
+    def _sync_locked(self):
         result = {'refreshed': False, 'reported': 0, 'error': None}
         try:
             with self._lock:

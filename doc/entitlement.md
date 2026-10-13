@@ -1,8 +1,8 @@
 # 런타임 확인 정보(entitlement)와 사용 기록
 
 2026-10-13 기준: SDK/Python 2.4.0, core 1.4.0, C ABI 1.4. 서버는 아직 구현되지 않았다.
-서버 계약은 [entitlement-api.yaml](entitlement-api.yaml), 약관 초안은
-[license-v2-draft.md](license-v2-draft.md)에 있다.
+서버 계약은 [entitlement-api.yaml](entitlement-api.yaml), 약관은 [LICENSE](../LICENSE) 8·9조,
+약관 검토 자료는 [license-review.md](license-review.md)에 있다.
 
 ## 원칙
 
@@ -98,9 +98,26 @@ print(sdk.entitlement_status())
 - 확인 정보를 설정하지 않으면 첫 실제 사용 때 `FisicaEntitlementWarning`이 한 번 나온다.
 - 경고는 `FisicaEntitlementWarning`, 기술 오류는 기존 `FisicaError` 계열이다.
 
-Swift·Kotlin·C#·Dart는 `FisicaEntitlement`로 토큰/파일 가져오기, 상태, 경고 콜백, 사용 표시,
-대기 중 보고 조회·완료 처리, 상태 내보내기·복원을 제공한다. 이 언어들의 HTTP 전송과 파일 저장은
-서버 API가 확정된 뒤 추가한다. 그 전까지는 앱이 `pendingReport`/`exportState` 결과를 직접 전송·저장한다.
+## Swift·Kotlin·C#·Dart
+
+`FisicaEntitlement`가 Python과 같은 동작을 제공한다: 토큰/파일 가져오기, 상태, 경고 콜백, 사용 표시,
+상태 파일 저장·복원, 온라인 갱신과 사용 보고.
+
+| 언어 | 온라인 | 저장 위치 인자 | 기본 저장 위치 |
+|---|---|---|---|
+| Swift | `endpoint: URL`, `syncNow()`/`sync()` (URLSession) | `storage: URL?` | Application Support/Fisica/sdk |
+| Kotlin | `endpoint: String`, `syncNow()`/`sync()` (HttpURLConnection) | `storage: File?` | 없음. 앱이 `context.filesDir` 등을 전달 |
+| C# | `endpoint`, `SyncAsync()`/`Sync()` (HttpClient) | `storage` | LocalApplicationData/Fisica/sdk |
+| Dart | `endpoint`, `sync()` (dart:io HttpClient) | `storageDirectory` | 없음. 앱이 디렉터리를 전달 |
+
+- 모든 언어에서 `endpoint`가 없으면 네트워크를 쓰지 않는다. 서버 주소 기본값은 없다.
+- `endpoint`가 있으면 가져오기 직후와 실제 사용 시 백그라운드에서 갱신·보고한다(최대 시간당 1회).
+- 한 번에 하나의 교환만 실행해 같은 보고를 두 번 완료 처리하지 않는다.
+- 통신 실패는 `lastSyncError`에만 남는다. 예외를 던지지 않고 상태를 바꾸지 않으며 기록은 보존된다.
+- Android 앱은 INTERNET 권한이 필요하다(AAR은 선언하지 않는다). 사용 보고를 켠 앱은 자체 사용자에 대한
+  고지 의무(스토어 개인정보 항목 포함)를 확인해야 한다.
+- 네 언어 모두 같은 Mock 서버를 상대로 갱신, 최소 사용 보고, 통신 실패, 저장·복원을 검증한다
+  (`python tools/verify_bindings.py swift kotlin dotnet dart`).
 
 ## 개발용 도구
 

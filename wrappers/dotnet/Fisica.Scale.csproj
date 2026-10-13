@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
+    <TargetFrameworks>net8.0;net8.0-windows10.0.19041.0</TargetFrameworks><EnableWindowsTargeting>true</EnableWindowsTargeting><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings>
     <Version>0.2.0</Version><PackageId>CareCo.Fisica.Scale</PackageId>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <DebugType>none</DebugType><DebugSymbols>false</DebugSymbols>

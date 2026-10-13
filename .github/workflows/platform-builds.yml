@@ -26,8 +26,8 @@ jobs:
       - run: python tools/build_platforms.py --validation --target apple
         env:
           FISICA_XCODE_DEVELOPER: /Applications/Xcode.app/Contents/Developer
-      - run: FISICA_FIXTURES="$GITHUB_WORKSPACE/tests/fixtures" swift test
-        working-directory: wrappers/swift
+      - name: Swift contract (client, entitlement, online exchange with the mock server)
+        run: python tools/verify_bindings.py swift
       - run: python tools/build_platforms.py --validation --target macosx_11_0_universal2
       - name: Audit public Apple artifacts
         run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts apple macosx_11_0_universal2)

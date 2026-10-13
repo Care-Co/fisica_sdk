@@ -29,7 +29,7 @@ SDK wheel과 GUI extra의 설치 가능성을 같은 지원 수준으로 표시�
 | Python | `FisicaSDK` (기존 API 유지) | BLE, USB Serial, `ByteTransport`/`MockTransport` 주입 | GUI·보고서 내보내기 포함 |
 | Swift | `FisicaClient` | `FisicaTransport`, `BLETransport`(CoreBluetooth), `MockTransport` | completion handler |
 | Kotlin/Java | `FisicaClient` | `FisicaTransport`, `BleTransport`(Android GATT), `MockTransport` | 콜백 + Executor |
-| C# | `FisicaClient` | `IFisicaTransport`, `SerialTransport`(USB), `MockTransport` | async Task |
+| C# | `FisicaClient` | `IFisicaTransport`, `SerialTransport`(USB), `BleTransport`(Windows WinRT), `MockTransport` | async Task |
 | Dart/Flutter | `FisicaClient` | `FisicaTransport` 주입 | Future/Stream |
 | C/C++ | 공개 C ABI | 호스트 구현 | 동적/정적 바이너리 |
 
@@ -64,16 +64,20 @@ BLE 프로필:
 - GATT write 완료를 명령 ACK로 취급하지 않는다.
 
 C# `SerialTransport`는 9600 8N1(Python과 동일)로 COM 포트를 연다. 포트 선택은 앱이 한다.
-Windows에서 VID로 Scale 포트를 찾는 기능과 C# BLE Transport는 아직 없다.
+Windows에서 VID로 Scale 포트를 찾는 기능은 아직 없다.
+
+C# `BleTransport`는 Windows WinRT BLE를 쓴다. 앱이 `net8.0-windows10.0.19041.0` 이상을 대상으로 할 때만
+포함된다. 스캔, 주소·프로필 선택, 연결, UUID 미발견 오류, 준비 timeout, 실제 협상된 MTU 기준 분할 송신,
+연결 유실 보고를 제공하고 모든 실패를 예외 대신 이벤트로 알린다. macOS에서는 컴파일만 확인했고
+GitHub Windows runner에서는 Bluetooth 장치 없이 실패 경로만 실행했다. 실제 Scale과의 연결은 검증하지 않았다.
 
 Flutter는 플랫폼 바이너리와 FFI, Transport 주입까지 제공한다. BLE 플러그인이나 Swift/Kotlin 어댑터를
 Dart에 연결하는 method channel은 앱이 구현한다.
 
-BLE 연속 측정: 프로토콜 문서는 연속 측정이 USB 전용이라고 한다. 코어는 BLE 연결에서도
-`SET_DEVICE_BLE` 후 같은 연속 측정 명령을 보낸다(기존 Python 동작 유지). 어느 쪽이 맞는지는
-실기기로만 정할 수 있어 코어의 BLE/USB 측정 경로는 바꾸지 않았다. `tools/ble_probe.py`가 실제 기기의
-GATT 표, MTU, ACK/NACK, 프레임 수, 종료 결과를 JSON으로 기록한다. 양산 2.0.1과 임시 2.0.2에서 각각
-실행한 결과로 경로를 확정한다.
+BLE 측정 경로: 프로토콜 문서는 연속 측정(0x51)이 USB 전용이고 BLE는 단일 측정(0x50)이라고 한다.
+공개된 1.0.1 SDK와 현재 코어는 BLE에서도 연속 측정 명령을 보낸다. 어느 쪽이 맞는지는 실기기로만 정할 수
+있어 코어의 BLE 경로는 바꾸지 않았다. 대조 내용, 확인 도구(`tools/ble_probe.py`), 결과별 코어 변경 계획은
+[BLE 측정 경로](ble-measurement-path.md)에 있다.
 
 ## 검증과 한계
 
@@ -83,10 +87,11 @@ GATT 표, MTU, ACK/NACK, 프레임 수, 종료 결과를 JSON으로 기록한다
 |---|---|---|
 | Python 테스트 | 175 passed | 로컬 macOS, Mock. Windows CI에서도 실행 |
 | 네이티브 C ABI 계약 | UBSan, ASan+UBSan 통과. 토큰 1글자 변조 3144건·무작위 입력 2만 건 모두 거절 | 로컬 macOS, GitHub macOS CI(UBSan) |
-| Swift `swift test` | 7 passed (공통 벡터 2, 클라이언트·확인 정보 5) | 로컬 macOS XCTest, GitHub macOS CI |
-| Kotlin/JNI | 공통 벡터, 클라이언트·확인 정보 계약 통과 | 로컬 JVM. `BleTransport`는 android-35로 컴파일만 |
-| C# | 공통 벡터, 클라이언트·Serial 오류 처리·확인 정보 계약 통과 | 로컬 macOS .NET 8, GitHub Windows CI |
-| Dart | analyze 문제 없음, 15 tests passed | 로컬 macOS Dart 3.11 |
+| Swift `swift test` | 8 passed (공통 벡터 2, 클라이언트·확인 정보 5, 온라인 교환·저장 1) | 로컬 macOS XCTest, GitHub macOS CI |
+| Kotlin/JNI | 공통 벡터, 클라이언트·확인 정보·온라인 교환·저장·MTU 분할 규칙 통과 | 로컬 JVM. `BleTransport`는 android-35로 컴파일만 |
+| C# | 공통 벡터, 클라이언트·Serial 오류 처리·확인 정보·온라인 교환·저장 통과. Windows BLE는 컴파일 + 장치 없는 실패 경로 | 로컬 macOS .NET 8, GitHub Windows CI |
+| Dart | analyze 문제 없음, 16 tests passed (온라인 교환·저장 포함) | 로컬 macOS Dart 3.11 |
+| 온라인 교환 | 네 언어와 Python이 같은 Mock 서버에 갱신·최소 사용 보고. 서버 쪽 수신 내용까지 확인 | 로컬, CI(Swift·C#). 실제 서버 아님 |
 | Windows x64 MSVC | 코어 빌드, 전체 테스트, 휠 감사, Python 3.9/3.11/3.13/3.14 설치 검증 | GitHub Actions `windows-2022` |
 | Windows ARM64 MSVC | 코어·휠 교차 빌드와 감사 | GitHub Actions. ARM64 실행은 안 함 |
 | Apple | 코어 빌드, 테스트, XCFramework, universal2 | GitHub Actions `macos-15` |
@@ -99,7 +104,7 @@ GATT 표, MTU, ACK/NACK, 프레임 수, 종료 결과를 JSON으로 기록한다
   [세션 코어 검증](session-core-verification.md)의 Mac USB `2.0.2-RC1`뿐이다.
 - BLE 실기기: GATT UUID, MTU, BLE 연속 측정 허용 여부, 양산 2.0.1.
 - Android·iOS 기기 실행, 권한 흐름, iOS 앱 링크·서명.
-- 실제 Windows의 USB 드라이버·COM 포트·BLE, C# `SerialTransport`의 실제 포트 입출력.
+- 실제 Windows의 USB 드라이버·COM 포트·BLE, C# `SerialTransport`·`BleTransport`의 실제 기기 입출력.
 - Windows ARM64 실행.
 - 확인 정보 서버(미구현)와의 실제 통신, 운영 서명 키.
 

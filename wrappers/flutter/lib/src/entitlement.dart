@@ -48,14 +48,36 @@ typedef _EntitlementBytesDart =
 class FisicaEntitlement {
   final FisicaCore core;
   final int Function() _clock;
+  final String? _endpoint;
+  final String? _storageDirectory;
+
+  /// False keeps a configured endpoint unused.
+  final bool online;
   Pointer<Void> _handle = nullptr;
   int _warned = 0;
+  // One exchange at a time, so a report is never confirmed twice.
+  Future<String?> _exchange = Future.value(null);
+  DateTime _nextSync = DateTime.fromMillisecondsSinceEpoch(0);
 
   /// Called with newly raised warning bits so the app can show or log them.
   void Function(int warnings, EntitlementStatus status)? onWarning;
 
-  FisicaEntitlement(this.core, {int Function()? clock})
-    : _clock = clock ?? (() => DateTime.now().millisecondsSinceEpoch ~/ 1000) {
+  /// Last storage or network problem, or null. Never an entitlement state.
+  String? lastSyncError;
+
+  /// [endpoint]: server base URL for online confirmation and the minimal usage
+  /// report; without it no network is used. [storageDirectory]: directory for
+  /// the state file (for example the app's support directory); null keeps state
+  /// in memory only.
+  FisicaEntitlement(
+    this.core, {
+    int Function()? clock,
+    String? endpoint,
+    String? storageDirectory,
+    this.online = true,
+  }) : _clock = clock ?? (() => DateTime.now().millisecondsSinceEpoch ~/ 1000),
+       _endpoint = endpoint?.replaceAll(RegExp(r'/+$'), ''),
+       _storageDirectory = storageDirectory {
     final output = calloc<Pointer<Void>>();
     try {
       core._check(
@@ -99,11 +121,54 @@ class FisicaEntitlement {
         >('fisica_core_entitlement_import')(_open, input, bytes.length, _clock(), outcome),
       );
       final result = outcome.value;
+      if (result == FisicaEntitlementOutcome.accepted) {
+        // Stored usage and a possibly newer confirmation win over an older file.
+        final file = _stateFile();
+        if (file != null && file.existsSync()) {
+          try {
+            restoreState(file.readAsBytesSync());
+            core._library.lookupFunction<
+              Int32 Function(Pointer<Void>, Pointer<Uint8>, Uint32, Uint64, Pointer<Uint32>),
+              int Function(Pointer<Void>, Pointer<Uint8>, int, int, Pointer<Uint32>)
+            >('fisica_core_entitlement_import')(_open, input, bytes.length, _clock(), outcome);
+          } on Object catch (error) {
+            lastSyncError = 'storage: $error';
+          }
+        }
+        _save();
+      }
       _notify();
+      if (result == FisicaEntitlementOutcome.accepted) _autoSync();
       return result;
     } finally {
       calloc.free(input);
       calloc.free(outcome);
+    }
+  }
+
+  File? _stateFile() {
+    final directory = _storageDirectory;
+    if (directory == null) return null;
+    final company = _text(FisicaEntitlementText.company);
+    if (company.isEmpty) return null;
+    // Named by company and contract, the only attribution unit; never an
+    // installation or device id.
+    final name = '$company-${_text(FisicaEntitlementText.contract)}'.replaceAll(
+      RegExp(r'[^A-Za-z0-9_-]'),
+      '_',
+    );
+    return File('$directory${Platform.pathSeparator}entitlement-$name.state');
+  }
+
+  void _save() {
+    try {
+      final file = _stateFile();
+      if (file == null) return;
+      file.parent.createSync(recursive: true);
+      final temporary = File('${file.path}.tmp')..writeAsBytesSync(exportState());
+      temporary.renameSync(file.path);
+    } on FileSystemException catch (error) {
+      lastSyncError = 'storage: ${error.message}';
     }
   }
 
@@ -178,7 +243,84 @@ class FisicaEntitlement {
     core._library.lookupFunction<_EntitlementNowNative, _EntitlementNowDart>(
       'fisica_core_entitlement_mark_used',
     )(_handle, _clock());
+    _save();
     _notify();
+    _autoSync();
+  }
+
+  Future<List<int>> _post(String path, String token, List<int> body) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    try {
+      final request = await client.postUrl(Uri.parse('$_endpoint$path'));
+      request.headers.set('Authorization', 'Bearer $token');
+      request.headers.contentType = ContentType.json;
+      request.contentLength = body.length;
+      request.add(body);
+      final response = await request.close().timeout(const Duration(seconds: 5));
+      final data = await response.fold<List<int>>([], (all, chunk) => all..addAll(chunk));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException('HTTP ${response.statusCode}');
+      }
+      return data;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<String?> _exchangeOnce() async {
+    if (!online || _endpoint == null || _handle == nullptr) return null;
+    try {
+      final token = _text(FisicaEntitlementText.token);
+      // Nothing verified: nothing to refresh, nothing attributable to report.
+      if (token.isEmpty) return null;
+      final response =
+          jsonDecode(utf8.decode(await _post('/sdk/v1/entitlement/refresh', token, utf8.encode('{}'))))
+              as Map<String, dynamic>;
+      if (_handle == nullptr) return null;
+      final refreshed = ascii.encode(response['token'] as String);
+      final input = calloc<Uint8>(refreshed.length);
+      final outcome = calloc<Uint32>();
+      try {
+        input.asTypedList(refreshed.length).setAll(0, refreshed);
+        core._library.lookupFunction<
+          Int32 Function(Pointer<Void>, Pointer<Uint8>, Uint32, Uint64, Pointer<Uint32>),
+          int Function(Pointer<Void>, Pointer<Uint8>, int, int, Pointer<Uint32>)
+        >('fisica_core_entitlement_import')(_handle, input, refreshed.length, _clock(), outcome);
+      } finally {
+        calloc.free(input);
+        calloc.free(outcome);
+      }
+      final random = Random.secure();
+      while (_handle != nullptr) {
+        final report = pendingReport(
+          Uint8List.fromList(List.generate(16, (_) => random.nextInt(256))),
+        );
+        if (report == null) break;
+        await _post('/sdk/v1/usage', report.token, report.body);
+        // Cleared only after the server confirmed.
+        if (_handle != nullptr) reportDone();
+      }
+      lastSyncError = null;
+    } on Object catch (error) {
+      // A communication failure is not an expiry or a revocation.
+      lastSyncError = 'network: $error';
+    }
+    if (_handle != nullptr) {
+      _save();
+      _notify();
+    }
+    return lastSyncError;
+  }
+
+  /// Online confirmation, then the pending usage reports. Completes with null
+  /// or the problem and never throws. A failure changes no entitlement state.
+  Future<String?> sync() => _exchange = _exchange.then((_) => _exchangeOnce());
+
+  // Background sync, at most hourly; never awaited by the feature that triggered it.
+  void _autoSync() {
+    if (!online || _endpoint == null || DateTime.now().isBefore(_nextSync)) return;
+    _nextSync = DateTime.now().add(const Duration(hours: 1));
+    unawaited(sync());
   }
 
   /// Next pending usage report: bearer token and JSON body for the host to

@@ -74,5 +74,8 @@ confirmed on production firmware) for the BLE plugin your app uses.
 `FisicaEntitlement` imports a server-signed token or file and reports three separate
 values (base license, confirmation freshness, contract state) plus warning bits. Pass
 it as `FisicaClient(core, transport, entitlement: ...)` to record real use. It never
-blocks a feature. Sending `pendingReport` and storing `exportState` are left to the app
-until the server API is final; see `doc/entitlement.md`.
+blocks a feature. Pass `storageDirectory` (for example the app support directory) to
+keep state across launches. With `endpoint` it refreshes the information and sends the
+minimal usage report in the background (`await sync()` to run it now); without an
+endpoint no network is used. A failed exchange only sets `lastSyncError`.
+See `doc/entitlement.md`.

@@ -104,8 +104,10 @@ and the remaining hardware/platform validation work.
 Policy (2026-10-13): the base SDK license comes with genuine hardware, has no date
 expiry and covers ordinary commercial apps and services after registration. Separate
 agreements are only for exceptions such as OEM supply, rebranding or SDK resale.
-The packaged [LICENSE](LICENSE) is still Version 1.0, which predates this policy;
-the replacement is a [draft awaiting legal review](doc/license-v2-draft.md).
+The [LICENSE](LICENSE) is Version 2.0, written to this policy and marked as a draft
+for review until legal review is complete ([review notes](doc/license-review.md),
+[Version 1.0](doc/LICENSE-1.0.txt)). It does not change existing agreements, packages
+already delivered, or rights granted under earlier licenses such as MIT.
 Wrappers may be modified; applications may redistribute wrappers and the unmodified
 compiled core. Core sources are not distributed. Previously licensed versions and
 third-party rights remain separate. The optional GUI uses PyQt5, which has separate

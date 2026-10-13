@@ -4,6 +4,7 @@ Hardware-free: shared vectors plus Mock transports. A passing run is not a devic
 Android/iOS runtime or real Windows verification.
 """
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -25,11 +26,36 @@ def host_core(output):
     return build_native(output / 'core')
 
 
-def flat_fixtures(output):
+@contextmanager
+def entitlement_server(output):
+    """Reference mock server for the online part of each binding's contract.
+
+    Yields the values a binding needs; afterwards checks what the server received:
+    use recorded for the token's own contract, and nothing beyond the minimal fields.
+    """
+    from entitlement_dev import MockEntitlementServer
+    now = json.loads((FIXTURES / 'entitlement.json').read_text())['now'] + 86400
+    server = MockEntitlementServer(clock=lambda: now)
+    server.add_contract('acme', 'ctr-1')
+    storage = output / 'storage'
+    shutil.rmtree(storage, ignore_errors=True)
+    try:
+        yield {'endpoint': server.start(), 'storage': storage.as_posix(), 'server_now': now}
+        record = server.usage.get(('acme', 'ctr-1'))
+        assert record and record['client_last_used_at'] == now, f'usage was not reported: {server.usage}'
+        bodies = [body for path, body in server.requests if path == '/sdk/v1/usage']
+        assert bodies and all(set(body) == {'report_id', 'client_last_used_at', 'observed_after_contract_end'} for body in bodies)
+        print('mock server: refresh and minimal usage report received')
+    finally:
+        server.stop()
+
+
+def flat_fixtures(output, extra=None):
     """Key=value copy of the shared vectors for hosts without a JSON library."""
     packets = json.loads((FIXTURES / 'legacy-processing.json').read_text())
     values = {key: value for key, value in json.loads((FIXTURES / 'entitlement.json').read_text()).items() if key != 'note'}
     values['packet'] = next(item['packet_hex'] for item in packets if item.get('id') == 'synthetic-recorded-layout')
+    values.update(extra or {})
     path = output / 'vectors.properties'
     path.write_text(''.join(f'{key}={value}\n' for key, value in values.items()))
     return path
@@ -73,11 +99,15 @@ def kotlin(output):
         print('Android SDK not found: BleTransport.kt was not compiled')
     classpath = os.pathsep.join(str(p) for p in [jar, stdlib, *gradle.glob('groovy-[0-9]*.jar'), *gradle.glob('groovy-json-*.jar')])
     run(['java', '-cp', classpath, 'groovy.ui.GroovyMain', ROOT / 'tests/kotlin_contract.groovy', library, FIXTURES])
-    run(['java', '-cp', classpath, 'Kotlin_clientKt', library, flat_fixtures(output)])
+    with entitlement_server(output) as online:
+        run(['java', '-cp', classpath, 'Kotlin_clientKt', library, flat_fixtures(output, online)])
 
 
 def swift(output):
-    run(['swift', 'test'], cwd=ROOT / 'wrappers/swift', env={**os.environ, 'FISICA_FIXTURES': str(FIXTURES)})
+    with entitlement_server(output) as online:
+        run(['swift', 'test'], cwd=ROOT / 'wrappers/swift', env={
+            **os.environ, 'FISICA_FIXTURES': str(FIXTURES), 'FISICA_ENTITLEMENT_ENDPOINT': online['endpoint'],
+            'FISICA_ENTITLEMENT_STORAGE': online['storage'], 'FISICA_ENTITLEMENT_NOW': str(online['server_now'])})
 
 
 def dotnet(output):
@@ -86,15 +116,20 @@ def dotnet(output):
     # Keep the SDK's first-run setup (telemetry, developer certificate) out of the user's profile.
     environment = {**os.environ, 'DOTNET_CLI_HOME': str(output / 'home'), 'DOTNET_NOLOGO': '1', 'DOTNET_CLI_TELEMETRY_OPTOUT': '1',
                    'DOTNET_GENERATE_ASPNET_CERTIFICATE': 'false', 'NUGET_PACKAGES': str(output / 'nuget')}
-    run([executable, 'run', '--project', ROOT / 'tests/dotnet/Contract.csproj', '--', core, FIXTURES, flat_fixtures(output)], env=environment)
+    # The WinRT BLE transport only exists for the Windows target; compile it on every host.
+    run([executable, 'build', ROOT / 'wrappers/dotnet/Fisica.Scale.csproj', '-f', 'net8.0-windows10.0.19041.0', '-v', 'quiet', '-nologo'], env=environment)
+    with entitlement_server(output) as online:
+        run([executable, 'run', '--project', ROOT / 'tests/dotnet/Contract.csproj', '--', core, FIXTURES, flat_fixtures(output, online)], env=environment)
 
 
 def dart(output):
     core = host_core(output)
     executable = os.environ.get('DART', shutil.which('dart') or 'dart')
-    environment = {**os.environ, 'FISICA_CORE_TEST_LIBRARY': str(core)}
-    for command in (['pub', 'get'], ['analyze'], ['test']):
-        run([executable, *command], cwd=ROOT / 'wrappers/flutter', env=environment)
+    with entitlement_server(output) as online:
+        environment = {**os.environ, 'FISICA_CORE_TEST_LIBRARY': str(core), 'FISICA_ENTITLEMENT_ENDPOINT': online['endpoint'],
+                       'FISICA_ENTITLEMENT_STORAGE': online['storage'], 'FISICA_ENTITLEMENT_NOW': str(online['server_now'])}
+        for command in (['pub', 'get'], ['analyze'], ['test']):
+            run([executable, *command], cwd=ROOT / 'wrappers/flutter', env=environment)
 
 
 def main():

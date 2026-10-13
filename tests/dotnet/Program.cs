@@ -89,7 +89,7 @@ async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.
 }
 {
     ulong now=ulong.Parse(values["now"]),clock=now; FisicaEntitlementWarning seen=0;
-    using var entitlement=new FisicaEntitlement(core,() => clock); entitlement.Warning+=(fresh,_) => seen|=fresh;
+    using var entitlement=new FisicaEntitlement(core,() => clock,storage: null); entitlement.Warning+=(fresh,_) => seen|=fresh;
     Require(entitlement.Status().Contract==FisicaContract.Unverified,"unverified");
     Require(entitlement.ImportToken(values["tampered"])==FisicaEntitlementOutcome.RejectedSignature && entitlement.Status().Company=="","tampered");
     Require(entitlement.ImportToken(values["valid"])==FisicaEntitlementOutcome.Accepted,"valid");
@@ -109,7 +109,7 @@ async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.
     using var body=JsonDocument.Parse(pending.Body);
     Require(body.RootElement.EnumerateObject().Select(p => p.Name).OrderBy(n => n).SequenceEqual(new[]{"client_last_used_at","observed_after_contract_end","report_id"}),"minimal report");
     Require(body.RootElement.GetProperty("observed_after_contract_end").GetBoolean(),"observed after end");
-    using var restored=new FisicaEntitlement(core,() => clock); restored.RestoreState(entitlement.ExportState());
+    using var restored=new FisicaEntitlement(core,() => clock,storage: null); restored.RestoreState(entitlement.ExportState());
     Require(restored.Status().Company=="acme","restore");
     entitlement.ReportDone(); Require(entitlement.PendingReport(new byte[16])==null,"cleared after confirmation");
     var expected=FisicaEntitlementWarning.ImportRejected|FisicaEntitlementWarning.TestKey|FisicaEntitlementWarning.ContractRevoked;
@@ -121,5 +121,47 @@ async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.
     serial.Lost+=() => lost=true; serial.Error+=e => reported=e; serial.Open();
     Require(lost && reported is FisicaException { Code: 1001 },"serial open failure");
     serial.Close();
+}
+#if WINDOWS
+{
+    // Build machines have no Scale and usually no Bluetooth radio: every failure must arrive as an event.
+    var ble=new BleTransport { ReadyTimeout=TimeSpan.FromSeconds(5) };
+    var errors=new List<Exception>(); var lost=new TaskCompletionSource(); var sendFailed=new TaskCompletionSource();
+    ble.Error+=e => { lock(errors) errors.Add(e); }; ble.Lost+=() => lost.TrySetResult(); ble.SendFailed+=_ => sendFailed.TrySetResult();
+    ble.Open();                                   // Nothing selected yet.
+    await lost.Task.WaitAsync(TimeSpan.FromSeconds(10));
+    lock(errors) Require(errors.Count>0 && errors.All(e => e is FisicaException { Code: 1001 }),"BLE open without a selection is reported");
+    ble.Send(new byte[]{1}); await sendFailed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    ble.Scan(); await Task.Delay(500); ble.StopScan();
+    Require(ble.Mtu==BleTransport.DefaultMtu,"default MTU before a connection");
+    var client=new FisicaClient(core,ble);
+    ble.Select(0x0000C0FFEE01,new FisicaBleProfile(FisicaBleProfile.NordicUart.Write,FisicaBleProfile.NordicUart.Notify));
+    var failure=await Failure(client.ConnectAsync(FisicaLink.Ble,TimeSpan.FromSeconds(20)));
+    Require(failure is FisicaException { Code: 1001 },"BLE connect to an absent Scale fails cleanly: "+failure);
+    await client.CloseAsync();
+    ble.Close();
+    Console.WriteLine("C# Windows BLE transport: failure paths verified without a Scale");
+}
+#endif
+if (values.TryGetValue("endpoint",out var endpoint)) {
+    // Online confirmation, minimal usage report and local storage against the reference mock server.
+    ulong clock=ulong.Parse(values["server_now"]); string directory=values["storage"];
+    using var entitlement=new FisicaEntitlement(core,() => clock,endpoint,directory);
+    Require(entitlement.ImportToken(values["valid"])==FisicaEntitlementOutcome.Accepted,"online import");
+    Require(await entitlement.SyncAsync()==null,"sync: "+entitlement.LastSyncError);
+    Require(entitlement.Status().VerifiedAt==clock,"refresh adopts the server-signed time");
+    entitlement.MarkUsed();
+    Require(await entitlement.SyncAsync()==null && entitlement.PendingReport(new byte[16])==null,"usage reported and cleared");
+    // A communication failure is recorded, raises nothing and changes no state; the record waits.
+    string offlineDirectory=Path.Combine(directory,"offline");
+    using var offline=new FisicaEntitlement(core,() => clock,"http://127.0.0.1:9",offlineDirectory);
+    offline.ImportToken(values["valid"]); offline.MarkUsed();
+    Require((await offline.SyncAsync())!.StartsWith("network:"),"network failure recorded");
+    Require(offline.Status() is { Contract: FisicaContract.Active, Verification: FisicaVerification.Fresh },"failure is not expiry");
+    Require(offline.PendingReport(new byte[16])!=null,"record kept after failure");
+    // A new instance finds the stored record and can report it later.
+    using var reopened=new FisicaEntitlement(core,() => clock,null,offlineDirectory);
+    reopened.ImportToken(values["valid"]);
+    Require(reopened.PendingReport(new byte[16])!=null,"stored record restored");
 }
 Console.WriteLine("C# client, transports and entitlement contract passed");

@@ -1,0 +1,68 @@
+Fisica Scale SDK License
+Version 1.0
+
+Copyright (c) 2026 Care&Co. All rights reserved.
+
+1. Scope and definitions
+This license applies to the Fisica Scale SDK materials distributed by Care&Co
+under this license, including public language wrappers, documentation, public
+C headers, and the compiled native core. "Public Wrappers" means wrapper source
+expressly provided by Care&Co. "Native Core" means the compiled implementation
+and its private source. The SDK is licensed for use with lawfully purchased
+Fisica Scale hardware; purchase of hardware does not include a commercial SDK
+license unless expressly agreed in writing.
+
+2. Free non-commercial use
+Care&Co grants a non-exclusive license to use the SDK without an SDK usage fee
+for personal, educational, academic, or other non-commercial research purposes.
+Non-commercial use must not be in support of a business, a commercial product,
+or a commercial service. A research or nonprofit designation alone does not
+make an otherwise commercial activity non-commercial.
+
+3. Commercial use
+Commercial use requires a separate written commercial agreement with Care&Co.
+Commercial use includes business operations, internal business use, product
+development for commercial exploitation, paid products or services, and free
+services or features offered in support of a business. Fees, licensed companies,
+permitted distribution, duration, renewal, and obligations after expiration are
+governed by that agreement. If its terms conflict with this license, the written
+commercial agreement controls for that licensed use.
+
+4. Public wrapper modification and redistribution
+Within the applicable non-commercial grant or commercial agreement, licensees
+may use, copy, modify, and redistribute Public Wrappers, and include those
+wrappers and the unmodified compiled Native Core in their applications or
+products for distribution to end users. Such distribution must retain this
+license, applicable copyright and third-party notices, and Care&Co's supplied
+distribution identifiers. Identify wrapper modifications so they are not
+represented as an unmodified Care&Co release. End-user rights must be consistent
+with this license and, for commercial distributions, the applicable agreement.
+No right to sublicense the SDK on terms that remove these conditions is granted.
+
+5. Private core and retained rights
+No Native Core source is provided or licensed for disclosure, modification, or
+redistribution under this license. Do not distribute private implementation
+source, debug symbols, or internal build materials. Rights not expressly granted
+are reserved. Nothing in this license restricts rights that cannot lawfully be
+restricted, or changes separate rights in independently licensed third-party
+materials or SDK versions previously provided under another license.
+
+6. Offline operation and identification
+The SDK may operate offline. This license does not require online activation,
+usage telemetry, or technical blocking when a commercial agreement expires.
+Continued-use rights and expiration obligations are determined by the applicable
+agreement, not by whether the software remains technically executable. Care&Co
+may identify delivered artifacts by partner and distribution identifiers and
+maintain delivery records. These identifiers are not secret authentication keys.
+
+7. Warranty and liability
+To the extent permitted by applicable law, the SDK is provided "AS IS", without
+warranties of any kind, express or implied, including merchantability, fitness
+for a particular purpose, and non-infringement. Care&Co is not liable for indirect,
+incidental, special, or consequential damages arising from use of the SDK, except
+where applicable law or a separate written agreement requires otherwise.
+
+8. Compliance and contact
+Licensees are responsible for compliance with this license and their applicable
+commercial agreement. Use outside the grant requires Care&Co's written permission.
+For commercial licensing or questions, contact carencoinc@carenco.kr.
