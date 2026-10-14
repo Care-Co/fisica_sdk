@@ -24,7 +24,8 @@ jobs:
           git init .build/flutter-sdk
           git -C .build/flutter-sdk remote add origin https://github.com/flutter/flutter.git
           git -C .build/flutter-sdk fetch --depth 1 origin abaf9c523780a608bd46686fd5e53740a07077f8
-          git -C .build/flutter-sdk checkout --detach FETCH_HEAD
+          git -C .build/flutter-sdk fetch --depth 1 origin tag 3.47.7
+          git -C .build/flutter-sdk checkout --detach abaf9c523780a608bd46686fd5e53740a07077f8
           echo "$GITHUB_WORKSPACE/.build/flutter-sdk/bin" >> "$GITHUB_PATH"
       - run: flutter --disable-analytics
       - run: flutter pub get
