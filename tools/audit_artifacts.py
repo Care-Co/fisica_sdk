@@ -30,6 +30,7 @@ def validate_windows_dll(data, expected_machine=0x8664):
 
 
 ANDROID_PAGE_SIZE = 16384
+ANDROID_PAGE_FLAGS = '-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384'
 
 
 def validate_android_library(data, abi):
@@ -46,10 +47,19 @@ def validate_android_library(data, abi):
     size, count = struct.unpack_from('<HH', data, 0x36 if wide else 0x2a)
     if not count or size < (56 if wide else 32) or offset + size * count > len(data):
         raise ValueError('Android library has no readable program headers')
-    alignments = [struct.unpack_from('<Q' if wide else '<I', data, offset + i * size + (48 if wide else 28))[0]
-                  for i in range(count) if struct.unpack_from('<I', data, offset + i * size)[0] == 1]
+    word = '<Q' if wide else '<I'
+    # (type, vaddr, memsz, align) of each program header.
+    headers = [(struct.unpack_from('<I', data, base)[0], struct.unpack_from(word, data, base + (16 if wide else 8))[0],
+                struct.unpack_from(word, data, base + (40 if wide else 20))[0], struct.unpack_from(word, data, base + (48 if wide else 28))[0])
+               for base in (offset + i * size for i in range(count))]
+    alignments = [align for kind, _, _, align in headers if kind == 1]
     if not alignments or min(alignments) < ANDROID_PAGE_SIZE:
-        raise ValueError(f'Android library LOAD segments are not 16 KB aligned ({abi}); rebuild with -Wl,-z,max-page-size=16384')
+        raise ValueError(f'Android library LOAD segments are not 16 KB aligned ({abi}); rebuild with {ANDROID_PAGE_FLAGS}')
+    # The loader makes every page the RELRO segment touches read-only, so it must end on a
+    # 16 KB boundary or writable data after it faults on 16 KB page devices.
+    for kind, vaddr, memsz, _ in headers:
+        if kind == 0x6474e552 and (vaddr + memsz) % ANDROID_PAGE_SIZE:
+            raise ValueError(f'Android library RELRO segment does not end on a 16 KB boundary ({abi}); rebuild with {ANDROID_PAGE_FLAGS}')
 
 
 def audit_archive(path):

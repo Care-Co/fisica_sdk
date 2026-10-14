@@ -99,9 +99,10 @@ dotnet run --project dotnet/Quickstart.csproj -f net8.0-windows10.0.19041.0 -- b
 3. `app-kotlin` 또는 `app-java` 실행 구성을 선택한다. SDK 사용 과정은 같고 호출 문법만 다르다.
 4. 앱에서 **Scan BLE**를 누르고 권한을 허용한 뒤 기기 목록에서 Scale을 선택한다.
 
-AAR의 네이티브 라이브러리는 16KB LOAD 정렬로 빌드돼 16KB 페이지 기기(Android 15+,
-Google Play 요구사항)에서도 로드된다. 앱은 AGP 8.5.1 이상으로 빌드해야 APK/AAB 안의
-비압축 라이브러리도 16KB zip 정렬이 된다(샘플은 8.6.1).
+AAR의 네이티브 라이브러리는 16KB 페이지 기기(Android 15+, Google Play 요구사항)용으로
+빌드돼 있다: LOAD 세그먼트 16KB 정렬, RELRO 끝 16KB 경계. 앱은 AGP 8.5.1 이상으로 빌드해야
+APK/AAB 안의 비압축 라이브러리도 16KB zip 정렬이 된다(샘플은 8.6.1). 출시 전 APK를
+`zipalign -c -P 16 -v 4 app.apk`로 확인한다.
 
 Manifest의 BLE 권한은 AAR에서 합쳐진다. 앱은 Android 12+의 Scan/Connect 권한 또는
 이전 Android의 위치 권한을 런타임에 요청해야 한다. 이 샘플은 이 절차를 포함한다.

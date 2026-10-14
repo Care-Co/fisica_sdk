@@ -59,9 +59,11 @@ def android(output,ndk):
     libs=output/'jni';sources=sorted((ROOT/'native/src').glob('*.cpp'))
     for abi,target in abis.items():
         directory=libs/abi;directory.mkdir(parents=True,exist_ok=True)
-        # 16 KB LOAD alignment works on 4 KB and 16 KB page devices (Google Play, Android 15+); any NDK.
+        # 16 KB page support (Google Play, Android 15+), also fine on 4 KB devices: LOAD segments
+        # aligned to 16 KB and the RELRO segment ending on a 16 KB boundary. NDK r27 and older need
+        # both flags; r28+ defaults to them.
         common=[compiler/(target+'-clang++'),'-std=c++17','-O2','-shared','-fPIC','-fvisibility=hidden','-ffp-contract=off','-static-libstdc++','-Wl,--exclude-libs,ALL',
-                '-Wl,-z,max-page-size=16384','-I'+str(ROOT/'native/include')]
+                '-Wl,-z,max-page-size=16384','-Wl,-z,common-page-size=16384','-I'+str(ROOT/'native/include')]
         run([*common,'-DFISICA_CORE_BUILD','-I'+str(generated),*sources,'-Wl,-soname,libfisica_core.so','-o',directory/'libfisica_core.so'])
         run([*common,ROOT/'wrappers/kotlin/bridge/fisica_jni.cpp','-L'+str(directory),'-lfisica_core','-Wl,-soname,libfisica_jni.so','-o',directory/'libfisica_jni.so'])
         for library in ('libfisica_core.so','libfisica_jni.so'): validate_android_library((directory/library).read_bytes(),abi)

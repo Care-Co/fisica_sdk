@@ -66,9 +66,9 @@ jobs:
           lib="$(cd "$(dirname "$(readlink -f "$gradle")")/../lib" && pwd)"
           ls "$lib"/kotlin-compiler-embeddable-*.jar
           { echo "FISICA_ANDROID_NDK=$ndk"; echo "ANDROID_SDK_ROOT=$sdk"; echo "FISICA_GRADLE_LIB=$lib"; } >> "$GITHUB_ENV"
-      - name: Android libraries with 16 KB LOAD alignment, and the AAR
+      - name: Android libraries for 16 KB pages (LOAD alignment and RELRO end checked), and the AAR
         run: python tools/build_platforms.py --validation --target android
-      - name: Audit public Android artifacts (16 KB alignment included)
+      - name: Audit public Android artifacts (16 KB LOAD and RELRO checks included)
         run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts android)
       - name: Kotlin contract (client, link check, entitlement, mock server)
         run: python tools/verify_bindings.py kotlin

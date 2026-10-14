@@ -5,9 +5,10 @@ Use the supplied AAR, not a customer build of private SDK sources.
 
 AAR with public Kotlin classes and compiled `libfisica_core.so` + `libfisica_jni.so`.
 Android API 23+, arm64-v8a/armeabi-v7a/x86_64. Add Kotlin stdlib (2.0.21-compatible).
-Every library has 16 KB LOAD alignment, so it loads on 16 KB page devices (Android 15+,
-required by Google Play). Build the app with AGP 8.5.1+ so the uncompressed libraries
-are also 16 KB zip-aligned in the APK/AAB.
+Every library is 16 KB page compatible (Android 15+, required by Google Play): all LOAD
+segments are 16 KB aligned and the RELRO segment ends on a 16 KB boundary. Build the app
+with AGP 8.5.1+ so the uncompressed libraries are also 16 KB zip-aligned in the APK/AAB,
+and check the APK with `zipalign -c -P 16 -v 4`.
 Runtime uses `System.loadLibrary`, with no source compilation or download. The JNI
 marshaler source is public; private algorithm and state sources are absent.
 

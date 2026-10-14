@@ -95,7 +95,7 @@ BLE 측정 경로: 프로토콜 문서는 연속 측정(0x51)이 USB 전용이�
 | 네이티브 C ABI 계약 | UBSan 통과. 토큰 1글자 변조 3144건·무작위 입력 모두 거절 | 로컬 macOS, GitHub macOS CI(UBSan) |
 | Swift `swift test` | 10 passed (공통 벡터 2, 클라이언트·연결 종류·프레임 규칙·확인 정보 7, 온라인 갱신·저장 1) | 로컬 macOS XCTest, GitHub macOS CI |
 | Kotlin/JNI | 공통 벡터, 클라이언트·연결 종류 검증·프레임 규칙·확인 정보·온라인 갱신·저장·MTU 분할 규칙 통과 | 로컬 JVM. `BleTransport`는 android-35로 컴파일만. CI Android job 추가 |
-| Android 빌드 | 3개 ABI의 core/JNI `.so` 전부 LOAD 정렬 0x4000(16KB), AAR 감사 통과. Java·Kotlin 샘플이 새 AAR로 컴파일 | 로컬 NDK r26. CI Android job 추가. APK 빌드·기기 실행은 안 함 |
+| Android 빌드 | 3개 ABI의 core/JNI `.so` 전부 LOAD 정렬 0x4000, RELRO 끝 16KB 경계, AAR 감사 통과. Java·Kotlin 샘플이 새 AAR로 컴파일 | 로컬 NDK r26. CI Android job. APK 빌드·zipalign·16KB 기기 실행은 안 함 |
 | C# | 공통 벡터, 클라이언트·연결 종류 검증·프레임 규칙·Serial 오류 처리·확인 정보·온라인 갱신·저장 통과. Windows BLE는 컴파일 + 장치 없는 실패 경로 | 로컬 macOS .NET 8, GitHub Windows CI |
 | Dart | analyze 문제 없음, 22 tests passed (재연결·transport 교체·유실 후 close·연결 종류·프레임 규칙·온라인 갱신 포함) | 로컬 macOS Dart 3.11. CI flutter job에 추가 |
 | Flutter 어댑터 | analyze 문제 없음, 15 tests passed (같은 어댑터 재연결, 연결 중 재연결, 실패 후 재시도, 실제 코어로 유실 후 측정 재개) | 로컬 Flutter 3.41, GitHub macOS CI |
@@ -132,9 +132,17 @@ FISICA_BUILD_PLATFORM=win_arm64 CXX=/trusted/arm64-compiler python tools/build_r
 python tools/package_platforms.py --validation
 ```
 
-Android 라이브러리는 `-Wl,-z,max-page-size=16384`로 링크해 모든 LOAD 세그먼트를 16KB로 정렬한다
-(NDK 버전과 무관). 빌드와 `tools/audit_artifacts.py`가 AAR·Flutter ZIP 안의 모든 `.so` 정렬을 검사하고
-4KB 정렬이면 실패한다. Android NDK 경로는 `--ndk` 또는 FISICA_ANDROID_NDK로 준다.
+Android 라이브러리는 `-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384`로 링크한다(NDK r27 이하에
+필요, r28+는 기본값). 공식 기준 두 가지를 빌드와 `tools/audit_artifacts.py`가 AAR·Flutter ZIP 안의 모든
+`.so`에 대해 검사하고 하나라도 어긋나면 실패한다.
+
+- 모든 LOAD 세그먼트 정렬이 16KB(0x4000) 이상.
+- GNU_RELRO 세그먼트가 있으면 `(VirtAddr + MemSiz) % 0x4000 == 0`. 로더는 RELRO가 걸친 페이지 전체를
+  읽기 전용으로 만들기 때문에, 끝이 16KB 경계가 아니면 16KB 페이지 기기에서 뒤따르는 쓰기 영역이 막혀
+  segmentation fault가 난다. LOAD 정렬만 맞고 이것이 어긋날 수 있다(`max-page-size`만 준 경우).
+
+APK/AAB의 zip 정렬(`zipalign -c -P 16 -v 4`)은 앱 빌드 단계라 SDK가 대신 확인하지 못한다.
+Android NDK 경로는 `--ndk` 또는 FISICA_ANDROID_NDK로 준다.
 
 Apple SDK 경로는 FISICA_XCODE_DEVELOPER, Android SDK는 ANDROID_SDK_ROOT,
 Kotlin compiler runtime은 FISICA_GRADLE_LIB로 설정한다. 소비 앱은 private 코어를
