@@ -11,6 +11,7 @@ public final class BLETransport: NSObject, FisicaTransport, CBCentralManagerDele
     public var onSendFailure: ((Error) -> Void)?
     public var onError: ((Error) -> Void)?
     public var onBluetoothState: ((CBManagerState) -> Void)?
+    public var link: FisicaLink? { .ble }
     /// Seconds allowed from connect until notifications are enabled.
     public var readyTimeout: TimeInterval = 15
     private let queue: DispatchQueue

@@ -13,7 +13,7 @@
 
 namespace {
 constexpr uint64_t max_refresh_seconds = 30ull * 24 * 3600;
-constexpr uint32_t max_token = 4096, max_state = 262144;
+constexpr uint32_t max_token = FISICA_LIMIT_TOKEN_BYTES, max_state = 262144;
 constexpr uint64_t max_time = 1ull << 53;
 
 struct Token {

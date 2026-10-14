@@ -89,7 +89,7 @@ class FisicaSession {
       throw FisicaArgumentError(1, 'Expected monotonic milliseconds');
   }
 
-  /// 1 connected (value 1 BLE, 2 USB), 2 start (duration ms, -1 unlimited),
+  /// 1 connected (value [FisicaLink.ble] or [FisicaLink.usb]), 2 start (duration ms, -1 unlimited),
   /// 3 stop, 4 disconnect, 5 lost (value 1 send failure, 0 link loss).
   void action(int action, {int value = 0, required int nowMs}) {
     _validateTime(nowMs);
@@ -113,7 +113,9 @@ class FisicaSession {
 
   void feed(Uint8List bytes, {required int nowMs}) {
     _validateTime(nowMs);
-    if (bytes.length > 65536) throw FisicaArgumentError(1, 'Feed is too large');
+    if (bytes.length > FisicaLimit.feedBytes) {
+      throw FisicaArgumentError(1, 'Feed is too large');
+    }
     final input = calloc<Uint8>(bytes.isEmpty ? 1 : bytes.length);
     try {
       input.asTypedList(bytes.length).setAll(0, bytes);

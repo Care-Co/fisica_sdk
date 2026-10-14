@@ -217,7 +217,7 @@ An active `disconnect()` delegates stop and release to the core instead of waiti
 indefinitely for the application to stop measurement first. Custom MockTransport exchanges must now
 include actual ACK bytes; sending bytes alone is no longer success.
 
-Drain events after each call. Feed at most 65536 bytes per call; internal framing is
+Drain events after each call. Feed at most 65536 bytes (`FISICA_LIMIT_FEED_BYTES`) per call; internal framing is
 bounded and the queue holds at most 1024 events. Queue/allocation failure returns
 INTERNAL_ERROR and invalidates the session; close/reopen rather than ignoring it.
 `poll` reports required payload length and retains an event on capacity failure.
@@ -232,12 +232,16 @@ cancellation, link recovery, duration, per-handle isolation and buffer canaries.
 Final session release evidence: [session core verification](session-core-verification.md).
 
 ABI 1.3 adds the shared offline wrapper-policy checker and status 12.
-ABI 1.4 adds the runtime entitlement context and `fisica_core_analyze_packets`.
+ABI 1.4 adds the runtime entitlement context and `fisica_core_analyze_packets`, plus
+two constant-only enums (no new functions): `FisicaLink` (`FISICA_LINK_BLE`/`USB`, the
+CONNECTED value) and `FisicaLimit` (`ANALYSIS_FRAMES` 19,949 per analysis call,
+`FEED_BYTES`, `TOKEN_BYTES`). The core uses these values for its own checks, so the
+header and the enforced limits cannot drift.
 
 ## Shared codes and binding verification
 
 `python tools/sync_binding_metadata.py` generates, from the public C header, the
-status/session/entitlement codes for Swift, Kotlin, C#, Dart and Python, the default
+status/session/link/limit/entitlement codes for Swift, Kotlin, C#, Dart and Python, the default
 BLE profile from `wrappers/ble-profile.json`, and the Apple podspec symbol list.
 A test fails when a generated file is stale. Do not edit generated files.
 

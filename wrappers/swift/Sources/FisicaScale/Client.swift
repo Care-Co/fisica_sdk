@@ -3,6 +3,9 @@ import Foundation
 /// Byte link to one Scale. The app or SDK adapter owns the OS I/O; no protocol rules here.
 /// Deliver every callback on the client's queue.
 public protocol FisicaTransport: AnyObject {
+    /// The Scale link this transport carries, or nil when it can carry either.
+    /// `FisicaClient.connect` rejects a different link before anything is sent.
+    var link: FisicaLink? { get }
     /// Reads and writes both work.
     var onReady: (() -> Void)? { get set }
     var onBytes: (([UInt8]) -> Void)? { get set }
@@ -15,12 +18,15 @@ public protocol FisicaTransport: AnyObject {
     func send(_ bytes: [UInt8])
     func close()
 }
+public extension FisicaTransport { var link: FisicaLink? { nil } }
 
 /// Scripted link for development and tests without hardware: request bytes -> response chunks.
 /// It contains no device behavior; unknown requests are recorded and get no reply.
 public final class MockTransport: FisicaTransport {
     public var onReady: (() -> Void)?, onBytes: (([UInt8]) -> Void)?, onLost: (() -> Void)?
     public var onSendFailure: ((Error) -> Void)?, onError: ((Error) -> Void)?
+    /// Set to model a transport that carries only one link kind.
+    public var link: FisicaLink?
     public var exchanges: [[UInt8]: [[UInt8]]]
     public private(set) var sent: [[UInt8]] = []
     public private(set) var isOpen = false
@@ -60,7 +66,7 @@ public struct SessionReport {
 /// clock, moves bytes and turns core events into callbacks.
 /// Every callback and completion runs on `queue`; read `frames` and call `report()` there.
 public final class FisicaClient {
-    public enum Link: Int64 { case ble = 1, usb = 2 }
+    public typealias Link = FisicaLink
     public typealias Completion = (Result<SessionEvent, Error>) -> Void
     public let core: FisicaCore
     public let transport: FisicaTransport
@@ -70,7 +76,16 @@ public final class FisicaClient {
     /// The link dropped. Reopen the same Scale with `connect`; the core resumes a measurement it still wants.
     public var onLinkLost: (() -> Void)?
     public var onError: ((Error) -> Void)?
+    /// Frames of the current measurement. `start` clears them; a reconnect keeps them.
+    /// Only the latest `maxFrames` are kept.
     public private(set) var frames: [Measurement] = []
+    /// Oldest frames dropped beyond `maxFrames` since the last `start` or `clearFrames`.
+    public private(set) var droppedFrames = 0
+    /// How many recent frames to keep, 1...`FisicaLimit.analysisFrames` (the most one
+    /// analysis accepts). This also bounds memory in long sessions.
+    public var maxFrames = Int(FisicaLimit.analysisFrames.rawValue) {
+        didSet { maxFrames = min(max(maxFrames, 1), Int(FisicaLimit.analysisFrames.rawValue)); trimFrames() }
+    }
     public private(set) var firmwareVersion: String?
     public private(set) var state: FisicaSessionState = .disconnected
 
@@ -93,12 +108,17 @@ public final class FisicaClient {
 
     /// Open the transport and probe firmware. Completes with the probe result; an
     /// unanswered probe is reported in its `status` and does not prevent use.
-    public func connect(_ link: Link, timeout: TimeInterval = 15, completion: @escaping Completion) {
+    /// A link other than the transport's own `link` fails before anything is sent.
+    public func connect(_ link: FisicaLink, timeout: TimeInterval = 15, completion: @escaping Completion) {
         queue.async { [weak self] in
             guard let self else { return }
             let probe = self.operation(.probe)
             guard !self.closed, !self.linkReady, self.waiters[probe] == nil else {
                 completion(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Already connected or connecting"))); return
+            }
+            if let carried = self.transport.link, carried != link {
+                completion(.failure(FisicaError(code: Int32(FisicaStatus.invalidArgument.rawValue),
+                                                message: "This transport carries \(carried), not \(link)"))); return
             }
             self.waiters[probe] = completion
             self.transport.onReady = { [weak self] in self?.queue.async { self?.ready(link) } }
@@ -118,7 +138,7 @@ public final class FisicaClient {
         }
     }
 
-    private func ready(_ link: Link) {
+    private func ready(_ link: FisicaLink) {
         guard !closed, !linkReady else { return }
         linkReady = true; readyDeadline?.cancel()
         if timer == nil {
@@ -127,13 +147,13 @@ public final class FisicaClient {
             source.setEventHandler { [weak self] in self?.step { try $0.tick($1) } }
             source.resume(); timer = source
         }
-        step { try $0.action(FisicaSessionAction.connected.rawValue, value: link.rawValue, nowMs: $1) }
+        step { try $0.action(FisicaSessionAction.connected.rawValue, value: Int64(link.rawValue), nowMs: $1) }
     }
     private func received(_ bytes: [UInt8]) {
         guard linkReady else { return }
-        // The core accepts at most 65536 bytes per call.
-        for start in stride(from: 0, to: bytes.count, by: 65536) {
-            step { try $0.feed(Array(bytes[start..<min(start + 65536, bytes.count)]), nowMs: $1) }
+        let limit = Int(FisicaLimit.feedBytes.rawValue)
+        for start in stride(from: 0, to: bytes.count, by: limit) {
+            step { try $0.feed(Array(bytes[start..<min(start + limit, bytes.count)]), nowMs: $1) }
         }
     }
     private func lost(sendFailure: Bool) {
@@ -161,7 +181,7 @@ public final class FisicaClient {
         switch FisicaSessionEvent(rawValue: event.kind) {
         case .transmit: transport.send(event.payload)
         case .measurement:
-            if let frame = try? core.decode(event.payload) { frames.append(frame); onFrame?(frame) }
+            if let frame = try? core.decode(event.payload) { frames.append(frame); trimFrames(); onFrame?(frame) }
         case .result:
             let probe = event.operation == operation(.probe)
             if probe, event.status == 0, let payload = try? core.responsePayload(event.payload) {
@@ -176,7 +196,8 @@ public final class FisicaClient {
         onEvent?(event)
     }
 
-    private func request(_ action: FisicaSessionAction, value: Int64, waitFor: FisicaSessionOperation, completion: @escaping Completion) {
+    private func request(_ action: FisicaSessionAction, value: Int64, waitFor: FisicaSessionOperation,
+                         accepted: (() -> Void)? = nil, completion: @escaping Completion) {
         queue.async {
             let key = self.operation(waitFor)
             guard !self.closed, self.waiters[key] == nil else {
@@ -185,14 +206,16 @@ public final class FisicaClient {
             self.waiters[key] = completion
             do {
                 try self.session.action(action.rawValue, value: value, nowMs: self.now)
+                accepted?()
                 for event in try self.session.drain() { self.deliver(event) }
             } catch { self.waiters.removeValue(forKey: key)?(.failure(error)) }
         }
     }
     /// Start measuring; `durationMs` nil measures until `stop`. Completes when the Scale confirmed the start.
+    /// Frames of the previous measurement are cleared once the core accepts the start.
     public func start(durationMs: Int64? = nil, completion: @escaping Completion) {
         entitlement?.checkStatus()
-        request(.start, value: durationMs ?? -1, waitFor: .begin, completion: completion)
+        request(.start, value: durationMs ?? -1, waitFor: .begin, accepted: { [weak self] in self?.clearFrames() }, completion: completion)
     }
     public func stop(completion: @escaping Completion) { request(.stop, value: 0, waitFor: .end, completion: completion) }
 
@@ -221,5 +244,9 @@ public final class FisicaClient {
         guard let result = try core.analyzePackets(frames.map { $0.packet }) else { return nil }
         return SessionReport(weight: result[0], leftWidth: result[1], leftLength: result[2], rightWidth: result[3], rightLength: result[4], frames: frames)
     }
-    public func clearFrames() { frames.removeAll() }
+    public func clearFrames() { frames.removeAll(); droppedFrames = 0 }
+    private func trimFrames() {
+        let excess = frames.count - maxFrames
+        if excess > 0 { frames.removeFirst(excess); droppedFrames += excess }
+    }
 }

@@ -68,7 +68,7 @@ class _ScalePageState extends State<ScalePage> {
 
   Future<void> measure(
     FisicaTransport transport,
-    int profile, {
+    int link, {
     bool mock = false,
   }) async {
     final core = FisicaCore.platform();
@@ -78,7 +78,7 @@ class _ScalePageState extends State<ScalePage> {
       onError: (Object error) => show('$error'),
     );
     try {
-      await current.connect(profile: profile);
+      await current.connect(link: link);
       show(mock ? 'Synthetic demo measurement' : 'Measuring for 5 seconds');
       await current.start();
       await Future<void>.delayed(const Duration(seconds: 5));
@@ -150,7 +150,7 @@ class _ScalePageState extends State<ScalePage> {
                                 as Map<String, dynamic>;
                         await measure(
                           DemoTransport(FisicaCore.platform(), script),
-                          2,
+                          FisicaLink.usb,
                           mock: true,
                         );
                       }),
@@ -172,7 +172,7 @@ class _ScalePageState extends State<ScalePage> {
                               d.ble
                                   ? FisicaBleTransport(d.id)
                                   : FisicaUsbTransport(d.id),
-                              d.ble ? 1 : 2,
+                              d.ble ? FisicaLink.ble : FisicaLink.usb,
                             ),
                           ),
                   ),

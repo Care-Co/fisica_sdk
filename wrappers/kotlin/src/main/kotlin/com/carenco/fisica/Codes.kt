@@ -20,6 +20,11 @@ object FisicaPacketKind {
     const val MEASUREMENT = 1
     const val RESPONSE = 2
 }
+object FisicaLimit {
+    const val ANALYSIS_FRAMES = 19949
+    const val FEED_BYTES = 65536
+    const val TOKEN_BYTES = 4096
+}
 object FisicaSessionState {
     const val DISCONNECTED = 0
     const val IDLE = 1
@@ -51,6 +56,10 @@ object FisicaSessionOperation {
     const val END = 3
     const val CLOSE = 4
     const val REQUEST = 5
+}
+object FisicaLink {
+    const val BLE = 1
+    const val USB = 2
 }
 object FisicaEntitlementOutcome {
     const val NONE = 0

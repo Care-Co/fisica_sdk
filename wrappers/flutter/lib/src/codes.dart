@@ -20,6 +20,11 @@ abstract final class FisicaPacketKind {
   static const measurement = 1;
   static const response = 2;
 }
+abstract final class FisicaLimit {
+  static const analysisFrames = 19949;
+  static const feedBytes = 65536;
+  static const tokenBytes = 4096;
+}
 abstract final class FisicaSessionState {
   static const disconnected = 0;
   static const idle = 1;
@@ -51,6 +56,10 @@ abstract final class FisicaSessionOperation {
   static const end = 3;
   static const close = 4;
   static const request = 5;
+}
+abstract final class FisicaLink {
+  static const ble = 1;
+  static const usb = 2;
 }
 abstract final class FisicaEntitlementOutcome {
   static const none = 0;

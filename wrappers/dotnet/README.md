@@ -27,6 +27,14 @@ await client.CloseAsync();
 - `CloseAsync` releases resources even when the Scale does not confirm. On `LinkLost`,
   reopen the same Scale with `ConnectAsync`.
 - `Report()` analyzes the collected packets in the core and returns unrounded values.
+- `StartAsync` clears the frames of the previous measurement once the core accepts it,
+  so measuring several people in a row needs no `ClearFrames()`. A reconnect keeps them.
+  Only the latest `MaxFrames` (at most `FisicaLimit.AnalysisFrames`, the most one
+  analysis accepts) are kept; `DroppedFrames` counts the older ones dropped.
+- `ConnectAsync(link)` takes `FisicaLink.Usb` or `FisicaLink.Ble`. Without it the
+  transport's own `Link` is used (`SerialTransport` USB, `BleTransport` BLE), otherwise
+  USB. A link other than the transport's fails with `InvalidArgument` before anything
+  is sent.
 - Events are raised on the thread that delivered the input; marshal to the UI thread
   in the app. Codes are generated enums: `FisicaStatus`, `FisicaSessionState`, ...
 
@@ -55,7 +63,7 @@ Python SDK and is not yet confirmed on production firmware.
 
 Entitlement: `FisicaEntitlement` imports a server-signed token or file and reports
 three separate values (base license, confirmation freshness, contract state) plus
-warnings through `Warning`. Pass it to `FisicaClient` so warnings follow real use. It
+warnings through `Warning`. Pass it to `FisicaClient` so warnings appear when features are used. It
 never blocks a feature. The signed token is stored under LocalApplicationData by default
 (`storage`) for offline verification. With `endpoint` it refreshes the information in
 the background (`Sync()` or `await SyncAsync()`); without an endpoint no network is

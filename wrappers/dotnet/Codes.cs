@@ -2,10 +2,12 @@
 namespace CareCo.Fisica;
 public enum FisicaStatus : uint { Ok = 0, InvalidArgument = 1, BufferTooSmall = 2, NoResult = 3, UnknownCommand = 4, InternalError = 5, InvalidState = 6, Busy = 7, CommandTimeout = 8, DeviceRejected = 9, Cancelled = 10, TransportLost = 11, IncompatibleVersion = 12 }
 public enum FisicaPacketKind : uint { None = 0, Measurement = 1, Response = 2 }
+public enum FisicaLimit : uint { AnalysisFrames = 19949, FeedBytes = 65536, TokenBytes = 4096 }
 public enum FisicaSessionState : uint { Disconnected = 0, Idle = 1, Starting = 2, Measuring = 3, Stopping = 4, Releasing = 5, Fault = 6, Recovering = 7 }
 public enum FisicaSessionAction : uint { Connected = 1, Start = 2, Stop = 3, Disconnect = 4, Lost = 5 }
 public enum FisicaSessionEvent : uint { Transmit = 1, State = 2, Result = 3, Measurement = 4, Response = 5, Reconnect = 6 }
 public enum FisicaSessionOperation : uint { Probe = 1, Begin = 2, End = 3, Close = 4, Request = 5 }
+public enum FisicaLink : uint { Ble = 1, Usb = 2 }
 public enum FisicaEntitlementOutcome : uint { None = 0, Accepted = 1, IgnoredOlder = 2, RejectedFormat = 3, RejectedKey = 4, RejectedSignature = 5 }
 public enum FisicaBaseLicense : uint { Granted = 1 }
 public enum FisicaVerification : uint { None = 0, Fresh = 1, RefreshDue = 2 }

@@ -29,12 +29,27 @@ def validate_windows_dll(data, expected_machine=0x8664):
         raise ValueError('Windows core is an executable, not a DLL')
 
 
+ANDROID_PAGE_SIZE = 16384
+
+
 def validate_android_library(data, abi):
     machines = {'arm64-v8a': (2,183), 'armeabi-v7a': (1,40), 'x86_64': (2,62)}
     if len(data)<20 or data[:4]!=b'\x7fELF' or data[5]!=1 or abi not in machines:
         raise ValueError('Invalid Android ELF library or ABI')
     if (data[4],struct.unpack_from('<H',data,18)[0])!=machines[abi]:
         raise ValueError('Android library architecture does not match its ABI directory')
+    # Every LOAD segment must be 16 KB aligned so the library loads on 16 KB page devices.
+    wide = data[4] == 2
+    if len(data) < (64 if wide else 52):
+        raise ValueError('Android library has a truncated ELF header')
+    offset = struct.unpack_from('<Q' if wide else '<I', data, 0x20 if wide else 0x1c)[0]
+    size, count = struct.unpack_from('<HH', data, 0x36 if wide else 0x2a)
+    if not count or size < (56 if wide else 32) or offset + size * count > len(data):
+        raise ValueError('Android library has no readable program headers')
+    alignments = [struct.unpack_from('<Q' if wide else '<I', data, offset + i * size + (48 if wide else 28))[0]
+                  for i in range(count) if struct.unpack_from('<I', data, offset + i * size)[0] == 1]
+    if not alignments or min(alignments) < ANDROID_PAGE_SIZE:
+        raise ValueError(f'Android library LOAD segments are not 16 KB aligned ({abi}); rebuild with -Wl,-z,max-page-size=16384')
 
 
 def audit_archive(path):

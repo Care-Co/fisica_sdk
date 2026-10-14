@@ -12,6 +12,7 @@ namespace CareCo.Fisica;
 public sealed class BleTransport : IFisicaTransport {
     public event Action? Ready; public event Action<byte[]>? Bytes; public event Action? Lost;
     public event Action<Exception>? SendFailed; public event Action<Exception>? Error;
+    public FisicaLink? Link => FisicaLink.Ble;
     /// <summary>An advertising device was seen: Bluetooth address, advertised name, RSSI in dBm.</summary>
     public event Action<ulong,string,short>? Device;
     /// <summary>Time allowed from Open until notifications are enabled.</summary>

@@ -6,6 +6,7 @@ namespace CareCo.Fisica;
 public sealed class SerialTransport(string portName,int baudRate=9600) : IFisicaTransport {
     public event Action? Ready; public event Action<byte[]>? Bytes; public event Action? Lost;
     public event Action<Exception>? SendFailed; public event Action<Exception>? Error;
+    public FisicaLink? Link => FisicaLink.Usb;
     readonly object gate=new(); SerialPort? port; Thread? reader; volatile bool open;
     public string PortName { get; }=portName;
     public static string[] PortNames() => SerialPort.GetPortNames();

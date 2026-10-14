@@ -90,3 +90,35 @@ def test_native_binary_is_byte_identical_whoever_it_is_built_for(monkeypatch, tm
     second = build_native(tmp_path / 'b').read_bytes()
     assert first == second
     assert b'partner-test' not in second and b'delivery-test' not in second
+
+
+def _android_elf(alignment, wide=True, machine=183):
+    """Smallest ELF shared object header with one LOAD program header."""
+    import struct
+    header = bytearray(64 if wide else 52)
+    header[:6] = b'\x7fELF' + bytes([2 if wide else 1, 1])
+    struct.pack_into('<HH', header, 16, 3, machine)
+    if wide:
+        struct.pack_into('<Q', header, 0x20, 64)
+        struct.pack_into('<HH', header, 0x36, 56, 1)
+        program = struct.pack('<IIQQQQQQ', 1, 5, 0, 0, 0, 0x1000, 0x1000, alignment)
+    else:
+        struct.pack_into('<I', header, 0x1c, 52)
+        struct.pack_into('<HH', header, 0x2a, 32, 1)
+        program = struct.pack('<IIIIIIII', 1, 0, 0, 0, 0x1000, 0x1000, 5, alignment)
+    return bytes(header) + program
+
+
+def test_android_libraries_must_be_16kb_aligned():
+    from tools.audit_artifacts import validate_android_library
+    validate_android_library(_android_elf(0x4000), 'arm64-v8a')
+    validate_android_library(_android_elf(0x4000, wide=False, machine=40), 'armeabi-v7a')
+    for data, abi in ((_android_elf(0x1000), 'arm64-v8a'), (_android_elf(0x1000, machine=62), 'x86_64'),
+                      (_android_elf(0x1000, wide=False, machine=40), 'armeabi-v7a')):
+        with pytest.raises(ValueError, match='16 KB'):
+            validate_android_library(data, abi)
+    with pytest.raises(ValueError, match='program headers'):
+        validate_android_library(_android_elf(0x4000)[:64], 'arm64-v8a')
+    from pathlib import Path
+    build = (Path(__file__).resolve().parents[1] / 'tools/build_platforms.py').read_text(encoding='utf-8')
+    assert '-Wl,-z,max-page-size=16384' in build

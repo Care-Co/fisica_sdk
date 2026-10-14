@@ -28,6 +28,8 @@ jobs:
           git -C .build/flutter-sdk checkout --detach abaf9c523780a608bd46686fd5e53740a07077f8
           echo "$GITHUB_WORKSPACE/.build/flutter-sdk/bin" >> "$GITHUB_PATH"
       - run: flutter --disable-analytics
+      - name: Dart core wrapper contract (client, reconnect, link check, entitlement, mock server)
+        run: python tools/verify_bindings.py dart
       - run: flutter pub get
         working-directory: wrappers/flutter_transport
       - run: flutter analyze
@@ -43,6 +45,40 @@ jobs:
         working-directory: examples/partner/flutter
       - run: flutter build bundle --debug
         working-directory: examples/partner/flutter
+  android:
+    if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with: {python-version: '3.11'}
+      - name: Runner Android NDK, android-35 platform and Gradle's Kotlin compiler
+        run: |
+          ndk="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
+          test -d "$ndk/toolchains/llvm/prebuilt" || { echo "::error::No Android NDK on this runner"; exit 1; }
+          sdk="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          test -f "$sdk/platforms/android-35/android.jar" || "$sdk/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-35"
+          gradle="$(command -v gradle)" || { echo "::error::Gradle is not installed on this runner"; exit 1; }
+          lib="$(cd "$(dirname "$(readlink -f "$gradle")")/../lib" && pwd)"
+          ls "$lib"/kotlin-compiler-embeddable-*.jar
+          { echo "FISICA_ANDROID_NDK=$ndk"; echo "ANDROID_SDK_ROOT=$sdk"; echo "FISICA_GRADLE_LIB=$lib"; } >> "$GITHUB_ENV"
+      - name: Android libraries with 16 KB LOAD alignment, and the AAR
+        run: python tools/build_platforms.py --validation --target android
+      - name: Audit public Android artifacts (16 KB alignment included)
+        run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts android)
+      - name: Kotlin contract (client, link check, entitlement, mock server)
+        run: python tools/verify_bindings.py kotlin
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fisica-android
+          path: |
+            .build/platforms/android/*.aar
+            .build/platforms/android/*.zip
+          retention-days: 14
   apple:
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-15

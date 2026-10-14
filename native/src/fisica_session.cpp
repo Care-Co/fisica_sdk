@@ -228,7 +228,7 @@ int32_t fisica_core_session_command(FisicaSession *s,const char *name,double val
 }
 int32_t fisica_core_session_feed(FisicaSession *s,const uint8_t *bytes,uint32_t length,uint64_t now) {
     return protect(s,[&]() -> int32_t {
-        if ((!bytes && length) || length>65536) return FISICA_INVALID_ARGUMENT;
+        if ((!bytes && length) || length>FISICA_LIMIT_FEED_BYTES) return FISICA_INVALID_ARGUMENT;
         auto status=s->advance(now); if (status) return status;
         if (s->state==FISICA_DISCONNECTED || s->state==FISICA_RECOVERING) return FISICA_INVALID_STATE;
         for (uint32_t offset=0; offset<length;) {

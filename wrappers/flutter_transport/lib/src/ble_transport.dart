@@ -5,7 +5,10 @@ import 'package:universal_ble/universal_ble.dart';
 
 /// BLE bytes only. Protocol framing, commands and ACKs remain in the core.
 /// Grant OS Bluetooth permissions before scanning or connecting.
-class FisicaBleTransport implements FisicaTransport {
+///
+/// After a link loss or a failed connect, [connect] links the same Scale again;
+/// called while linked it drops that link first. [close] is final.
+class FisicaBleTransport implements FisicaLinkTransport {
   final String deviceId;
   final FisicaBleProfile profile;
   final Duration timeout;
@@ -15,8 +18,7 @@ class FisicaBleTransport implements FisicaTransport {
   StreamSubscription<Uint8List>? _notifications;
   String? _writeService, _notifyService;
   bool _withResponse = true, _ready = false, _closed = false, _linked = false;
-  bool _lostSent = false;
-  bool _used = false;
+  bool _lostSent = false, _connecting = false;
   Future<void> _writes = Future.value();
   int _mtu = 23;
   int get mtu => _mtu;
@@ -56,6 +58,8 @@ class FisicaBleTransport implements FisicaTransport {
   }
 
   @override
+  int get link => FisicaLink.ble;
+  @override
   Stream<Uint8List> get received => _received.stream;
   @override
   Stream<void> get disconnected => _disconnected.stream;
@@ -68,10 +72,36 @@ class FisicaBleTransport implements FisicaTransport {
     }
   }
 
+  /// Drop the subscriptions of the previous link; [disconnect] also ends it.
+  Future<void> _release({bool disconnect = false}) async {
+    _ready = false;
+    final notifications = _notifications, connection = _connection;
+    _notifications = null;
+    _connection = null;
+    await notifications?.cancel();
+    await connection?.cancel();
+    if (disconnect && connection != null) {
+      await UniversalBle.disconnect(deviceId, timeout: timeout);
+    }
+  }
+
   @override
   Future<void> connect() async {
-    if (_closed || _used) throw StateError('Transport already used');
-    _used = true;
+    if (_closed) throw StateError('Transport is closed');
+    if (_connecting) throw StateError('Transport is already connecting');
+    _connecting = true;
+    try {
+      await _connect();
+    } finally {
+      _connecting = false;
+    }
+  }
+
+  Future<void> _connect() async {
+    await _release(disconnect: _ready);
+    _lostSent = false;
+    _linked = false;
+    _mtu = 23;
     await _requireBluetooth();
     _connection = UniversalBle.connectionStream(deviceId).listen(
       (connected) {
@@ -156,7 +186,7 @@ class FisicaBleTransport implements FisicaTransport {
       _ready = true;
     } catch (error, stack) {
       try {
-        await close();
+        await _release(disconnect: true);
       } finally {
         Error.throwWithStackTrace(error, stack);
       }
@@ -190,12 +220,8 @@ class FisicaBleTransport implements FisicaTransport {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
-    _ready = false;
-    await _notifications?.cancel();
-    await _connection?.cancel();
     try {
-      if (_connection != null)
-        await UniversalBle.disconnect(deviceId, timeout: timeout);
+      await _release(disconnect: true);
     } finally {
       await _received.close();
       await _disconnected.close();

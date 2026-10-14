@@ -4,6 +4,7 @@ import threading
 import numpy as np
 
 from .analyzer import analyze as global_analyzer
+from .codes import FisicaLimit
 from .native import get_core
 from .receiver import Receiver
 from .exporter import *
@@ -12,6 +13,7 @@ from .device import *
 from .utils import *
 
 logger = logging.getLogger(__name__)
+_ANALYSIS_FRAMES = int(FisicaLimit.ANALYSIS_FRAMES)
 
 
 
@@ -705,8 +707,14 @@ class FisicaSDK:
 
         metadata = self._session.metadata
         frames = self._session.frames
+        # One native analysis accepts a bounded number of frames; a longer session
+        # is analyzed over its latest frames instead of failing.
+        analyzed = frames[-_ANALYSIS_FRAMES:]
+        if len(analyzed) < len(frames):
+            log.warning(f"Analyzing the latest {len(analyzed)} of {len(frames)} frames "
+                        f"(one analysis accepts at most {_ANALYSIS_FRAMES}).")
 
-        result = global_analyzer(frames)
+        result = global_analyzer(analyzed)
 
         if not result:
             log.warning(

@@ -13,6 +13,7 @@ namespace {
 constexpr uint32_t rows_raw = 29, cols_raw = 22, cells_raw = 638;
 constexpr uint32_t cols_display = 29, cells_display = 841, packet_size = 645;
 constexpr uint64_t max_cells = 16 * 1024 * 1024;
+static_assert(max_cells / cells_display == FISICA_LIMIT_ANALYSIS_FRAMES, "public analysis frame limit");
 
 bool measurement_packet(const uint8_t *packet) {
     // Recorded Scale packets use 639; retain the previous SDK's 638 layout.
