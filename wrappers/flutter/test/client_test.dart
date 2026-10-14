@@ -33,6 +33,33 @@ class MockBytes implements FisicaTransport {
   }
 }
 
+class LinkedBytes extends MockBytes implements FisicaLinkTransport {
+  @override
+  final int link;
+  LinkedBytes(this.link);
+}
+
+Uint8List fixturePacket() {
+  final fixtures =
+      jsonDecode(
+            File(
+              '../../tests/fixtures/legacy-processing.json',
+            ).readAsStringSync(),
+          )
+          as List<dynamic>;
+  final hex =
+      fixtures.firstWhere(
+            (f) => f['id'] == 'synthetic-recorded-layout',
+          )['packet_hex']
+          as String;
+  return Uint8List.fromList([
+    for (var i = 0; i < hex.length; i += 2)
+      int.parse(hex.substring(i, i + 2), radix: 16),
+  ]);
+}
+
+Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 60));
+
 void main() {
   final core = FisicaCore.open(
     Platform.environment['FISICA_CORE_TEST_LIBRARY']!,
@@ -40,7 +67,7 @@ void main() {
   test('async client uses core for start stop release', () async {
     final transport = MockBytes();
     final client = FisicaClient(core, transport);
-    expect((await client.connect(profile: 2)).status, 0);
+    expect((await client.connect(link: FisicaLink.usb)).status, 0);
     expect((await client.start()).state, 3);
     expect((await client.stop()).state, 1);
     await client.close();
@@ -75,7 +102,7 @@ void main() {
     ]);
     final transport = MockBytes();
     final client = FisicaClient(core, transport);
-    await client.connect(profile: 2);
+    await client.connect(link: FisicaLink.usb);
     await client.start();
     for (var i = 0; i < 12; i++) {
       transport.input.add(packet);
@@ -136,7 +163,7 @@ void main() {
     expect(entitlement.status().contract, FisicaContract.revoked);
     // Measurement still runs with a revoked contract and outdated confirmation.
     final client = FisicaClient(core, MockBytes(), entitlement: entitlement);
-    await client.connect(profile: 2);
+    await client.connect(link: FisicaLink.usb);
     expect((await client.start()).state, FisicaSessionState.measuring);
     await client.stop();
     await client.close();
@@ -181,10 +208,7 @@ void main() {
       endpoint: endpoint,
       storageDirectory: directory,
     );
-    expect(
-      entitlement.importToken(valid),
-      FisicaEntitlementOutcome.accepted,
-    );
+    expect(entitlement.importToken(valid), FisicaEntitlementOutcome.accepted);
     expect(await entitlement.sync(), isNull);
     // Server-signed confirmation time.
     expect(entitlement.status().verifiedAt, now);
@@ -215,6 +239,140 @@ void main() {
     entitlement.close();
     offline.close();
     reopened.close();
+  });
+  test(
+    'same client reconnects after link loss and resumes measuring',
+    () async {
+      final packet = fixturePacket();
+      final transport = MockBytes();
+      final client = FisicaClient(core, transport);
+      final errors = <Object>[];
+      final reconnects = <FisicaSessionEvent>[];
+      client.events.listen((e) {
+        if (e.kind == FisicaSessionEventKind.reconnect) reconnects.add(e);
+      }, onError: errors.add);
+      await client.connect(link: FisicaLink.usb);
+      await client.start(duration: const Duration(seconds: 30));
+      transport.input.add(packet);
+      transport.input.add(packet);
+      await settle();
+      transport.lost.add(null);
+      await settle();
+      expect(client.session.state, FisicaSessionState.recovering);
+      expect(reconnects, hasLength(1));
+      expect(errors, hasLength(1));
+      // Same transport: the core probes, sets the mode again and resumes.
+      expect(
+        (await client.connect(link: FisicaLink.usb)).status,
+        FisicaStatus.ok,
+      );
+      await settle();
+      expect(client.session.state, FisicaSessionState.measuring);
+      transport.input.add(packet);
+      await settle();
+      expect(client.frames, hasLength(3));
+      expect((await client.stop()).state, FisicaSessionState.idle);
+      expect(client.report()!.weight, 70.5);
+      await client.close();
+    },
+  );
+  test(
+    'reconnect can replace the transport and closes the previous one',
+    () async {
+      final first = MockBytes();
+      final second = MockBytes();
+      final client = FisicaClient(core, first);
+      client.events.handleError((_) {}).listen((_) {});
+      await client.connect(link: FisicaLink.ble);
+      await client.start();
+      first.lost.add(null);
+      await settle();
+      await client.connect(link: FisicaLink.ble, transport: second);
+      await settle();
+      expect(first.closed, isTrue);
+      expect(identical(client.transport, second), isTrue);
+      expect(client.session.state, FisicaSessionState.measuring);
+      expect(second.sent, isNotEmpty);
+      await client.close();
+      expect(second.closed, isTrue);
+    },
+  );
+  test('close after link loss frees resources without an error', () async {
+    final transport = MockBytes();
+    final client = FisicaClient(core, transport);
+    client.events.handleError((_) {}).listen((_) {});
+    await client.connect(link: FisicaLink.ble);
+    await client.start();
+    transport.lost.add(null);
+    await settle();
+    await client.close();
+    expect(transport.closed, isTrue);
+    expect(() => client.connect(), throwsStateError);
+  });
+  test('link comes from the transport; a different one is rejected', () async {
+    final usb = LinkedBytes(FisicaLink.usb);
+    final client = FisicaClient(core, usb);
+    await expectLater(
+      client.connect(link: FisicaLink.ble),
+      throwsA(isA<FisicaArgumentError>()),
+    );
+    expect(usb.sent, isEmpty);
+    await expectLater(
+      client.connect(link: 3),
+      throwsA(isA<FisicaArgumentError>()),
+    );
+    await client.connect();
+    await client.start();
+    expect(
+      usb.sent.any(
+        (bytes) =>
+            bytes.toString() == core.command('SET_DEVICE_USB').toString(),
+      ),
+      isTrue,
+    );
+    await client.stop();
+    await client.close();
+  });
+  test('deprecated profile is still accepted as the link', () async {
+    final transport = MockBytes();
+    final client = FisicaClient(core, transport);
+    // ignore: deprecated_member_use_from_same_package
+    await client.connect(profile: FisicaLink.usb);
+    await client.start();
+    expect(
+      transport.sent.any(
+        (bytes) =>
+            bytes.toString() == core.command('SET_DEVICE_USB').toString(),
+      ),
+      isTrue,
+    );
+    await client.stop();
+    await client.close();
+  });
+  test('start clears the previous measurement; frames stay bounded', () async {
+    final packet = fixturePacket();
+    final transport = MockBytes();
+    final client = FisicaClient(core, transport);
+    expect(
+      () => client.maxFrames = FisicaLimit.analysisFrames + 1,
+      throwsRangeError,
+    );
+    client.maxFrames = 5;
+    await client.connect(link: FisicaLink.usb);
+    await client.start();
+    for (var i = 0; i < 8; i++) {
+      transport.input.add(packet);
+    }
+    await settle();
+    await client.stop();
+    expect(client.frames, hasLength(5));
+    expect(client.droppedFrames, 3);
+    expect(client.report()!.weight, 70.5);
+    await client.start();
+    expect(client.frames, isEmpty);
+    expect(client.droppedFrames, 0);
+    await client.stop();
+    await client.close();
   });
   test('close during start cancels pending future and disposes once', () async {
     final client = FisicaClient(core, MockBytes());

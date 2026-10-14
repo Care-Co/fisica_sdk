@@ -90,3 +90,43 @@ def test_native_binary_is_byte_identical_whoever_it_is_built_for(monkeypatch, tm
     second = build_native(tmp_path / 'b').read_bytes()
     assert first == second
     assert b'partner-test' not in second and b'delivery-test' not in second
+
+
+def _android_elf(alignment, wide=True, machine=183, relro_end=None):
+    """Smallest ELF shared object header: one LOAD and optionally a GNU_RELRO program header."""
+    import struct
+    programs = [(1, 0, 0x1000, alignment)] + ([(0x6474e552, 0x3000, relro_end - 0x3000, 1)] if relro_end else [])
+    header = bytearray(64 if wide else 52)
+    header[:6] = b'\x7fELF' + bytes([2 if wide else 1, 1])
+    struct.pack_into('<HH', header, 16, 3, machine)
+    if wide:
+        struct.pack_into('<Q', header, 0x20, 64)
+        struct.pack_into('<HH', header, 0x36, 56, len(programs))
+        table = b''.join(struct.pack('<IIQQQQQQ', kind, 4, vaddr, vaddr, vaddr, memsz, memsz, align) for kind, vaddr, memsz, align in programs)
+    else:
+        struct.pack_into('<I', header, 0x1c, 52)
+        struct.pack_into('<HH', header, 0x2a, 32, len(programs))
+        table = b''.join(struct.pack('<IIIIIIII', kind, vaddr, vaddr, vaddr, memsz, memsz, 4, align) for kind, vaddr, memsz, align in programs)
+    return bytes(header) + table
+
+
+def test_android_libraries_must_be_16kb_aligned():
+    from tools.audit_artifacts import validate_android_library
+    validate_android_library(_android_elf(0x4000), 'arm64-v8a')
+    validate_android_library(_android_elf(0x4000, relro_end=0x8000), 'arm64-v8a')
+    validate_android_library(_android_elf(0x4000, wide=False, machine=40, relro_end=0x8000), 'armeabi-v7a')
+    for data, abi in ((_android_elf(0x1000), 'arm64-v8a'), (_android_elf(0x1000, machine=62), 'x86_64'),
+                      (_android_elf(0x1000, wide=False, machine=40), 'armeabi-v7a')):
+        with pytest.raises(ValueError, match='LOAD segments are not 16 KB'):
+            validate_android_library(data, abi)
+    # Official example: a RELRO ending on a 4 KB (not 16 KB) boundary faults on 16 KB page devices.
+    for data, abi in ((_android_elf(0x4000, relro_end=0xe1000), 'arm64-v8a'),
+                      (_android_elf(0x4000, machine=62, relro_end=0x5000), 'x86_64'),
+                      (_android_elf(0x4000, wide=False, machine=40, relro_end=0x5000), 'armeabi-v7a')):
+        with pytest.raises(ValueError, match='RELRO'):
+            validate_android_library(data, abi)
+    with pytest.raises(ValueError, match='program headers'):
+        validate_android_library(_android_elf(0x4000)[:64], 'arm64-v8a')
+    from pathlib import Path
+    build = (Path(__file__).resolve().parents[1] / 'tools/build_platforms.py').read_text(encoding='utf-8')
+    assert '-Wl,-z,max-page-size=16384' in build and '-Wl,-z,common-page-size=16384' in build

@@ -36,6 +36,13 @@ ble.onDevice = { peripheral in
   it still wants.
 - `report()` analyzes the collected packets in the core (29x29 display grid and
   per-frame weight) and returns unrounded values.
+- `start` clears the frames of the previous measurement once the core accepts it, so
+  measuring several people in a row needs no `clearFrames()`. A reconnect keeps them.
+  Only the latest `maxFrames` (at most `FisicaLimit.analysisFrames`, the most one
+  analysis accepts; larger values are clamped) are kept; `droppedFrames` counts the rest.
+- `connect(_:)` always names the link (`.ble` or `.usb`). A transport that declares its
+  own `link` (`BLETransport` is `.ble`) rejects a different one with `invalidArgument`
+  before anything is sent.
 - Codes are generated enums: `FisicaStatus`, `FisicaSessionState`, `FisicaSessionEvent`, ...
 
 Transports: `BLETransport` (CoreBluetooth), `MockTransport` (scripted, no hardware), or
@@ -48,7 +55,7 @@ entitlement.
 
 Entitlement: `FisicaEntitlement` imports a server-signed token or file and reports
 three separate values (base license, confirmation freshness, contract state) plus
-warnings through `onWarning`. Pass it to `FisicaClient` so warnings follow real use. It
+warnings through `onWarning`. Pass it to `FisicaClient` so warnings appear when features are used. It
 never blocks a feature. The signed token is stored under Application Support by default
 (`storage:`) for offline verification. With `endpoint:` it refreshes the information in
 the background (`sync()`, or `syncNow()` off the main thread); without an endpoint no

@@ -14,7 +14,8 @@ import java.util.UUID
  * Callbacks run on the main thread.
  */
 @Suppress("DEPRECATION", "MissingPermission")
-class BleTransport(private val context: Context, private val adapter: BluetoothAdapter?) : FisicaTransport, AutoCloseable {
+class BleTransport(private val context: Context, private val adapter: BluetoothAdapter?) : FisicaLinkTransport, AutoCloseable {
+    override val link: Int? get() = FisicaLink.BLE
     var onDevice: (ScanResult)->Unit = {}
     override var onReady: ()->Unit = {}
     override var onBytes: (ByteArray)->Unit = {}

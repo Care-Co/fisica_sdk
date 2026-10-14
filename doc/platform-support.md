@@ -12,7 +12,7 @@ Dart/Flutter core 0.5.0, Flutter transport 0.1.0, Swift/Kotlin/C# 각각 0.2.0. 
 | Windows x64 | Python wheel, DLL+C header, NuGet, Flutter DLL | Python, C#, Dart, C/C++ | Python/C#/Flutter BLE·USB, C/C++는 앱 Transport 구현 |
 | Windows ARM64 | 별도 ARM64 wheel/DLL, NuGet, Flutter DLL | Python, C#, Dart, C/C++ | 동일 계약, 실제 ARM64 드라이버/연결 검증 필요 |
 | macOS Intel·Apple Silicon | universal2 wheel/dylib, SwiftPM/XCFramework, NuGet, Flutter | Python, Swift, C#, Dart, C/C++ | 기존 Python BLE/USB, Swift CoreBluetooth 어댑터 |
-| Android API 23+ | arm64-v8a/armeabi-v7a/x86_64 AAR, Flutter .so | Kotlin/Java, Dart, C/C++ | Kotlin GATT 및 Flutter BLE 어댑터, 앱 권한/기기 선택 필요 |
+| Android API 23+ | arm64-v8a/armeabi-v7a/x86_64 AAR, Flutter .so (16KB 페이지 정렬) | Kotlin/Java, Dart, C/C++ | Kotlin GATT 및 Flutter BLE 어댑터, 앱 권한/기기 선택 필요 |
 | iOS 13+ | arm64 기기, arm64/x86_64 simulator XCFramework | Swift, Dart, C/C++ | Swift CoreBluetooth 및 Flutter BLE 어댑터, 앱 권한/기기 선택 필요 |
 
 .NET은 .NET 8 자체의 OS 지원 조건도 충족해야 한다. Python GUI extra의 PyQt5/
@@ -39,6 +39,11 @@ SDK wheel과 GUI extra의 설치 가능성을 같은 지원 수준으로 표시�
 - action/event/state/error와 확인 정보 코드는 공개 C 헤더에서 언어별로 생성한다
   (`tools/sync_binding_metadata.py`). 숫자 코드를 직접 쓰지 않아도 된다.
 - 프레임은 원본 645-byte 패킷, 29×22 raw grid, 29×29 display grid, 체중을 담는다.
+- 공통 세션 규칙: 측정 시작이 수락되면 이전 측정의 프레임을 비운다. 연결 유실 후 같은 클라이언트에서
+  다시 연결하면 코어가 측정을 이어가고 프레임을 유지한다(Dart는 transport 교체도 가능). 클라이언트는 최근
+  `maxFrames`개(최대 `FisicaLimit` 분석 상한 19,949)만 보관하고 넘친 수를 `droppedFrames`로 알린다.
+- 연결 종류는 헤더에서 생성한 `FisicaLink` 상수로 지정한다. SDK transport는 자기 연결 종류를 알려 주며
+  다른 값은 송신 전에 인자 오류로 거절한다. 규칙과 예시는 [타사 앱 적용 가이드](partner-quickstart.md).
 - 보고서 분석은 Python과 같이 29×29 display grid와 프레임별 체중을 쓴다. 29×22 raw grid는 분석에
   쓰지 않는다. 다른 언어는 수집한 패킷을 `analyze_packets`로 코어에 넘기며 결과가 Python 경로와 같음을
   테스트로 확인한다. Python `SessionReport`는 표시용으로 소수 2자리 반올림하고 다른 언어는 코어 값을 그대로 준다.
@@ -82,24 +87,25 @@ BLE 측정 경로: 프로토콜 문서는 연속 측정(0x51)이 USB 전용이�
 
 ## 검증과 한계
 
-2026-10-14 실행 결과:
+2026-10-14 실행 결과 (모바일 보강 후 다시 실행):
 
 | 항목 | 결과 | 종류 |
 |---|---|---|
-| Python 테스트 | 172 passed | 로컬 macOS, Mock. Windows CI에서도 실행 |
-| 네이티브 C ABI 계약 | UBSan, ASan+UBSan 통과. 토큰 1글자 변조 3144건·무작위 입력 2만 건 모두 거절 | 로컬 macOS, GitHub macOS CI(UBSan) |
-| Swift `swift test` | 8 passed (공통 벡터 2, 클라이언트·확인 정보 5, 온라인 갱신·저장 1) | 로컬 macOS XCTest, GitHub macOS CI |
-| Kotlin/JNI | 공통 벡터, 클라이언트·확인 정보·온라인 갱신·저장·MTU 분할 규칙 통과 | 로컬 JVM. `BleTransport`는 android-35로 컴파일만 |
-| C# | 공통 벡터, 클라이언트·Serial 오류 처리·확인 정보·온라인 갱신·저장 통과. Windows BLE는 컴파일 + 장치 없는 실패 경로 | 로컬 macOS .NET 8, GitHub Windows CI |
-| Dart | analyze 문제 없음, 16 tests passed (온라인 갱신·저장 포함) | 로컬 macOS Dart 3.11 |
-| 온라인 갱신 | 네 언어와 Python이 같은 Mock 서버에서 확인 정보를 갱신. 빈 갱신 요청 외에는 아무것도 보내지 않음을 서버 쪽에서 확인 | 로컬, CI(Swift·C#). 실제 서버 아님 |
+| Python 테스트 | 182 passed | 로컬 macOS, Mock. Windows CI에서도 실행 |
+| 네이티브 C ABI 계약 | UBSan 통과. 토큰 1글자 변조 3144건·무작위 입력 모두 거절 | 로컬 macOS, GitHub macOS CI(UBSan) |
+| Swift `swift test` | 10 passed (공통 벡터 2, 클라이언트·연결 종류·프레임 규칙·확인 정보 7, 온라인 갱신·저장 1) | 로컬 macOS XCTest, GitHub macOS CI |
+| Kotlin/JNI | 공통 벡터, 클라이언트·연결 종류 검증·프레임 규칙·확인 정보·온라인 갱신·저장·MTU 분할 규칙 통과 | 로컬 JVM. `BleTransport`는 android-35로 컴파일만. CI Android job 추가 |
+| Android 빌드 | 3개 ABI의 core/JNI `.so` 전부 LOAD 정렬 0x4000, RELRO 끝 16KB 경계, AAR 감사 통과. Java·Kotlin 샘플이 새 AAR로 컴파일 | 로컬 NDK r26. CI Android job. APK 빌드·zipalign·16KB 기기 실행은 안 함 |
+| C# | 공통 벡터, 클라이언트·연결 종류 검증·프레임 규칙·Serial 오류 처리·확인 정보·온라인 갱신·저장 통과. Windows BLE는 컴파일 + 장치 없는 실패 경로 | 로컬 macOS .NET 8, GitHub Windows CI |
+| Dart | analyze 문제 없음, 22 tests passed (재연결·transport 교체·유실 후 close·연결 종류·프레임 규칙·온라인 갱신 포함) | 로컬 macOS Dart 3.11. CI flutter job에 추가 |
+| Flutter 어댑터 | analyze 문제 없음, 15 tests passed (같은 어댑터 재연결, 연결 중 재연결, 실패 후 재시도, 실제 코어로 유실 후 측정 재개) | 로컬 Flutter 3.41, GitHub macOS CI |
+| 온라인 갱신 | 네 언어와 Python이 같은 Mock 서버에서 확인 정보를 갱신. 빈 갱신 요청 외에는 아무것도 보내지 않음을 서버 쪽에서 확인 | 로컬, CI. 실제 서버 아님 |
 | Windows x64 MSVC | 코어 빌드, 전체 테스트, 휠 감사, Python 3.9/3.11/3.13/3.14 설치 검증 | GitHub Actions `windows-2022` |
 | Windows ARM64 MSVC | 코어·휠 교차 빌드와 감사 | GitHub Actions. ARM64 실행은 안 함 |
 | Apple | 코어 빌드, 테스트, XCFramework, universal2 | GitHub Actions `macos-15` |
 
-재현: `python tools/verify_bindings.py swift kotlin dotnet dart`.
-
-2026-10-14에 사용 기록 코드를 제거한 뒤 위 항목을 다시 실행한 결과다.
+재현: `python tools/verify_bindings.py native swift kotlin dotnet dart`,
+`python tools/build_platforms.py --validation --target android`.
 
 검증하지 않은 것:
 
@@ -125,6 +131,18 @@ python tools/build_platforms.py --validation --target macosx_11_0_universal2
 FISICA_BUILD_PLATFORM=win_arm64 CXX=/trusted/arm64-compiler python tools/build_release.py --validation
 python tools/package_platforms.py --validation
 ```
+
+Android 라이브러리는 `-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384`로 링크한다(NDK r27 이하에
+필요, r28+는 기본값). 공식 기준 두 가지를 빌드와 `tools/audit_artifacts.py`가 AAR·Flutter ZIP 안의 모든
+`.so`에 대해 검사하고 하나라도 어긋나면 실패한다.
+
+- 모든 LOAD 세그먼트 정렬이 16KB(0x4000) 이상.
+- GNU_RELRO 세그먼트가 있으면 `(VirtAddr + MemSiz) % 0x4000 == 0`. 로더는 RELRO가 걸친 페이지 전체를
+  읽기 전용으로 만들기 때문에, 끝이 16KB 경계가 아니면 16KB 페이지 기기에서 뒤따르는 쓰기 영역이 막혀
+  segmentation fault가 난다. LOAD 정렬만 맞고 이것이 어긋날 수 있다(`max-page-size`만 준 경우).
+
+APK/AAB의 zip 정렬(`zipalign -c -P 16 -v 4`)은 앱 빌드 단계라 SDK가 대신 확인하지 못한다.
+Android NDK 경로는 `--ndk` 또는 FISICA_ANDROID_NDK로 준다.
 
 Apple SDK 경로는 FISICA_XCODE_DEVELOPER, Android SDK는 ANDROID_SDK_ROOT,
 Kotlin compiler runtime은 FISICA_GRADLE_LIB로 설정한다. 소비 앱은 private 코어를

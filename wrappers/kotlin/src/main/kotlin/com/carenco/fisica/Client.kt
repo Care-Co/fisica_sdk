@@ -21,10 +21,21 @@ interface FisicaTransport {
 }
 
 /**
+ * A transport that knows which Scale link it carries ([FisicaLink.BLE] or [FisicaLink.USB],
+ * null when it can carry either). [FisicaClient.connect] uses it as the default link and
+ * rejects a different one before anything is sent.
+ */
+interface FisicaLinkTransport : FisicaTransport {
+    val link: Int?
+}
+
+/**
  * Scripted link for development and tests without hardware: request bytes -> response chunks.
  * It contains no device behavior; unknown requests are recorded and get no reply.
  */
-class MockTransport(val exchanges: MutableMap<String, List<ByteArray>> = mutableMapOf()) : FisicaTransport {
+class MockTransport(val exchanges: MutableMap<String, List<ByteArray>> = mutableMapOf()) : FisicaLinkTransport {
+    /** Set to model a transport that carries only one link kind. */
+    @Volatile override var link: Int? = null
     override var onReady: () -> Unit = {}
     override var onBytes: (ByteArray) -> Unit = {}
     override var onLost: () -> Unit = {}
@@ -61,9 +72,6 @@ class SessionReport(val weight: Double, val leftWidth: Double, val leftLength: D
     val batteryValid get() = false
 }
 
-/** Link kind passed to the core; it selects the Scale's measurement mode command. */
-object FisicaLink { const val BLE = 1L; const val USB = 2L }
-
 /**
  * Connect, measure, stop and report over any transport. Command order, ACK waits, timeouts
  * and recovery decisions live in the shared core; this class only runs the clock, moves
@@ -90,7 +98,9 @@ class FisicaClient(
     private val session = FisicaSession(core)
     private val started = System.nanoTime()
     private val waiters = HashMap<Int, (SessionEvent?, Throwable?) -> Unit>()
-    private val collected = ArrayList<Measurement>()
+    private val collected = ArrayDeque<Measurement>()
+    private var dropped = 0
+    private var limit = FisicaLimit.ANALYSIS_FRAMES
     private var ticker: ScheduledFuture<*>? = null
     private var readyDeadline: ScheduledFuture<*>? = null
     private var linkReady = false
@@ -106,21 +116,42 @@ class FisicaClient(
         post { waiter(event, error) }
     }
 
-    /** Frames collected since the last [clearFrames]. */
+    /** Frames of the current measurement. [start] clears them; a reconnect keeps them. Only the latest [maxFrames] are kept. */
     val frames: List<Measurement> get() = synchronized(collected) { ArrayList(collected) }
-    fun clearFrames() = synchronized(collected) { collected.clear() }
+    /** Oldest frames dropped beyond [maxFrames] since the last [start] or [clearFrames]. */
+    val droppedFrames: Int get() = synchronized(collected) { dropped }
+    /** How many recent frames to keep, 1..[FisicaLimit.ANALYSIS_FRAMES] (the most one analysis accepts). Also bounds memory. */
+    var maxFrames: Int
+        get() = synchronized(collected) { limit }
+        set(value) {
+            require(value in 1..FisicaLimit.ANALYSIS_FRAMES) { "maxFrames must be 1..${FisicaLimit.ANALYSIS_FRAMES}" }
+            synchronized(collected) { limit = value; trim() }
+        }
+    fun clearFrames() = synchronized(collected) { collected.clear(); dropped = 0 }
+    private fun trim() { while (collected.size > limit) { collected.removeFirst(); dropped++ } }
 
     /**
      * Open the transport and probe firmware. Completes with the probe result; an unanswered
      * probe is reported in its status and does not prevent use.
+     *
+     * [link] defaults to the transport's own link ([FisicaLinkTransport]), otherwise BLE.
+     * A link other than the transport's fails before anything is sent.
      */
     @JvmOverloads
-    fun connect(link: Long = FisicaLink.BLE, timeoutMs: Long = 15000, completion: (SessionEvent?, Throwable?) -> Unit) = serial {
+    fun connect(link: Int? = null, timeoutMs: Long = 15000, completion: (SessionEvent?, Throwable?) -> Unit) = serial {
         if (closed || linkReady || waiters.containsKey(FisicaSessionOperation.PROBE)) {
             post { completion(null, FisicaException(FisicaStatus.BUSY, "Already connected or connecting")) }; return@serial
         }
+        val carried = (transport as? FisicaLinkTransport)?.link
+        val selected = link ?: carried ?: FisicaLink.BLE
+        val problem = when {
+            selected != FisicaLink.BLE && selected != FisicaLink.USB -> "Use FisicaLink.BLE or FisicaLink.USB"
+            carried != null && carried != selected -> "This transport carries ${name(carried)}, not ${name(selected)}"
+            else -> null
+        }
+        if (problem != null) { post { completion(null, FisicaException(FisicaStatus.INVALID_ARGUMENT, problem)) }; return@serial }
         waiters[FisicaSessionOperation.PROBE] = completion
-        transport.onReady = { serial { ready(link) } }
+        transport.onReady = { serial { ready(selected) } }
         transport.onBytes = { bytes -> serial { received(bytes) } }
         transport.onLost = { serial { lost(false) } }
         transport.onSendFailure = { error -> serial { post { onError(error) }; lost(true) } }
@@ -135,17 +166,18 @@ class FisicaClient(
         transport.open()
     }
 
-    private fun ready(link: Long) {
+    private fun name(link: Int) = if (link == FisicaLink.USB) "USB" else "BLE"
+
+    private fun ready(link: Int) {
         if (closed || linkReady) return
         linkReady = true; readyDeadline?.cancel(false)
         if (ticker == null) ticker = worker.scheduleWithFixedDelay({ step { session.tick(now) } }, 20, 20, TimeUnit.MILLISECONDS)
-        step { session.action(FisicaSessionAction.CONNECTED, link, now) }
+        step { session.action(FisicaSessionAction.CONNECTED, link.toLong(), now) }
     }
     private fun received(bytes: ByteArray) {
         if (!linkReady) return
-        // The core accepts at most 65536 bytes per call.
         var offset = 0
-        while (offset < bytes.size) { val end = minOf(offset + 65536, bytes.size); val part = bytes.copyOfRange(offset, end); step { session.feed(part, now) }; offset = end }
+        while (offset < bytes.size) { val end = minOf(offset + FisicaLimit.FEED_BYTES, bytes.size); val part = bytes.copyOfRange(offset, end); step { session.feed(part, now) }; offset = end }
     }
     private fun lost(sendFailure: Boolean) {
         if (closed) return
@@ -169,7 +201,7 @@ class FisicaClient(
             FisicaSessionEvent.TRANSMIT -> transport.send(event.payload)
             FisicaSessionEvent.MEASUREMENT -> {
                 val frame = core.decode(event.payload)
-                synchronized(collected) { collected.add(frame) }
+                synchronized(collected) { collected.addLast(frame); trim() }
                 post { onFrame(frame) }
             }
             FisicaSessionEvent.RESULT -> {
@@ -186,21 +218,24 @@ class FisicaClient(
         post { onEvent(event) }
     }
 
-    private fun request(action: Int, value: Long, waitFor: Int, completion: (SessionEvent?, Throwable?) -> Unit) = serial {
+    private fun request(action: Int, value: Long, waitFor: Int, accepted: () -> Unit = {}, completion: (SessionEvent?, Throwable?) -> Unit) = serial {
         if (closed || waiters.containsKey(waitFor)) {
             post { completion(null, FisicaException(FisicaStatus.BUSY, "Another operation is pending")) }; return@serial
         }
         waiters[waitFor] = completion
-        try { session.action(action, value, now); session.drain().forEach(::deliver) }
+        try { session.action(action, value, now); accepted(); session.drain().forEach(::deliver) }
         catch (error: Throwable) { finish(waitFor, null, error) }
     }
-    /** Start measuring; null [durationMs] measures until [stop]. Completes when the Scale confirmed the start. */
+    /**
+     * Start measuring; null [durationMs] measures until [stop]. Completes when the Scale confirmed the start.
+     * Frames of the previous measurement are cleared once the core accepts the start.
+     */
     @JvmOverloads
     fun start(durationMs: Long? = null, completion: (SessionEvent?, Throwable?) -> Unit) {
         entitlement?.checkStatus()
-        request(FisicaSessionAction.START, durationMs ?: -1, FisicaSessionOperation.BEGIN, completion)
+        request(FisicaSessionAction.START, durationMs ?: -1, FisicaSessionOperation.BEGIN, ::clearFrames, completion)
     }
-    fun stop(completion: (SessionEvent?, Throwable?) -> Unit) = request(FisicaSessionAction.STOP, 0, FisicaSessionOperation.END, completion)
+    fun stop(completion: (SessionEvent?, Throwable?) -> Unit) = request(FisicaSessionAction.STOP, 0, FisicaSessionOperation.END, completion = completion)
 
     /**
      * Stop if needed, release the Scale's measurement mode, then close the transport.

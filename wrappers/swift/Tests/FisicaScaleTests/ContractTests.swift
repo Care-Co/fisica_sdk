@@ -100,6 +100,32 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(client.state, .idle)
         waitFor("close") { done in client.close { _ in done() } }
     }
+    func testLinkMustMatchTheTransport() throws {
+        let core = try FisicaCore(), transport = try scale(core)
+        transport.link = .usb
+        let client = try FisicaClient(core: core, transport: transport)
+        waitFor("mismatch") { done in client.connect(.ble) { result in
+            XCTAssertEqual((self.failure(result) as? FisicaError)?.code, Int32(FisicaStatus.invalidArgument.rawValue)); done() } }
+        XCTAssertFalse(transport.isOpen); XCTAssertTrue(transport.sent.isEmpty)
+        waitFor("connect") { done in client.connect(.usb) { result in self.ok(result); done() } }
+        waitFor("close") { done in client.close { _ in done() } }
+    }
+    func testStartClearsThePreviousMeasurementAndFramesStayBounded() throws {
+        let core = try FisicaCore(), transport = try scale(core, frames: 8)
+        let client = try FisicaClient(core: core, transport: transport)
+        client.maxFrames = Int(FisicaLimit.analysisFrames.rawValue) + 1
+        XCTAssertEqual(client.maxFrames, Int(FisicaLimit.analysisFrames.rawValue))
+        client.maxFrames = 5
+        waitFor("connect") { done in client.connect(.usb) { _ in done() } }
+        waitFor("start") { done in client.start { result in self.ok(result); done() } }
+        waitFor("stop") { done in client.stop { _ in done() } }
+        XCTAssertEqual(client.frames.count, 5); XCTAssertEqual(client.droppedFrames, 3)
+        XCTAssertEqual(try client.report()?.weight, 70.5)
+        transport.exchanges[try core.command("START_CONTINUOUS_MEASUREMENT")]![0].removeLast(8 * 645)
+        waitFor("restart") { done in client.start { result in self.ok(result); done() } }
+        XCTAssertTrue(client.frames.isEmpty); XCTAssertEqual(client.droppedFrames, 0)
+        waitFor("close") { done in client.close { _ in done() } }
+    }
     func testEntitlementIsStatusOnlyAndNeverBlocksMeasurement() throws {
         let core = try FisicaCore()
         let tokens = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: ProcessInfo.processInfo.environment["FISICA_FIXTURES"]! + "/entitlement.json"))) as! [String: Any]

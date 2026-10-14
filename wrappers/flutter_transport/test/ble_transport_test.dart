@@ -193,6 +193,46 @@ void main() {
     await subscription.cancel();
     await transport.close();
   });
+  test('the same transport links again after a loss', () async {
+    final transport = FisicaBleTransport('scale');
+    expect(transport.link, FisicaLink.ble);
+    var losses = 0;
+    final subscription = transport.disconnected.listen((_) => losses++);
+    await transport.connect();
+    backend.updateConnection('scale', false);
+    await Future<void>.delayed(Duration.zero);
+    expect(losses, 1);
+    await transport.connect();
+    await transport.send(Uint8List(8));
+    expect(backend.writes, hasLength(1));
+    backend.updateConnection('scale', false);
+    await Future<void>.delayed(Duration.zero);
+    expect(losses, 2);
+    await subscription.cancel();
+    await transport.close();
+    await expectLater(transport.connect(), throwsStateError);
+  });
+  test('connect while linked drops the old link first', () async {
+    final transport = FisicaBleTransport('scale');
+    var losses = 0;
+    final subscription = transport.disconnected.listen((_) => losses++);
+    await transport.connect();
+    await transport.connect();
+    expect(backend.disconnects, 1);
+    expect(losses, 0);
+    await transport.send(Uint8List(8));
+    await subscription.cancel();
+    await transport.close();
+  });
+  test('a failed connect can be retried on the same transport', () async {
+    backend.missingUuid = true;
+    final transport = FisicaBleTransport('scale');
+    await expectLater(transport.connect(), throwsStateError);
+    backend.missingUuid = false;
+    await transport.connect();
+    await transport.send(Uint8List(8));
+    await transport.close();
+  });
   test('write errors reach the caller; close is idempotent', () async {
     final transport = FisicaBleTransport('scale');
     await transport.connect();
@@ -237,5 +277,37 @@ void main() {
       await client.close();
     }
     expect(backend.disconnects, 1);
+  });
+  test('client resumes through the BLE adapter after a link loss', () async {
+    final client = FisicaClient(
+      FisicaCore.open(Platform.environment['FISICA_CORE_TEST_LIBRARY']!),
+      FisicaBleTransport('scale'),
+    );
+    final reconnects = <FisicaSessionEvent>[];
+    client.events.listen((e) {
+      if (e.kind == FisicaSessionEventKind.reconnect) reconnects.add(e);
+    }, onError: (Object _) {});
+    try {
+      await client.connect();
+      await expectLater(
+        client.connect(link: FisicaLink.usb),
+        throwsStateError,
+      );
+      await client.start(duration: const Duration(seconds: 30));
+      backend.updateConnection('scale', false);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(reconnects, hasLength(1));
+      expect(client.session.state, FisicaSessionState.recovering);
+      await expectLater(
+        client.connect(link: FisicaLink.usb),
+        throwsA(isA<FisicaArgumentError>()),
+      );
+      expect((await client.connect()).status, FisicaStatus.ok);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(client.session.state, FisicaSessionState.measuring);
+      expect((await client.stop()).state, FisicaSessionState.idle);
+    } finally {
+      await client.close();
+    }
   });
 }

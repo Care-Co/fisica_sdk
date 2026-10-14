@@ -5,6 +5,10 @@ Use the supplied AAR, not a customer build of private SDK sources.
 
 AAR with public Kotlin classes and compiled `libfisica_core.so` + `libfisica_jni.so`.
 Android API 23+, arm64-v8a/armeabi-v7a/x86_64. Add Kotlin stdlib (2.0.21-compatible).
+Every library is 16 KB page compatible (Android 15+, required by Google Play): all LOAD
+segments are 16 KB aligned and the RELRO segment ends on a 16 KB boundary. Build the app
+with AGP 8.5.1+ so the uncompressed libraries are also 16 KB zip-aligned in the APK/AAB,
+and check the APK with `zipalign -c -P 16 -v 4`.
 Runtime uses `System.loadLibrary`, with no source compilation or download. The JNI
 marshaler source is public; private algorithm and state sources are absent.
 
@@ -36,6 +40,13 @@ ble.scan()
 - `close` releases resources even when the Scale does not confirm. On `onLinkLost`,
   reopen the same Scale with `connect`.
 - `report()` analyzes the collected packets in the core and returns unrounded values.
+- `start` clears the frames of the previous measurement once the core accepts it, so
+  measuring several people in a row needs no `clearFrames()`. A reconnect keeps them.
+  Only the latest `maxFrames` (at most `FisicaLimit.ANALYSIS_FRAMES`, the most one
+  analysis accepts) are kept; `droppedFrames` counts the older ones dropped.
+- `connect(link)` takes `FisicaLink.BLE` or `FisicaLink.USB`. Without it the transport's
+  own link is used (`FisicaLinkTransport`; `BleTransport` is BLE), otherwise BLE. A link
+  other than the transport's fails with `INVALID_ARGUMENT` before anything is sent.
 - Codes are generated constants: `FisicaStatus`, `FisicaSessionState`, `FisicaSessionEvent`, ...
 
 Transports: `BleTransport` (Android GATT), `MockTransport` (scripted, no hardware; runs
@@ -50,7 +61,7 @@ INTERNET permission in the app; the AAR does not declare it.
 
 Entitlement: `FisicaEntitlement` imports a server-signed token or file and reports
 three separate values (base license, confirmation freshness, contract state) plus
-warning bits through `onWarning`. Pass it to `FisicaClient` so warnings follow real use.
+warning bits through `onWarning`. Pass it to `FisicaClient` so warnings appear when features are used.
 It never blocks a feature. Pass `storage` (for example `context.filesDir`) to keep the
 signed token across launches for offline verification. With `endpoint` it refreshes the
 information in the background (`sync()`, or `syncNow()` on a worker thread); without an

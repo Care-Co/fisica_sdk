@@ -160,3 +160,29 @@ def test_packet_analysis_matches_frame_analysis():
     assert core.analyze_packets([synthetic] * 12)[0] == 70.5
     with pytest.raises(FisicaError):
         core.analyze_packets([synthetic[:-1]])
+
+
+def test_analysis_frame_limit_matches_the_public_header(core):
+    from fisica_sdk.codes import FisicaLimit
+    from fisica_sdk.errors import FisicaArgumentError
+    packet = make_packet()
+    assert core.analyze_packets([packet] * FisicaLimit.ANALYSIS_FRAMES) is not None
+    with pytest.raises(FisicaArgumentError):
+        core.analyze_packets([packet] * (FisicaLimit.ANALYSIS_FRAMES + 1))
+
+
+def test_long_session_is_analyzed_over_its_latest_frames(monkeypatch):
+    import warnings
+    from types import SimpleNamespace
+    import fisica_sdk.fisica_sdk as module
+    seen = []
+    monkeypatch.setattr(module, '_ANALYSIS_FRAMES', 3)
+    monkeypatch.setattr(module, 'global_analyzer', lambda frames: seen.append([f.index for f in frames]) or (70.5, 1, 2, 3, 4))
+    sdk = module.FisicaSDK()
+    sdk._set_metadata()
+    sdk._session.frames = [SimpleNamespace(index=i, battery=99, battery_valid=False) for i in range(5)]
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        report = sdk.analyze()
+    assert seen == [[2, 3, 4]]
+    assert report.weight == 70.5 and report.frame_count == 5

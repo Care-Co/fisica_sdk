@@ -6,14 +6,17 @@ import 'package:flutter_libserialport/flutter_libserialport.dart';
 
 /// USB virtual serial port on Windows/macOS, matching Python's 9600 8N1.
 /// Mobile USB is deliberately unsupported.
-class FisicaUsbTransport implements FisicaTransport {
+///
+/// After a link loss or a failed connect, [connect] opens the port again;
+/// called while open it closes the port first. [close] is final.
+class FisicaUsbTransport implements FisicaLinkTransport {
   final String portName;
   final _received = StreamController<Uint8List>.broadcast();
   final _disconnected = StreamController<void>.broadcast();
   SerialPort? _port;
   SerialPortReader? _reader;
   StreamSubscription<Uint8List>? _input;
-  bool _closed = false, _lostSent = false;
+  bool _closed = false, _lostSent = false, _connecting = false;
   FisicaUsbTransport(this.portName);
 
   static void _requireDesktop() {
@@ -30,6 +33,8 @@ class FisicaUsbTransport implements FisicaTransport {
   }
 
   @override
+  int get link => FisicaLink.usb;
+  @override
   Stream<Uint8List> get received => _received.stream;
   @override
   Stream<void> get disconnected => _disconnected.stream;
@@ -41,10 +46,37 @@ class FisicaUsbTransport implements FisicaTransport {
     _disconnected.add(null);
   }
 
+  /// Close the port of the previous link, if any.
+  Future<void> _release() async {
+    final input = _input, reader = _reader, port = _port;
+    _input = null;
+    _reader = null;
+    _port = null;
+    await input?.cancel();
+    reader?.close();
+    try {
+      if (port?.isOpen == true) port!.close();
+    } finally {
+      port?.dispose();
+    }
+  }
+
   @override
   Future<void> connect() async {
     _requireDesktop();
-    if (_closed || _port != null) throw StateError('Transport already used');
+    if (_closed) throw StateError('Transport is closed');
+    if (_connecting) throw StateError('Transport is already connecting');
+    _connecting = true;
+    try {
+      await _release();
+      _lostSent = false;
+      await _open();
+    } finally {
+      _connecting = false;
+    }
+  }
+
+  Future<void> _open() async {
     try {
       final port = _port = SerialPort(portName);
       if (!port.openReadWrite())
@@ -69,7 +101,7 @@ class FisicaUsbTransport implements FisicaTransport {
         },
       );
     } catch (_) {
-      await close();
+      await _release();
       rethrow;
     }
   }
@@ -99,14 +131,9 @@ class FisicaUsbTransport implements FisicaTransport {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
-    await _input?.cancel();
-    _reader?.close();
-    final port = _port;
-    _port = null;
     try {
-      if (port?.isOpen == true) port!.close();
+      await _release();
     } finally {
-      port?.dispose();
       await _received.close();
       await _disconnected.close();
     }

@@ -19,6 +19,11 @@ public enum FisicaPacketKind: UInt32, CaseIterable {
     case measurement = 1
     case response = 2
 }
+public enum FisicaLimit: UInt32, CaseIterable {
+    case analysisFrames = 19949
+    case feedBytes = 65536
+    case tokenBytes = 4096
+}
 public enum FisicaSessionState: UInt32, CaseIterable {
     case disconnected = 0
     case idle = 1
@@ -50,6 +55,10 @@ public enum FisicaSessionOperation: UInt32, CaseIterable {
     case end = 3
     case close = 4
     case request = 5
+}
+public enum FisicaLink: UInt32, CaseIterable {
+    case ble = 1
+    case usb = 2
 }
 public enum FisicaEntitlementOutcome: UInt32, CaseIterable {
     case none = 0

@@ -24,6 +24,12 @@ class FisicaPacketKind(IntEnum):
     RESPONSE = 2
 
 
+class FisicaLimit(IntEnum):
+    ANALYSIS_FRAMES = 19949
+    FEED_BYTES = 65536
+    TOKEN_BYTES = 4096
+
+
 class FisicaSessionState(IntEnum):
     DISCONNECTED = 0
     IDLE = 1
@@ -58,6 +64,11 @@ class FisicaSessionOperation(IntEnum):
     END = 3
     CLOSE = 4
     REQUEST = 5
+
+
+class FisicaLink(IntEnum):
+    BLE = 1
+    USB = 2
 
 
 class FisicaEntitlementOutcome(IntEnum):

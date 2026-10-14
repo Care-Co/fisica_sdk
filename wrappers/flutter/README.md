@@ -11,7 +11,7 @@ import 'package:fisica_core/fisica_core.dart';
 
 final core = FisicaCore.platform();
 final client = FisicaClient(core, selectedTransport);
-await client.connect(profile: 2); // BLE=1, USB=2
+await client.connect(link: FisicaLink.usb); // or FisicaLink.ble
 await client.start();
 // Collect frames, then await client.stop(); client.report();
 // Always await client.close(), including on errors.
@@ -50,8 +50,22 @@ Desktop Windows uses CMake to copy the matching architecture's DLL.
 `FisicaClient` adapts core operations to Futures and native events to Streams.
 Use the sibling `fisica_flutter` package's `FisicaBleTransport` or desktop
 `FisicaUsbTransport`, or implement `FisicaTransport` using the app's own provider.
-Connect must complete only after reads/notifications and writes are ready. Use profile 1 for BLE, 2 for USB.
+Connect must complete only after reads/notifications and writes are ready.
 Core owns all command ordering, ACK deadlines, duration and recovery decisions.
+
+- `connect(link: ...)` takes `FisicaLink.ble` or `FisicaLink.usb`. Without it the
+  transport's own link is used (`FisicaLinkTransport`; the BLE adapter is BLE, the USB
+  adapter USB), otherwise BLE. A different link fails with `FisicaArgumentError` before
+  anything is sent. `profile:` is the deprecated name of the same value.
+- After a link loss the stream emits an error and a `reconnect` event and the session
+  is RECOVERING. Call `connect()` again on the same client (optionally with
+  `transport:` to replace the transport; the old one is closed): the core resumes a
+  measurement it still wants, with its original deadline, and the frames are kept.
+  `close()` after a loss frees resources without an error.
+- `start()` clears the frames of the previous measurement once the core accepts it, so
+  measuring several people in a row needs no `clearFrames()`. Only the latest
+  `maxFrames` (at most `FisicaLimit.analysisFrames`, the most one analysis accepts) are
+  kept; `droppedFrames` counts the older ones dropped. This also bounds memory.
 The core package stays usable from pure Dart. The optional Flutter transport package
 adds OS plugins without adding Bluetooth dependencies to the pure Dart binding.
 Applications handle platform permissions, identity selection, firmware warnings and
@@ -69,7 +83,7 @@ confirmed on production firmware) for the BLE plugin your app uses.
 
 `FisicaEntitlement` imports a server-signed token or file and reports three separate
 values (base license, confirmation freshness, contract state) plus warning bits. Pass
-it as `FisicaClient(core, transport, entitlement: ...)` so warnings follow real use. It
+it as `FisicaClient(core, transport, entitlement: ...)` so warnings appear when features are used. It
 never blocks a feature. Pass `storageDirectory` (for example the app support directory)
 to keep the signed token across launches for offline verification. With `endpoint` it
 refreshes the information in the background (`await sync()` to run it now); without an

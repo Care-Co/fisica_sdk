@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import zipfile
 from native_build import ROOT,build_native,prepare_release,release_metadata,require_release_keys
-from audit_artifacts import audit_archive
+from audit_artifacts import audit_archive,validate_android_library
 
 def run(args): subprocess.run([str(a) for a in args],check=True)
 def archive(output,files):
@@ -59,9 +59,14 @@ def android(output,ndk):
     libs=output/'jni';sources=sorted((ROOT/'native/src').glob('*.cpp'))
     for abi,target in abis.items():
         directory=libs/abi;directory.mkdir(parents=True,exist_ok=True)
-        common=[compiler/(target+'-clang++'),'-std=c++17','-O2','-shared','-fPIC','-fvisibility=hidden','-ffp-contract=off','-static-libstdc++','-Wl,--exclude-libs,ALL','-I'+str(ROOT/'native/include')]
+        # 16 KB page support (Google Play, Android 15+), also fine on 4 KB devices: LOAD segments
+        # aligned to 16 KB and the RELRO segment ending on a 16 KB boundary. NDK r27 and older need
+        # both flags; r28+ defaults to them.
+        common=[compiler/(target+'-clang++'),'-std=c++17','-O2','-shared','-fPIC','-fvisibility=hidden','-ffp-contract=off','-static-libstdc++','-Wl,--exclude-libs,ALL',
+                '-Wl,-z,max-page-size=16384','-Wl,-z,common-page-size=16384','-I'+str(ROOT/'native/include')]
         run([*common,'-DFISICA_CORE_BUILD','-I'+str(generated),*sources,'-Wl,-soname,libfisica_core.so','-o',directory/'libfisica_core.so'])
         run([*common,ROOT/'wrappers/kotlin/bridge/fisica_jni.cpp','-L'+str(directory),'-lfisica_core','-Wl,-soname,libfisica_jni.so','-o',directory/'libfisica_jni.so'])
+        for library in ('libfisica_core.so','libfisica_jni.so'): validate_android_library((directory/library).read_bytes(),abi)
     # Compile public Kotlin to a classes.jar without shipping a build toolchain.
     gradle=Path(os.environ.get('FISICA_GRADLE_LIB','/opt/homebrew/opt/gradle/libexec/lib'))
     stdlib=next(gradle.glob('kotlin-stdlib-*.jar'))
@@ -100,7 +105,7 @@ def main():
     targets=['apple','android','macosx_11_0_universal2','win_arm64','win_amd64']
     p=argparse.ArgumentParser();group=p.add_mutually_exclusive_group(required=True)
     group.add_argument('--target',choices=targets);group.add_argument('--print-artifacts',nargs='+',choices=targets,metavar='TARGET')
-    p.add_argument('--output',type=Path,default=ROOT/'.build/platforms');p.add_argument('--ndk',type=Path,default=Path.home()/'Library/Android/sdk/ndk/26.3.11579264')
+    p.add_argument('--output',type=Path,default=ROOT/'.build/platforms');p.add_argument('--ndk',type=Path,default=Path(os.environ.get('FISICA_ANDROID_NDK',Path.home()/'Library/Android/sdk/ndk/26.3.11579264')))
     p.add_argument('--validation',action='store_true',help='QA-only build that may trust test entitlement keys');args=p.parse_args()
     if args.print_artifacts:
         print(' '.join(path.relative_to(Path.cwd()).as_posix() if path.is_relative_to(Path.cwd()) else str(path) for path in artifact_paths(args.output,args.print_artifacts)));return

@@ -88,6 +88,31 @@ async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.
     await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
 }
 {
+    // The link comes from the transport; a different one fails before anything is sent.
+    var transport=Scale(); transport.Link=FisicaLink.Ble; var client=new FisicaClient(core,transport);
+    var error=await Failure(client.ConnectAsync(FisicaLink.Usb));
+    Require(error is FisicaException { Code: (int)FisicaStatus.InvalidArgument } && !transport.IsOpen && transport.Sent.Count==0,"link mismatch");
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(transport.Sent.Any(s => s.SequenceEqual(core.Command("SET_DEVICE_BLE"))),"transport link is the default");
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(new SerialTransport("COM9").Link==FisicaLink.Usb && ((IFisicaTransport)new MockTransport()).Link==null,"transport links");
+}
+{
+    // Start clears the previous measurement; frames stay bounded.
+    var transport=Scale(8); var client=new FisicaClient(core,transport);
+    Require(await Failure(Task.Run(() => client.MaxFrames=(int)FisicaLimit.AnalysisFrames+1)) is ArgumentOutOfRangeException,"frame limit");
+    client.MaxFrames=5;
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(client.Frames.Count==5 && client.DroppedFrames==3 && client.Report()!.Weight==70.5,"bounded frames");
+    var start=core.Command("START_CONTINUOUS_MEASUREMENT"); transport.Reply(start,new byte[]{0x24,start[1],start[2],1,0,0,0xff,0xf0});
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(client.Frames.Count==0 && client.DroppedFrames==0,"start clears frames");
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+}
+{
     ulong now=ulong.Parse(values["now"]),clock=now; FisicaEntitlementWarning seen=0;
     using var entitlement=new FisicaEntitlement(core,() => clock,storage: null); entitlement.Warning+=(fresh,_) => seen|=fresh;
     Require(entitlement.Status().Contract==FisicaContract.Unverified,"unverified");

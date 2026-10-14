@@ -74,6 +74,31 @@ fun main(args: Array<String>) {
         check(client.state == FisicaSessionState.IDLE)
         await<SessionEvent>("close") { client.close(it) }
     }
+    // The link comes from the transport; a different one fails before anything is sent.
+    run {
+        val transport = scale(core, packet).apply { link = FisicaLink.USB }; val client = FisicaClient(core, transport)
+        val error = await<SessionEvent>("mismatch") { client.connect(FisicaLink.BLE, completion = it) }.second
+        check((error as FisicaException).code == FisicaStatus.INVALID_ARGUMENT && !transport.isOpen && transport.sent.isEmpty())
+        check(await<SessionEvent>("connect") { client.connect(completion = it) }.second == null)
+        check(await<SessionEvent>("start") { client.start(completion = it) }.second == null)
+        check(transport.sent.any { it.contentEquals(core.command("SET_DEVICE_USB")) })
+        await<SessionEvent>("close") { client.close(it) }
+    }
+    // Start clears the previous measurement; frames stay bounded.
+    run {
+        val transport = scale(core, packet, frames = 8); val client = FisicaClient(core, transport)
+        check(runCatching { client.maxFrames = FisicaLimit.ANALYSIS_FRAMES + 1 }.isFailure)
+        client.maxFrames = 5
+        await<SessionEvent>("connect") { client.connect(FisicaLink.USB, completion = it) }
+        check(await<SessionEvent>("start") { client.start(completion = it) }.second == null)
+        await<SessionEvent>("stop") { client.stop(it) }
+        check(client.frames.size == 5 && client.droppedFrames == 3 && client.report()!!.weight == 70.5)
+        val start = core.command("START_CONTINUOUS_MEASUREMENT")
+        transport.reply(start, byteArrayOf(0x24, start[1], start[2], 1, 0, 0, 0xff.toByte(), 0xf0.toByte()))
+        check(await<SessionEvent>("restart") { client.start(completion = it) }.second == null)
+        check(client.frames.isEmpty() && client.droppedFrames == 0)
+        await<SessionEvent>("close") { client.close(it) }
+    }
     // Entitlement is status only and never blocks measurement.
     run {
         var clock = values.getProperty("now").toLong(); val now = clock

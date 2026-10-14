@@ -39,6 +39,12 @@ enum FisicaStatus {
     FISICA_INCOMPATIBLE_VERSION = 12
 };
 enum FisicaPacketKind { FISICA_PACKET_NONE = 0, FISICA_PACKET_MEASUREMENT = 1, FISICA_PACKET_RESPONSE = 2 };
+/* Input limits enforced by the calls below. ANALYSIS_FRAMES: most packets/matrices one
+ * analysis accepts. FEED_BYTES: most bytes per session_feed call. TOKEN_BYTES: longest
+ * entitlement token. Hosts that collect frames keep at most ANALYSIS_FRAMES of them. */
+enum FisicaLimit {
+    FISICA_LIMIT_ANALYSIS_FRAMES = 19949, FISICA_LIMIT_FEED_BYTES = 65536, FISICA_LIMIT_TOKEN_BYTES = 4096
+};
 
 FISICA_API const char *fisica_core_version(void);
 FISICA_API uint32_t fisica_core_abi_version(void); /* major << 16 | minor */
@@ -131,9 +137,11 @@ enum FisicaSessionOperation {
     FISICA_PROBE = 1, FISICA_BEGIN = 2, FISICA_END = 3,
     FISICA_CLOSE = 4, FISICA_REQUEST = 5
 };
+/* CONNECTED value: the Scale connection setting to use for this link. */
+enum FisicaLink { FISICA_LINK_BLE = 1, FISICA_LINK_USB = 2 };
 FISICA_API int32_t fisica_core_session_create(FisicaSession **session);
 FISICA_API void fisica_core_session_destroy(FisicaSession *session);
-/* CONNECTED value: 1 BLE, 2 USB; START value: duration ms, -1 unlimited.
+/* CONNECTED value: FisicaLink (1 BLE, 2 USB); START value: duration ms, -1 unlimited.
  * LOST value: nonzero send failure (FAULT), zero read/link loss (RECOVERING).
  * On link recovery CONNECTED probes firmware then resumes only if core still
  * wants measurement; original duration deadline is preserved across recovery. */

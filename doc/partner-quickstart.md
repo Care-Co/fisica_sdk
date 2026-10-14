@@ -99,6 +99,11 @@ dotnet run --project dotnet/Quickstart.csproj -f net8.0-windows10.0.19041.0 -- b
 3. `app-kotlin` 또는 `app-java` 실행 구성을 선택한다. SDK 사용 과정은 같고 호출 문법만 다르다.
 4. 앱에서 **Scan BLE**를 누르고 권한을 허용한 뒤 기기 목록에서 Scale을 선택한다.
 
+AAR의 네이티브 라이브러리는 16KB 페이지 기기(Android 15+, Google Play 요구사항)용으로
+빌드돼 있다: LOAD 세그먼트 16KB 정렬, RELRO 끝 16KB 경계. 앱은 AGP 8.5.1 이상으로 빌드해야
+APK/AAB 안의 비압축 라이브러리도 16KB zip 정렬이 된다(샘플은 8.6.1). 출시 전 APK를
+`zipalign -c -P 16 -v 4 app.apk`로 확인한다.
+
 Manifest의 BLE 권한은 AAR에서 합쳐진다. 앱은 Android 12+의 Scan/Connect 권한 또는
 이전 Android의 위치 권한을 런타임에 요청해야 한다. 이 샘플은 이 절차를 포함한다.
 에뮬레이터에서 UI를 볼 수 있어도 Scale BLE 검증을 대신하지 못한다.
@@ -146,13 +151,13 @@ import 'package:fisica_flutter/fisica_flutter.dart';
 final core = FisicaCore.platform();
 final devices = await FisicaBleTransport.scan(); // 권한 허용 후, 사용자가 기기 선택
 final transport = FisicaBleTransport(selectedDeviceId);
-// USB 대안: FisicaUsbTransport(selectedPortName), connect(profile: 2)
+// USB 대안: FisicaUsbTransport(selectedPortName), connect(link: FisicaLink.usb)
 final client = FisicaClient(core, transport);
 final subscription = client.events.listen((event) {}, onError: (Object error) {
   // 앱에 오류 표시
 });
 try {
-  await client.connect(profile: 1); // BLE=1, USB=2
+  await client.connect(link: FisicaLink.ble);
   await client.start();
   await Future<void>.delayed(const Duration(seconds: 5));
   await client.stop();
@@ -170,6 +175,25 @@ UUID 미발견/권한·전원 문제를 오류로 알리고 준비 작업에 tim
 기존 앱은 Android Manifest/런타임 권한, Apple Info.plist와 capabilities를 샘플과 같이
 설정해야 한다. Windows 패키징 시에는 사용하는 BLE 플러그인의 `bluetooth`, `radios`
 capabilities 조건도 확인한다. Web와 모바일 USB는 지원하지 않는다.
+
+## 반복 측정·재연결 공통 규칙
+
+Python, Swift, Kotlin/Java, C#, Dart 클라이언트가 같은 규칙을 따른다.
+
+- 연결 종류는 이름 있는 상수로 명시한다: `FisicaLink.BLE/USB`(Kotlin), `.ble/.usb`(Swift),
+  `FisicaLink.Ble/Usb`(C#), `FisicaLink.ble/usb`(Dart). SDK가 제공하는 transport는 자기
+  연결 종류를 알고 있어, 다른 값을 주면 기기에 아무것도 보내기 전에 인자 오류로 실패한다.
+  생략 시 기본값은 transport의 연결 종류이고, 모르면 Kotlin·Dart는 BLE, C#은 USB다.
+  Swift는 항상 명시한다.
+- 한 Scale로 여러 사용자를 연속 측정할 때 클라이언트를 다시 만들 필요가 없다.
+  측정 시작(`start`)이 코어에 수락되면 이전 측정의 프레임을 비운다. `clearFrames()`는
+  필요할 때만 쓴다. 결과는 `stop` 후 다음 `start` 전에 `report()`로 읽는다.
+- 연결이 끊기면 세션은 RECOVERING이 되고 재연결 이벤트(`onLinkLost`/`LinkLost`/`reconnect`)가
+  온다. 같은 클라이언트에서 `connect`를 다시 호출하면 코어가 측정을 이어가며 원래 측정 기간과
+  수집한 프레임을 유지한다. Dart는 `connect(transport: ...)`로 새 transport로 바꿀 수 있다.
+- 클라이언트는 최근 `maxFrames`개(최대 19,949 = 분석 한 번의 상한)만 보관한다. 넘친 앞쪽
+  프레임 수는 `droppedFrames`로 알 수 있다. 장시간 연속 측정에서도 보고서 생성이 실패하지 않고
+  메모리가 제한된다. Python `analyze()`는 이 상한을 넘으면 최근 프레임으로 분석하고 경고를 남긴다.
 
 ## C/C++: 공개 C ABI
 

@@ -5,6 +5,9 @@ namespace CareCo.Fisica;
 
 /// <summary>Byte link to one Scale. The app or SDK adapter owns the OS I/O; no protocol rules here.</summary>
 public interface IFisicaTransport {
+    /// <summary>The Scale link this transport carries, or null when it can carry either.
+    /// FisicaClient.ConnectAsync rejects a different link before anything is sent.</summary>
+    FisicaLink? Link => null;
     /// <summary>Reads and writes both work.</summary>
     event Action? Ready;
     event Action<byte[]>? Bytes;
@@ -23,6 +26,8 @@ public interface IFisicaTransport {
 public sealed class MockTransport : IFisicaTransport {
     public event Action? Ready; public event Action<byte[]>? Bytes; public event Action? Lost;
     public event Action<Exception>? SendFailed; public event Action<Exception>? Error;
+    /// <summary>Set to model a transport that carries only one link kind.</summary>
+    public FisicaLink? Link { get; set; }
     readonly Dictionary<string,byte[][]> exchanges=new();
     public List<byte[]> Sent { get; }=new();
     public bool IsOpen { get; private set; }
@@ -54,9 +59,6 @@ public sealed record SessionReport(double Weight,double LeftWidth,double LeftLen
     public int FrameCount => Frames.Count; public bool BatteryValid => false;
 }
 
-/// <summary>Link kind passed to the core; it selects the Scale's measurement mode command.</summary>
-public enum FisicaLink { Ble=1, Usb=2 }
-
 /// <summary>Connect, measure, stop and report over any transport. Command order, ACK waits, timeouts and recovery
 /// decisions live in the shared core; this class only runs the clock, moves bytes and turns core events into
 /// tasks and events. Work is serialized internally; events are raised on the thread that delivered the input.</summary>
@@ -73,7 +75,7 @@ public sealed class FisicaClient : IAsyncDisposable {
     readonly FisicaSession session; readonly Stopwatch clock=Stopwatch.StartNew();
     readonly ConcurrentQueue<Action> work=new(); int pumping;
     readonly Dictionary<FisicaSessionOperation,TaskCompletionSource<SessionEvent>> waiters=new();
-    readonly List<Measurement> frames=new();
+    readonly Queue<Measurement> frames=new(); int dropped, maxFrames=(int)FisicaLimit.AnalysisFrames;
     Timer? ticker; CancellationTokenSource? readyDeadline; bool linkReady, closed, wired;
     FisicaLink link;
 
@@ -81,9 +83,22 @@ public sealed class FisicaClient : IAsyncDisposable {
         Core=core; Transport=transport; Entitlement=entitlement; session=new FisicaSession(core);
     }
 
-    /// <summary>Frames collected since the last ClearFrames.</summary>
+    /// <summary>Frames of the current measurement. StartAsync clears them; a reconnect keeps them.
+    /// Only the latest MaxFrames are kept.</summary>
     public IReadOnlyList<Measurement> Frames { get { lock(frames) return frames.ToArray(); } }
-    public void ClearFrames() { lock(frames) frames.Clear(); }
+    /// <summary>Oldest frames dropped beyond MaxFrames since the last StartAsync or ClearFrames.</summary>
+    public int DroppedFrames { get { lock(frames) return dropped; } }
+    /// <summary>How many recent frames to keep, 1..FisicaLimit.AnalysisFrames (the most one analysis accepts).
+    /// Also bounds memory in long sessions.</summary>
+    public int MaxFrames {
+        get { lock(frames) return maxFrames; }
+        set {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value,1); ArgumentOutOfRangeException.ThrowIfGreaterThan(value,(int)FisicaLimit.AnalysisFrames);
+            lock(frames) { maxFrames=value; Trim(); }
+        }
+    }
+    public void ClearFrames() { lock(frames) { frames.Clear(); dropped=0; } }
+    void Trim() { while (frames.Count>maxFrames) { frames.Dequeue(); dropped++; } }
 
     // One piece of work at a time, in arrival order, without re-entering the core.
     void Post(Action action) {
@@ -102,12 +117,17 @@ public sealed class FisicaClient : IAsyncDisposable {
     }
 
     /// <summary>Open the transport and probe firmware. Completes with the probe result; an unanswered probe is
-    /// reported in its Status and does not prevent use.</summary>
-    public Task<SessionEvent> ConnectAsync(FisicaLink link=FisicaLink.Usb,TimeSpan? timeout=null) {
+    /// reported in its Status and does not prevent use. The link defaults to the transport's own Link, otherwise
+    /// USB; a link other than the transport's fails before anything is sent.</summary>
+    public Task<SessionEvent> ConnectAsync(FisicaLink? link=null,TimeSpan? timeout=null) {
         var waiter=Waiter();
         Post(() => {
             if (closed || linkReady || waiters.ContainsKey(FisicaSessionOperation.Probe)) { waiter.TrySetException(new FisicaException((int)FisicaStatus.Busy,"Already connected or connecting")); return; }
-            waiters[FisicaSessionOperation.Probe]=waiter; this.link=link;
+            var carried=Transport.Link; var selected=link ?? carried ?? FisicaLink.Usb;
+            string? problem=!Enum.IsDefined(selected) ? "Use FisicaLink.Ble or FisicaLink.Usb"
+                : carried is {} known && known!=selected ? $"This transport carries {known}, not {selected}" : null;
+            if (problem!=null) { waiter.TrySetException(new FisicaException((int)FisicaStatus.InvalidArgument,problem)); return; }
+            waiters[FisicaSessionOperation.Probe]=waiter; this.link=selected;
             if (!wired) {
                 wired=true;
                 Transport.Ready+=OnReady; Transport.Bytes+=OnBytes; Transport.Lost+=OnLost; Transport.SendFailed+=OnSendFailed; Transport.Error+=OnTransportError;
@@ -131,8 +151,8 @@ public sealed class FisicaClient : IAsyncDisposable {
     });
     void OnBytes(byte[] bytes) => Post(() => {
         if (!linkReady) return;
-        // The core accepts at most 65536 bytes per call.
-        for (int offset=0;offset<bytes.Length;offset+=65536) { var part=bytes[offset..Math.Min(offset+65536,bytes.Length)]; Step(() => session.Feed(part,clock.ElapsedMilliseconds)); }
+        const int limit=(int)FisicaLimit.FeedBytes;
+        for (int offset=0;offset<bytes.Length;offset+=limit) { var part=bytes[offset..Math.Min(offset+limit,bytes.Length)]; Step(() => session.Feed(part,clock.ElapsedMilliseconds)); }
     });
     void OnLost() => Post(() => LinkEnded(false));
     void OnSendFailed(Exception error) => Post(() => { Error?.Invoke(error); LinkEnded(true); });
@@ -158,7 +178,7 @@ public sealed class FisicaClient : IAsyncDisposable {
         switch ((FisicaSessionEvent)e.Kind) {
         case FisicaSessionEvent.Transmit: Transport.Send(e.Payload); break;
         case FisicaSessionEvent.Measurement:
-            var frame=Core.Decode(e.Payload); lock(frames) frames.Add(frame); Frame?.Invoke(frame); break;
+            var frame=Core.Decode(e.Payload); lock(frames) { frames.Enqueue(frame); Trim(); } Frame?.Invoke(frame); break;
         case FisicaSessionEvent.Result:
             var operation=(FisicaSessionOperation)e.Operation; bool probe=operation==FisicaSessionOperation.Probe;
             if (probe && e.Status==0) { var version=Encoding.UTF8.GetString(Core.ResponsePayload(e.Payload)).Trim('\0',' ','\r','\n'); FirmwareVersion=version.Length==0 ? null : version; }
@@ -170,20 +190,21 @@ public sealed class FisicaClient : IAsyncDisposable {
         Event?.Invoke(e);
     }
 
-    Task<SessionEvent> Request(FisicaSessionAction action,long value,FisicaSessionOperation waitFor) {
+    Task<SessionEvent> Request(FisicaSessionAction action,long value,FisicaSessionOperation waitFor,Action? accepted=null) {
         var waiter=Waiter();
         Post(() => {
             if (closed || waiters.ContainsKey(waitFor)) { waiter.TrySetException(new FisicaException((int)FisicaStatus.Busy,"Another operation is pending")); return; }
             waiters[waitFor]=waiter;
-            try { session.Action((uint)action,value,clock.ElapsedMilliseconds); foreach (var next in session.Drain()) Deliver(next); }
+            try { session.Action((uint)action,value,clock.ElapsedMilliseconds); accepted?.Invoke(); foreach (var next in session.Drain()) Deliver(next); }
             catch (Exception error) { Finish(waitFor,null,error); }
         });
         return waiter.Task;
     }
-    /// <summary>Start measuring; null duration measures until StopAsync. Completes when the Scale confirmed the start.</summary>
+    /// <summary>Start measuring; null duration measures until StopAsync. Completes when the Scale confirmed the start.
+    /// Frames of the previous measurement are cleared once the core accepts the start.</summary>
     public Task<SessionEvent> StartAsync(TimeSpan? duration=null) {
         Entitlement?.CheckStatus();
-        return Request(FisicaSessionAction.Start,duration is {} d ? (long)d.TotalMilliseconds : -1,FisicaSessionOperation.Begin);
+        return Request(FisicaSessionAction.Start,duration is {} d ? (long)d.TotalMilliseconds : -1,FisicaSessionOperation.Begin,ClearFrames);
     }
     public Task<SessionEvent> StopAsync() => Request(FisicaSessionAction.Stop,0,FisicaSessionOperation.End);
 
