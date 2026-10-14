@@ -1,5 +1,8 @@
 # Fisica Scale Swift wrapper
 
+Installation and a complete SwiftUI application: [partner quickstart](../../doc/partner-quickstart.md).
+Use the provided ZIP as an Xcode local package; it includes the private compiled core.
+
 Swift package with public Swift sources and `CFisica.xcframework`. macOS 11+ and
 iOS 13+; desktop universal, iOS arm64, simulator arm64/x86_64. No private source is
 compiled in the consuming app. Link libc++.

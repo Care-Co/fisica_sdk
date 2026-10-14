@@ -10,20 +10,24 @@ No device firmware change is required. The entitlement server is specified but n
 ## Install a binary Python release
 
 ```sh
-pip install /path/to/fisica-2.2.0-py3-none-PLATFORM.whl
+python -m pip install /path/to/fisica-2.4.0-py3-none-PLATFORM.whl
 ```
 
-Use a wheel for your OS/architecture. Python 3.9+ is required. macOS arm64 and
-Windows x64 binary build paths are available. Windows includes an MSVC CI build
+Use a wheel for your OS/architecture. Python 3.9+ is required. macOS universal2 and
+Windows x64/ARM64 binary build paths are available. Windows includes an MSVC CI build
 and Python installation matrix; see [Windows distribution](doc/windows-distribution.md)
-for commands and verification limits. Linux and mobile targets require their own
-builds and validation. Source distributions are intentionally disabled.
+for commands and verification limits. Python packages for Linux/mobile are not supplied.
+Source distributions are intentionally disabled.
+
+[Partner installation guide](doc/partner-quickstart.md) covers every language and
+[minimal applications](examples/partner/README.md). Use the supplied binary packages;
+there is no need to build private core sources or configure an entitlement server.
 
 Optional presentation dependencies:
 
 ```sh
-pip install 'fisica[visualization]'
-pip install 'fisica[gui]'
+python -m pip install '/path/to/fisica-2.4.0-py3-none-PLATFORM.whl[visualization]'
+python -m pip install '/path/to/fisica-2.4.0-py3-none-PLATFORM.whl[gui]'
 ```
 
 ## Python measurement API
@@ -71,10 +75,12 @@ manifest. Low-level legacy command builders warn with replacement/removal versio
 
 ## Dart / Flutter
 
-[wrappers/flutter](wrappers/flutter/README.md) contains a working Dart FFI wrapper for
-decoding, command generation, framing, analysis and compatibility checks. It loads
-a trusted, platform-built native binary. Android/iOS BLE transports and mobile
-packaging are future work; desktop macOS FFI tests pass. Flutter Web is not supported.
+[wrappers/flutter](wrappers/flutter/README.md) supplies the common core through Dart FFI,
+including the high-level `FisicaClient`, frame collection and reports. The optional
+[fisica_flutter package](wrappers/flutter_transport/README.md) provides BLE adapters
+for Android/iOS/macOS/Windows and USB serial on Windows/macOS. The platform ZIP includes
+prebuilt core libraries. Flutter Web and mobile USB are not supported; actual device
+verification remains separate from builds and Mock tests.
 
 ## Trusted development and binary release
 

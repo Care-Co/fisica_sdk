@@ -1,5 +1,8 @@
 # Fisica Scale Kotlin / Java wrapper
 
+Installation and separate runnable Kotlin/Java Android apps: [partner quickstart](../../doc/partner-quickstart.md).
+Use the supplied AAR, not a customer build of private SDK sources.
+
 AAR with public Kotlin classes and compiled `libfisica_core.so` + `libfisica_jni.so`.
 Android API 23+, arm64-v8a/armeabi-v7a/x86_64. Add Kotlin stdlib (2.0.21-compatible).
 Runtime uses `System.loadLibrary`, with no source compilation or download. The JNI

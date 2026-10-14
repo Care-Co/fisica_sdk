@@ -1,0 +1,17 @@
+name: fisica_partner_example
+description: Minimal partner app using the public Fisica Flutter packages.
+version: 1.0.0
+publish_to: none
+environment:
+  sdk: '>=3.9.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  fisica_flutter:
+    path: ../../../wrappers/flutter_transport
+  permission_handler: ^12.0.1
+  device_info_plus: ^11.5.0
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/scale-mock.json

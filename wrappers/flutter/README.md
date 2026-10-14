@@ -1,33 +1,25 @@
 # Fisica native core wrapper for Dart/Flutter
 
-This independently versioned package provides a working FFI binding to the common
-core. It does not yet provide Android/iOS Bluetooth permissions, discovery or device
-connections. Use `FisicaSession` for common state, ACK and timeout behavior. Supply
-received USB/BLE bytes with `feed`, elapsed monotonic milliseconds with `tick`, and
-send TRANSMIT event payloads through the host adapter. Decode MEASUREMENT payloads
-with `core.decodePacket`. Standalone `nextPacket`/`command` APIs remain available.
+This independently versioned package supplies the common core through Dart FFI.
+Use `FisicaClient` for connection, measurement, frame collection and reports.
+For ready-made BLE/desktop USB adapters add the sibling `fisica_flutter` package.
+See [installation and minimal app](../../doc/partner-quickstart.md).
+The low-level `FisicaSession`, `nextPacket` and `command` APIs remain available.
 
 ```dart
 import 'package:fisica_core/fisica_core.dart';
 
-final core = FisicaCore.open('/trusted/path/libfisica_core.dylib',
-    onDeprecation: (message) => appLogger.warning(message));
-final session = FisicaSession(core);
-final clock = Stopwatch()..start();
-session.action(1, value: 2, nowMs: clock.elapsedMilliseconds); // USB connected
-// Drain events: kind 1 => transport.write(event.payload), kind 3 => command result.
-// session.feed(incomingBytes, nowMs: clock.elapsedMilliseconds);
-// After firmware probe result, session.action(2, value: -1, nowMs: ...);
-// Tick regularly, then drain: session.tick(clock.elapsedMilliseconds);
-// Stop/release use actions 3/4; wait for their RESULT events before closing IO.
-// Always call session.close() when done (only frees the native handle).
+final core = FisicaCore.platform();
+final client = FisicaClient(core, selectedTransport);
+await client.connect(profile: 2); // BLE=1, USB=2
+await client.start();
+// Collect frames, then await client.stop(); client.report();
+// Always await client.close(), including on errors.
 ```
 
-Use a platform-built binary from a trusted SDK release. Package Android libraries
-for the target ABIs and iOS libraries through the host app/framework with appropriate
-code signing/linking. For statically linked iOS builds, pass `DynamicLibrary.process()`
-to `FisicaCore` and retain the exported C functions in the host linker configuration.
-Desktop macOS FFI is tested; mobile transport and mobile packages are future work.
+Use the supplied platform ZIP, which includes Android libraries, Apple XCFrameworks
+and Windows DLLs. `FisicaCore.platform()` loads the packaged/linked library and the
+Apple podspec retains C symbols. iOS app signing is still the host app's responsibility.
 Browser/Flutter Web is not supported by this native FFI package.
 
 `wrapper.json` is the version/policy source. Keep `pubspec.yaml` synchronized and run
@@ -56,11 +48,12 @@ The Apple podspec retains C symbols for Dart FFI; no private source build is per
 Desktop Windows uses CMake to copy the matching architecture's DLL.
 
 `FisicaClient` adapts core operations to Futures and native events to Streams.
-Implement `FisicaTransport` using the app's BLE/USB provider; connect must complete
-only after reads/notifications and writes are ready. Use profile 1 for BLE, 2 for USB.
+Use the sibling `fisica_flutter` package's `FisicaBleTransport` or desktop
+`FisicaUsbTransport`, or implement `FisicaTransport` using the app's own provider.
+Connect must complete only after reads/notifications and writes are ready. Use profile 1 for BLE, 2 for USB.
 Core owns all command ordering, ACK deadlines, duration and recovery decisions.
-Native Swift/Kotlin BLE adapters are available in their respective packages; this
-Flutter package does not supply a method-channel bridge or a third-party BLE plugin.
+The core package stays usable from pure Dart. The optional Flutter transport package
+adds OS plugins without adding Bluetooth dependencies to the pure Dart binding.
 Applications handle platform permissions, identity selection, firmware warnings and
 RECONNECT events. Mobile USB/Wi-Fi are not included. Same-header stale ACKs remain a
 legacy protocol limitation. Android/iOS physical measurements are still unverified.

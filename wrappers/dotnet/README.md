@@ -1,5 +1,7 @@
 # Fisica Scale C# / .NET wrapper
 
+Local NuGet installation and a USB/BLE/Mock console application: [partner quickstart](../../doc/partner-quickstart.md).
+
 `CareCo.Fisica.Scale` NuGet (net8.0+) with native assets for win-x64, win-arm64,
 osx-x64 and osx-arm64. Depends on `System.IO.Ports` for the USB serial transport.
 

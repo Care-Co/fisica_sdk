@@ -1,7 +1,7 @@
 # 다중 플랫폼·언어 SDK 지원
 
 2026-10-13 구현 기준: SDK/Python 2.4.0, core 1.4.0, ABI 1.4,
-Dart/Flutter 0.5.0, Swift/Kotlin/C# 각각 0.2.0. 펌웨어 변경 없음.
+Dart/Flutter core 0.5.0, Flutter transport 0.1.0, Swift/Kotlin/C# 각각 0.2.0. 펌웨어 변경 없음.
 코어 소스는 비공개이며 모든 플랫폼이 같은 C++17 코어를 C ABI로 사용한다.
 회사가 달라도 플랫폼·아키텍처·코어 버전이 같으면 바이너리가 같다([확인 정보](entitlement.md)).
 
@@ -9,11 +9,11 @@ Dart/Flutter 0.5.0, Swift/Kotlin/C# 각각 0.2.0. 펌웨어 변경 없음.
 
 | 플랫폼 | 배포물 | 언어 | 연결 범위 |
 |---|---|---|---|
-| Windows x64 | Python wheel, DLL+C header, NuGet, Flutter DLL | Python, C#, Dart, C/C++ | Python BLE/USB, C# USB Serial, 그 외는 앱 Transport 주입 |
+| Windows x64 | Python wheel, DLL+C header, NuGet, Flutter DLL | Python, C#, Dart, C/C++ | Python/C#/Flutter BLE·USB, C/C++는 앱 Transport 구현 |
 | Windows ARM64 | 별도 ARM64 wheel/DLL, NuGet, Flutter DLL | Python, C#, Dart, C/C++ | 동일 계약, 실제 ARM64 드라이버/연결 검증 필요 |
 | macOS Intel·Apple Silicon | universal2 wheel/dylib, SwiftPM/XCFramework, NuGet, Flutter | Python, Swift, C#, Dart, C/C++ | 기존 Python BLE/USB, Swift CoreBluetooth 어댑터 |
-| Android API 23+ | arm64-v8a/armeabi-v7a/x86_64 AAR, Flutter .so | Kotlin/Java, Dart, C/C++ | Kotlin GATT BLE 어댑터, 앱 권한/기기 선택 필요 |
-| iOS 13+ | arm64 기기, arm64/x86_64 simulator XCFramework | Swift, Dart, C/C++ | Swift CoreBluetooth 어댑터, 앱 권한/기기 선택 필요 |
+| Android API 23+ | arm64-v8a/armeabi-v7a/x86_64 AAR, Flutter .so | Kotlin/Java, Dart, C/C++ | Kotlin GATT 및 Flutter BLE 어댑터, 앱 권한/기기 선택 필요 |
+| iOS 13+ | arm64 기기, arm64/x86_64 simulator XCFramework | Swift, Dart, C/C++ | Swift CoreBluetooth 및 Flutter BLE 어댑터, 앱 권한/기기 선택 필요 |
 
 .NET은 .NET 8 자체의 OS 지원 조건도 충족해야 한다. Python GUI extra의 PyQt5/
 OpenCV 등 플랫폼별 바이너리 의존성은 별도 확인 대상이다. Windows ARM64 측정
@@ -30,7 +30,7 @@ SDK wheel과 GUI extra의 설치 가능성을 같은 지원 수준으로 표시�
 | Swift | `FisicaClient` | `FisicaTransport`, `BLETransport`(CoreBluetooth), `MockTransport` | completion handler |
 | Kotlin/Java | `FisicaClient` | `FisicaTransport`, `BleTransport`(Android GATT), `MockTransport` | 콜백 + Executor |
 | C# | `FisicaClient` | `IFisicaTransport`, `SerialTransport`(USB), `BleTransport`(Windows WinRT), `MockTransport` | async Task |
-| Dart/Flutter | `FisicaClient` | `FisicaTransport` 주입 | Future/Stream |
+| Dart/Flutter | `FisicaClient` | `fisica_flutter` BLE/desktop USB 또는 `FisicaTransport` 주입 | Future/Stream |
 | C/C++ | 공개 C ABI | 호스트 구현 | 동적/정적 바이너리 |
 
 - 고수준 클라이언트는 연결 → 측정 시작 → 프레임 수집 → 종료 → 보고서 → 해제를 제공한다.
@@ -71,8 +71,9 @@ C# `BleTransport`는 Windows WinRT BLE를 쓴다. 앱이 `net8.0-windows10.0.190
 연결 유실 보고를 제공하고 모든 실패를 예외 대신 이벤트로 알린다. macOS에서는 컴파일만 확인했고
 GitHub Windows runner에서는 Bluetooth 장치 없이 실패 경로만 실행했다. 실제 Scale과의 연결은 검증하지 않았다.
 
-Flutter는 플랫폼 바이너리와 FFI, Transport 주입까지 제공한다. BLE 플러그인이나 Swift/Kotlin 어댑터를
-Dart에 연결하는 method channel은 앱이 구현한다.
+Flutter는 플랫폼 바이너리와 FFI, 고수준 클라이언트 및 별도 `fisica_flutter` BLE/desktop USB
+어댑터를 제공한다. 앱은 어댑터 대신 OS 권한 요청과 기기 선택을 구현한다. 최소 앱과 준비 스크립트는
+[타사 앱 적용 가이드](partner-quickstart.md)에 있다. 통신 플러그인의 별도 라이선스 조건도 함께 안내한다.
 
 BLE 측정 경로: 프로토콜 문서는 연속 측정(0x51)이 USB 전용이고 BLE는 단일 측정(0x50)이라고 한다.
 공개된 1.0.1 SDK와 현재 코어는 BLE에서도 연속 측정 명령을 보낸다. 어느 쪽이 맞는지는 실기기로만 정할 수

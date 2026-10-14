@@ -3,12 +3,45 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
+    paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'examples/partner/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
   pull_request:
-    paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
+    paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'examples/partner/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
 permissions:
   contents: read
 jobs:
+  flutter-adapters:
+    if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with: {python-version: '3.11'}
+      - run: python tools/native_build.py
+      - name: Flutter 3.47.7 (pinned source)
+        run: |
+          git init .build/flutter-sdk
+          git -C .build/flutter-sdk remote add origin https://github.com/flutter/flutter.git
+          git -C .build/flutter-sdk fetch --depth 1 origin abaf9c523780a608bd46686fd5e53740a07077f8
+          git -C .build/flutter-sdk checkout --detach FETCH_HEAD
+          echo "$GITHUB_WORKSPACE/.build/flutter-sdk/bin" >> "$GITHUB_PATH"
+      - run: flutter --disable-analytics
+      - run: flutter pub get
+        working-directory: wrappers/flutter_transport
+      - run: flutter analyze
+        working-directory: wrappers/flutter_transport
+      - name: Adapter failures, MTU and shared-core measurement through fake BLE
+        run: flutter test
+        working-directory: wrappers/flutter_transport
+        env:
+          FISICA_CORE_TEST_LIBRARY: ${{ github.workspace }}/fisica_sdk/_native/libfisica_core.dylib
+      - run: flutter pub get
+        working-directory: examples/partner/flutter
+      - run: flutter analyze
+        working-directory: examples/partner/flutter
+      - run: flutter build bundle --debug
+        working-directory: examples/partner/flutter
   apple:
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-15

@@ -1,0 +1,10 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'example.fisica.java'; compileSdk 35
+    defaultConfig { applicationId 'example.fisica.java'; minSdk 23; targetSdk 35; versionCode 1; versionName '1.0' }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
+}
+dependencies {
+    implementation files("${rootProject.projectDir}/sdk/fisica-scale-0.2.0.aar")
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.0.21'
+}
