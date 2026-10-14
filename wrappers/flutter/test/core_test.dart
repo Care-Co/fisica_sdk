@@ -14,6 +14,8 @@ void main() {
   final core = FisicaCore.open(path);
   test('API deprecation lifecycle uses the wrapper version', () {
     final manifest = Map<String, dynamic>.from(core.wrapper);
+    // Fixed version: this lifecycle must not depend on the current release.
+    manifest['version'] = '0.3.0';
     manifest['deprecated_apis'] = {
       'oldApi': {
         'since': '0.2.0',
@@ -47,8 +49,13 @@ void main() {
   });
   test('independent wrapper versions and native ABI', () {
     expect(core.versionInfo['wrapper_name'], 'flutter');
-    expect(core.versionInfo['wrapper_version'], '0.4.0');
-    expect(core.versionInfo['core_version'], '1.3.0');
+    // Expected values come from the release manifests, not from this test.
+    final sdk = jsonDecode(File('../../sdk-release.json').readAsStringSync());
+    final manifest = jsonDecode(File('wrapper.json').readAsStringSync());
+    expect(core.versionInfo['wrapper_version'], manifest['version']);
+    expect(core.versionInfo['core_version'], sdk['core_version']);
+    expect(core.versionInfo.containsKey('distribution'), isFalse);
+    expect(core.versionInfo['entitlement']['max_refresh_days'], 30);
     expect(core.versionInfo['abi_major'], 1);
   });
   test('same core decodes measurement and commands', () {

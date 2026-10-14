@@ -1,27 +1,33 @@
 # Fisica SDK
 
 Fisica Scale SDK with a shared C++ native core and independently versioned wrappers.
-Python 2.3.0 retains the measurement API and delegates packet processing, session states, ACK deadlines and analysis
-to core 1.3.0 (C ABI 1.3). The Dart/Flutter FFI wrapper is 0.4.0.
-No server or device firmware changes are required.
+Python 2.4.0 retains the measurement API and delegates packet processing, session states, ACK deadlines and analysis
+to core 1.4.0 (C ABI 1.4). The Dart/Flutter wrapper is 0.5.0; Swift, Kotlin and C# are 0.2.0.
+Every company uses the same binary per platform; company and contract information is
+supplied at runtime as [entitlement information](doc/entitlement.md) and never blocks a feature.
+No device firmware change is required. The entitlement server is specified but not yet implemented.
 
 ## Install a binary Python release
 
 ```sh
-pip install /path/to/fisica-2.2.0-py3-none-PLATFORM.whl
+python -m pip install /path/to/fisica-2.4.0-py3-none-PLATFORM.whl
 ```
 
-Use a wheel for your OS/architecture. Python 3.9+ is required. macOS arm64 and
-Windows x64 binary build paths are available. Windows includes an MSVC CI build
+Use a wheel for your OS/architecture. Python 3.9+ is required. macOS universal2 and
+Windows x64/ARM64 binary build paths are available. Windows includes an MSVC CI build
 and Python installation matrix; see [Windows distribution](doc/windows-distribution.md)
-for commands and verification limits. Linux and mobile targets require their own
-builds and validation. Source distributions are intentionally disabled.
+for commands and verification limits. Python packages for Linux/mobile are not supplied.
+Source distributions are intentionally disabled.
+
+[Partner installation guide](doc/partner-quickstart.md) covers every language and
+[minimal applications](examples/partner/README.md). Use the supplied binary packages;
+there is no need to build private core sources or configure an entitlement server.
 
 Optional presentation dependencies:
 
 ```sh
-pip install 'fisica[visualization]'
-pip install 'fisica[gui]'
+python -m pip install '/path/to/fisica-2.4.0-py3-none-PLATFORM.whl[visualization]'
+python -m pip install '/path/to/fisica-2.4.0-py3-none-PLATFORM.whl[gui]'
 ```
 
 ## Python measurement API
@@ -69,10 +75,12 @@ manifest. Low-level legacy command builders warn with replacement/removal versio
 
 ## Dart / Flutter
 
-[wrappers/flutter](wrappers/flutter/README.md) contains a working Dart FFI wrapper for
-decoding, command generation, framing, analysis and compatibility checks. It loads
-a trusted, platform-built native binary. Android/iOS BLE transports and mobile
-packaging are future work; desktop macOS FFI tests pass. Flutter Web is not supported.
+[wrappers/flutter](wrappers/flutter/README.md) supplies the common core through Dart FFI,
+including the high-level `FisicaClient`, frame collection and reports. The optional
+[fisica_flutter package](wrappers/flutter_transport/README.md) provides BLE adapters
+for Android/iOS/macOS/Windows and USB serial on Windows/macOS. The platform ZIP includes
+prebuilt core libraries. Flutter Web and mobile USB are not supported; actual device
+verification remains separate from builds and Mock tests.
 
 ## Trusted development and binary release
 
@@ -93,31 +101,46 @@ Compiled distribution raises the cost of reverse engineering; it does not make
 host-side code or device communications impossible to inspect. No firmware-level
 command authorization is added.
 
-## Requirements, licensing and partner delivery
+## Requirements, licensing and entitlement
 
-The [confirmed SDK requirements](doc/sdk-requirements.md) define Windows 10/11 x64
+The [SDK requirements](doc/sdk-requirements.md) define Windows 10/11 x64
 first, BLE/USB access, unrestricted partner calibration/raw data, offline use,
 and the remaining hardware/platform validation work.
 
-Public wrappers and compiled core are provided under the [Fisica Scale SDK License](LICENSE).
-Non-commercial personal/academic/research use with purchased Scale hardware is free.
-Business use, including internal operations and free business services, requires
-a company/term commercial agreement. Wrappers may be modified; applications may
-redistribute wrappers and the unmodified compiled core within their license terms.
-Core sources are not distributed. No online activation, usage telemetry or technical
-expiry lock is added. Previously licensed versions and third-party rights remain separate.
-The optional GUI uses PyQt5, which has separate GPL/commercial terms; see the
+Policy (2026-10-14): the base SDK license comes with genuine hardware, has no date
+expiry and covers ordinary commercial apps and services after registration. Separate
+agreements are only for exceptions such as OEM supply, rebranding or SDK resale.
+The [LICENSE](LICENSE) is Version 2.0, written to this policy and marked as a draft
+for review until legal review is complete ([review notes](doc/license-review.md),
+[Version 1.0](doc/LICENSE-1.0.txt)). It does not change existing agreements, packages
+already delivered, or rights granted under earlier licenses such as MIT.
+Wrappers may be modified; applications may redistribute wrappers and the unmodified
+compiled core. Core sources are not distributed. Previously licensed versions and
+third-party rights remain separate. The optional GUI uses PyQt5, which has separate
+GPL/commercial terms; see the
 [provider's licensing FAQ](https://riverbankcomputing.com/commercial/license-faq)
 before redistributing a proprietary GUI product.
 
-```sh
-python tools/build_release.py --partner-id partner-example
+```python
+sdk.configure_entitlement(file='fisica-entitlement.fse')   # works on a PC that was never online
+print(sdk.entitlement_status())   # base license, confirmation freshness, contract state
 ```
 
-The trusted builder creates a new delivery ID, embeds partner/delivery metadata in
-the core, includes the license in each archive, and writes a SHA-256 delivery manifest.
-Keep the manifest as the internal delivery record. IDs are not authentication keys.
-Read `sdk.version_info()` for release/distribution information and
+Missing, outdated, rejected, ended or revoked entitlement information only produces
+a status and a `FisicaEntitlementWarning`; connection, measurement and analysis keep
+working. Online refresh of the information runs only when an `endpoint` is given. The
+SDK does not track its own use: no usage, last-use time or call counts are collected
+or reported. See [entitlement](doc/entitlement.md).
+
+```sh
+python tools/build_release.py --validation
+```
+
+The trusted builder produces the same binary for every company, includes the license
+in each archive and writes a SHA-256 `artifact-manifest.json`. The core currently
+trusts a test signing key only, so packaging requires `--validation` until production
+keys are configured.
+Read `sdk.version_info()` for release information and
 `sdk.get_device_info()` for queried firmware and its verification state. Unverified
 firmware warns and continues without an opt-in flag.
 

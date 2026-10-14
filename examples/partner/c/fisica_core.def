@@ -1,0 +1,12 @@
+LIBRARY fisica_core.dll
+EXPORTS
+    fisica_core_version
+    fisica_core_abi_version
+    fisica_core_error_message
+    fisica_core_command
+    fisica_core_session_create
+    fisica_core_session_destroy
+    fisica_core_session_action
+    fisica_core_session_feed
+    fisica_core_session_poll
+    fisica_core_analyze_packets

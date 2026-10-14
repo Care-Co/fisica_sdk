@@ -1,0 +1,18 @@
+name: fisica_flutter
+description: BLE and desktop USB serial transports for the Fisica Scale SDK.
+version: 0.1.0
+publish_to: none
+environment:
+  sdk: '>=3.9.0 <4.0.0'
+  flutter: '>=3.35.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  fisica_core:
+    path: ../flutter
+  # Keep the BSD-3-Clause release; later major releases have different terms.
+  universal_ble: 0.21.1
+  flutter_libserialport: 0.6.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

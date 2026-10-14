@@ -35,18 +35,28 @@ def release_metadata(validate_flutter=True):
                 raise ValueError('Flutter generated metadata is stale; run python tools/sync_flutter_metadata.py')
     release['policy_schema_version'] = 1
     release['wrappers'] = wrappers
-    partner = os.environ.get('FISICA_PARTNER_ID')
-    distribution = os.environ.get('FISICA_DISTRIBUTION_ID')
-    if bool(partner) != bool(distribution):
-        raise ValueError('Partner and distribution identifiers must be provided together')
-    for value in (partner, distribution):
-        reserved = {'CON', 'PRN', 'AUX', 'NUL', *('COM'+str(i) for i in range(1,10)), *('LPT'+str(i) for i in range(1,10))}
-        if value and (not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,78}[A-Za-z0-9])?', value)
-                      or value.split('.')[0].upper() in reserved):
-            raise ValueError('Distribution identifiers must be opaque ASCII identifiers of 1-80 characters')
     release['license'] = 'Fisica Scale SDK License'
-    release['distribution'] = {'partner_id': partner, 'distribution_id': distribution}
+    # One binary per platform/architecture/core version for every company: trusted
+    # server keys are the only entitlement data compiled in, never a company or contract.
+    keys = json.loads((ROOT / 'native' / 'entitlement-keys.json').read_text())['keys']
+    for key in keys:
+        if (not re.fullmatch(r'[A-Za-z0-9_.:-]{1,64}', key['kid']) or key['environment'] not in ('production', 'test')
+                or not re.fullmatch(r'[0-9a-f]{64}', key['public_key'])):
+            raise ValueError('Invalid entitlement key entry')
+    if len({key['kid'] for key in keys}) != len(keys):
+        raise ValueError('Entitlement key ids must be unique')
+    release['entitlement'] = {'token_format': 'FSE1', 'max_refresh_days': 30,
+                              'keys': [{'kid': key['kid'], 'environment': key['environment']} for key in keys]}
     return release
+
+
+def require_release_keys(validation):
+    """Customer packages must not trust a test key whose secret lives in this repository."""
+    test_keys = [key['kid'] for key in release_metadata()['entitlement']['keys'] if key['environment'] == 'test']
+    if test_keys and not validation:
+        raise SystemExit('Core trusts test entitlement keys ' + ', '.join(test_keys) +
+                         '; pass --validation for a QA-only build or configure production keys.')
+    return bool(test_keys)
 
 
 def library_name():
@@ -92,6 +102,12 @@ def prepare_release(directory):
                   wrapper['support']['deprecated_before']]
         header += '{' + ','.join(json.dumps(f) for f in fields) + ',' + str(wrapper['abi']['major']) + ',' + str(wrapper['abi']['minimum_minor']) + ',' + ('true' if metadata['result_schema_version'] in wrapper['result_schema_versions'] else 'false') + '},\n'
     header += '};\n'
+    header += 'struct FisicaEntitlementKey { const char *kid; unsigned environment; unsigned char public_key[32]; };\n'
+    header += 'static const FisicaEntitlementKey fisica_entitlement_keys[] = {\n'
+    for key in json.loads((ROOT / 'native' / 'entitlement-keys.json').read_text())['keys']:
+        data = ','.join('0x' + key['public_key'][i:i+2] for i in range(0, 64, 2))
+        header += '{' + json.dumps(key['kid']) + ',' + ('1' if key['environment'] == 'production' else '2') + ',{' + data + '}},\n'
+    header += '{nullptr,0,{0}},\n};\n'
     (directory / 'fisica_release.h').write_text(header)
     (directory / 'release.json').write_text(json.dumps(metadata, indent=2) + '\n')
     return metadata
@@ -127,12 +143,12 @@ def build_native(output_directory):
         command += ['/I' + str(path) for path in includes]
         command += [*sources, '/link', '/OUT:' + str(output),
                     '/IMPLIB:' + str(generated / 'fisica_core.lib'), '/INCREMENTAL:NO',
-                    '/OPT:REF', '/OPT:ICF', '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA', '/MACHINE:' + ('ARM64' if machine==0xaa64 else 'X64')]
+                    '/OPT:REF', '/OPT:ICF', '/DYNAMICBASE', '/NXCOMPAT', '/HIGHENTROPYVA', '/Brepro', '/MACHINE:' + ('ARM64' if machine==0xaa64 else 'X64')]
     elif windows:
         if not os.environ.get('CXX'):
             raise RuntimeError('Cross-building Windows requires CXX pointing to a matching cross compiler')
         command = [compiler, '-std=c++17', '-O2', '-DNDEBUG', '-DFISICA_CORE_BUILD',
-                   '-shared', '-static', '-s', '-ffp-contract=off']
+                   '-shared', '-static', '-s', '-ffp-contract=off', '-Wl,--no-insert-timestamp']
         command += ['-I' + str(path) for path in includes]
         command += [*sources, '-o', str(output)]
     else:

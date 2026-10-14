@@ -2,6 +2,23 @@ name: Windows binary wheels
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'fisica_sdk/**'
+      - 'native/**'
+      - 'tools/**'
+      - 'tests/**'
+      - 'wrappers/**/wrapper.json'
+      - 'wrappers/dotnet/**'
+      - 'wrappers/flutter/lib/src/version.dart'
+      - 'wrappers/flutter/pubspec.yaml'
+      - 'sdk-release.json'
+      - 'setup.py'
+      - 'LICENSE'
+      - 'MANIFEST.in'
+      - 'pyproject.toml'
+      - '.github/workflows/windows-wheel.yml'
   pull_request:
     paths:
       - 'fisica_sdk/**'
@@ -9,6 +26,7 @@ on:
       - 'tools/**'
       - 'tests/**'
       - 'wrappers/**/wrapper.json'
+      - 'wrappers/dotnet/**'
       - 'wrappers/flutter/lib/src/version.dart'
       - 'wrappers/flutter/pubspec.yaml'
       - 'sdk-release.json'
@@ -45,8 +63,10 @@ jobs:
           python tools/native_build.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m pytest -q
+      - name: Verify the C# binding, client and serial transport on Windows
+        run: python tools/verify_bindings.py dotnet
       - name: Build and audit binary release artifacts
-        run: python tools/build_release.py --output release
+        run: python tools/build_release.py --validation --output release
       - name: Install and test the release wheel outside the source tree
         run: |
           $wheel = Get-ChildItem release -Recurse -Filter '*-win_amd64.whl'
@@ -59,7 +79,7 @@ jobs:
           path: |
             release/**/*-win_amd64.whl
             release/**/fisica-core-*-win_amd64.zip
-            release/**/delivery-manifest.json
+            release/**/artifact-manifest.json
           if-no-files-found: error
           retention-days: 14
 

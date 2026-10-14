@@ -1,0 +1,9 @@
+{
+  "verified": false,
+  "source": "Existing Python SDK characteristic selection (fisica_sdk/bluetooth_handler.py) and scan filter (port_scanner.py). Not yet confirmed on production firmware 2.0.1.",
+  "name_contains": "Fisica Scale",
+  "profiles": [
+    {"name": "scale", "write": "beb5483e-36e1-4688-b7f5-ea07361b26a8", "notify": "beb5483e-36e1-4688-b7f5-ea07361b26a8"},
+    {"name": "nordic_uart", "write": "6e400002-b5a3-f393-e0a9-e50e24dcca9e", "notify": "6e400003-b5a3-f393-e0a9-e50e24dcca9e"}
+  ]
+}

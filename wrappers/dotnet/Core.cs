@@ -2,7 +2,9 @@ using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 namespace CareCo.Fisica;
 public sealed class FisicaException(int code, string message) : Exception(message) { public int Code { get; } = code; }
-public sealed record Measurement(double[] Raw, double[] Display, double[] Metrics) { public double Weight => Metrics[0]; public bool BatteryValid => false; }
+/// <summary>One decoded measurement. Packet is the 645 bytes as received, Raw the 29x22 sensor grid and
+/// Display the processed 29x29 grid used for analysis. Relative sensor units, not calibrated kPa.</summary>
+public sealed record Measurement(byte[] Packet, double[] Raw, double[] Display, double[] Metrics) { public double Weight => Metrics[0]; public bool BatteryValid => false; }
 public sealed record SessionEvent(uint[] Metadata, byte[] Payload) {
     public uint Kind => Metadata[0]; public uint State => Metadata[1]; public uint Status => Metadata[2];
     public uint DeviceError => Metadata[3]; public uint Operation => Metadata[4];
@@ -32,7 +34,21 @@ public sealed class FisicaCore {
     }
     public Measurement Decode(byte[] packet) {
         var raw=new double[638]; var display=new double[841]; var metrics=new double[2];
-        Check(Native.fisica_core_decode_packet(packet,(uint)packet.Length,raw,638,display,841,metrics,2)); return new(raw,display,metrics);
+        Check(Native.fisica_core_decode_packet(packet,(uint)packet.Length,raw,638,display,841,metrics,2)); return new((byte[])packet.Clone(),raw,display,metrics);
+    }
+    /// <summary>Payload bytes of a fixed or variable-length command response.</summary>
+    public byte[] ResponsePayload(byte[] packet) {
+        var data=new byte[4096];
+        Check(Native.fisica_core_response_payload(packet,(uint)packet.Length,data,(uint)data.Length,out uint length)); return data[..(int)length];
+    }
+    /// <summary>Weight and foot dimensions from measurement packets as received: [weight_kg, left_width_cm,
+    /// left_length_cm, right_width_cm, right_length_cm], or null without a stable measurement.
+    /// The analysis itself runs in the shared core.</summary>
+    public double[]? AnalyzePackets(IReadOnlyList<byte[]> packets) {
+        if (packets.Count==0 || packets.Any(p => p.Length!=645)) throw new ArgumentException("Expected 645-byte measurement packets");
+        var joined=new byte[packets.Count*645]; for (int i=0;i<packets.Count;i++) packets[i].CopyTo(joined,i*645);
+        var output=new double[5]; int status=Native.fisica_core_analyze_packets(joined,(uint)packets.Count,output,5);
+        if (status==3) return null; Check(status); return output;
     }
     public double[]? Analyze(double[] matrices,double[] weights,uint rows,uint cols) {
         if ((ulong)weights.Length*rows*cols!=(ulong)matrices.Length) throw new ArgumentException("Matrix length mismatch");
@@ -71,6 +87,15 @@ internal static class Native {
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_command([MarshalAs(UnmanagedType.LPUTF8Str)] string name,double value,byte[] payload,uint length,[Out] byte[] output,uint capacity,out uint size);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_decode_packet(byte[] data,uint length,[Out] double[] raw,uint rawCapacity,[Out] double[] display,uint displayCapacity,[Out] double[] metrics,uint metricsCapacity);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_analyze(double[] matrices,double[] weights,uint count,uint rows,uint cols,[Out] double[] result,uint capacity);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_analyze_packets(byte[] packets,uint count,[Out] double[] result,uint capacity);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_response_payload(byte[] packet,uint length,[Out] byte[] output,uint capacity,out uint size);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_create(out IntPtr handle);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern void fisica_core_entitlement_destroy(IntPtr handle);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl,EntryPoint="fisica_core_entitlement_import")] internal static extern int fisica_core_entitlement_import(EntitlementHandle handle,byte[] token,uint length,ulong now,out uint outcome);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_status(EntitlementHandle handle,ulong now,[Out] ulong[] status,uint capacity);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_text(EntitlementHandle handle,uint field,[Out] byte[] output,uint capacity,out uint length);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_export(EntitlementHandle handle,[Out] byte[] output,uint capacity,out uint length);
+    [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_entitlement_restore(EntitlementHandle handle,byte[] state,uint length);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_session_create(out IntPtr handle);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern void fisica_core_session_destroy(IntPtr handle);
     [DllImport(Library,CallingConvention=CallingConvention.Cdecl)] internal static extern int fisica_core_session_action(SessionHandle handle,uint action,long value,ulong now);

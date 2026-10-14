@@ -77,6 +77,7 @@ class NativeCore:
             'decode_response': [U8P,U32,I32P,U32],
             'response_payload': [U8P,U32,U8P,U32,U32P],
             'analyze': [DOUBLEP,DOUBLEP,U32,U32,U32,DOUBLEP,U32],
+            'analyze_packets': [U8P,U32,DOUBLEP,U32],
             'dimensions': [DOUBLEP,U32,ct.c_double,ct.c_double,DOUBLEP,U32],
             'cop': [DOUBLEP,U32,U32,ct.c_double,ct.c_double,DOUBLEP,U32],
             'command': [ct.c_char_p,ct.c_double,U8P,U32,U8P,U32,U32P],
@@ -98,6 +99,20 @@ class NativeCore:
             function.argtypes, function.restype = arguments, ct.c_int32
         self._lib.fisica_core_session_destroy.argtypes = [ct.c_void_p]
         self._lib.fisica_core_session_destroy.restype = None
+        U64 = ct.c_uint64
+        entitlement_signatures = {
+            'create': [ct.POINTER(ct.c_void_p)],
+            'import': [ct.c_void_p,U8P,U32,U64,U32P],
+            'status': [ct.c_void_p,U64,ct.POINTER(U64),U32],
+            'text': [ct.c_void_p,U32,U8P,U32,U32P],
+            'export': [ct.c_void_p,U8P,U32,U32P],
+            'restore': [ct.c_void_p,U8P,U32],
+        }
+        for name, arguments in entitlement_signatures.items():
+            function = getattr(self._lib, 'fisica_core_entitlement_' + name)
+            function.argtypes, function.restype = arguments, ct.c_int32
+        self._lib.fisica_core_entitlement_destroy.argtypes = [ct.c_void_p]
+        self._lib.fisica_core_entitlement_destroy.restype = None
         self._lib.fisica_core_error_message.argtypes = [ct.c_int32]
         self._lib.fisica_core_error_message.restype = ct.c_char_p
 
@@ -118,7 +133,7 @@ class NativeCore:
             'abi_major': self.abi_version >> 16, 'abi_minor': self.abi_version & 65535,
             'result_schema_version': self.policy['result_schema_version'],
             'license': self.policy.get('license'),
-            'distribution': dict(self.policy.get('distribution', {})),
+            'entitlement': dict(self.policy.get('entitlement', {})),
         }
 
     def decode_packet(self, packet):
@@ -179,6 +194,19 @@ class NativeCore:
             raise FisicaArgumentError(1, 'Expected matching frame matrices and weights')
         output = np.empty(5)
         status = self._lib.fisica_core_analyze(_ptr(data),_ptr(weights),*data.shape,_ptr(output),output.size)
+        if status == 3:
+            return None
+        self._check(status)
+        return tuple(output.tolist())
+
+    def analyze_packets(self, packets):
+        """Analyze 645-byte measurement packets as received; same result as analyze(frames)."""
+        packets = [bytes(packet) for packet in packets]
+        if not packets or any(len(packet) != 645 for packet in packets):
+            raise FisicaArgumentError(1, 'Expected 645-byte measurement packets')
+        data = _byte_array(b''.join(packets))
+        output = np.empty(5)
+        status = self._lib.fisica_core_analyze_packets(data,len(packets),_ptr(output),output.size)
         if status == 3:
             return None
         self._check(status)
@@ -290,3 +318,76 @@ class NativeSession:
             if event is None:
                 break
             yield event
+
+
+class NativeEntitlement:
+    """Owned C ABI entitlement context. Serialize calls; wall-clock seconds are a host input.
+
+    Status and warnings only: nothing here enables or disables SDK features, and
+    no record of SDK use is kept. close() only frees memory.
+    """
+    STATUS_FIELDS = ('base_license','verification','contract_state','contract_kind','verified_at','refresh_by',
+                     'contract_start','contract_end','revoked_at','last_import','key_environment','warning_bits')
+
+    def __init__(self, core=None):
+        self.core = core or get_core()
+        self._handle = ct.c_void_p()
+        self.core._check(self.core._lib.fisica_core_entitlement_create(ct.byref(self._handle)))
+
+    def close(self):
+        if self._handle.value:
+            self.core._lib.fisica_core_entitlement_destroy(self._handle)
+            self._handle.value = None
+
+    def __del__(self):
+        if hasattr(self, '_handle'):
+            self.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def _time(self, now_s):
+        if not self._handle.value:
+            raise FisicaRuntimeError(6, 'Entitlement context is closed')
+        if now_s is None:
+            import time
+            now_s = int(time.time())
+        if not isinstance(now_s, int) or not 0 <= now_s <= 1 << 53:
+            raise FisicaArgumentError(1, 'Expected Unix seconds')
+        return now_s
+
+    def import_token(self, token, now_s=None):
+        """Returns the import outcome code; the previous verified state survives a rejection."""
+        data = _byte_array(token.encode('utf-8') if isinstance(token, str) else token)
+        outcome = U32()
+        self.core._check(self.core._lib.fisica_core_entitlement_import(self._handle,data,len(data),self._time(now_s),ct.byref(outcome)))
+        return outcome.value
+
+    def _text(self, field, capacity=4096):
+        output, length = (ct.c_uint8 * capacity)(), U32()
+        self.core._check(self.core._lib.fisica_core_entitlement_text(self._handle,field,output,capacity,ct.byref(length)))
+        return bytes(output[:length.value]).decode('utf-8')
+
+    def status(self, now_s=None):
+        values = (ct.c_uint64 * 12)()
+        self.core._check(self.core._lib.fisica_core_entitlement_status(self._handle,self._time(now_s),values,12))
+        status = dict(zip(self.STATUS_FIELDS, values))
+        status.update(company=self._text(1), contract=self._text(2), grants=self._text(3), key_id=self._text(4))
+        return status
+
+    def token(self):
+        return self._text(5)
+
+    def export_state(self):
+        self._time(0)
+        output, length = (ct.c_uint8 * 262144)(), U32()
+        self.core._check(self.core._lib.fisica_core_entitlement_export(self._handle,output,len(output),ct.byref(length)))
+        return bytes(output[:length.value])
+
+    def restore_state(self, state):
+        self._time(0)
+        data = _byte_array(state)
+        self.core._check(self.core._lib.fisica_core_entitlement_restore(self._handle,data,len(data)))

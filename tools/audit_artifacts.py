@@ -1,6 +1,9 @@
 """Reject customer archives containing implementation sources or debug artifacts."""
 from pathlib import Path
 import zipfile
+import json
+import runpy
+PARTNER_SAMPLE_FILES = runpy.run_path(str(Path(__file__).with_name('partner_samples.py')))['PARTNER_SAMPLE_FILES']
 import struct
 
 FORBIDDEN_SUFFIXES = {'.cpp', '.cc', '.c', '.cxx', '.hpp', '.hxx', '.hh', '.rs', '.pyx', '.pdb', '.o', '.obj', '.pyc', '.lib', '.exp', '.ilk', '.idb', '.pch'}
@@ -38,7 +41,15 @@ def audit_archive(path):
     path = Path(path)
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
-        dart_wrapper = ('pubspec.yaml' in names and 'lib/fisica_core.dart' in names) or any(n.endswith(('.csproj','Core.kt','Package.swift')) for n in names)
+        sample_package = 'quickstart.json' in names
+        if sample_package:
+            metadata = json.loads(archive.read('quickstart.json'))
+            if metadata.get('type') != 'fisica-partner-samples' or metadata.get('schema_version') != 1:
+                raise ValueError('Unknown public sample package')
+            expected = set(PARTNER_SAMPLE_FILES) | {'INSTALL.md','LICENSE','quickstart.json'}
+            if set(names) != expected or len(names) != len(expected):
+                raise ValueError('Public sample archive differs from the explicit source allowlist')
+        dart_wrapper = ('pubspec.yaml' in names and any(n in names for n in ('lib/fisica_core.dart','lib/fisica_flutter.dart'))) or any(n.endswith(('.csproj','Core.kt','Package.swift')) for n in names)
         if not dart_wrapper and not any(name.endswith(('.dylib', '.so', '.dll', '.a')) for name in names):
             raise ValueError('Archive does not contain a native library')
         for name in names:
@@ -54,7 +65,8 @@ def audit_archive(path):
             if runtime_asset and name.endswith('.dll'):
                 validate_windows_dll(archive.read(name),0xaa64 if 'win-arm64' in parts else 0x8664)
             public_jni = name == 'bridge/fisica_jni.cpp' and 'wrapper.json' in names and 'src/main/kotlin/com/carenco/fisica/Core.kt' in names
-            if (Path(name).suffix.lower() in FORBIDDEN_SUFFIXES and not public_jni) or any(
+            public_sample = sample_package and name in ('c/main.c','cpp/main.cpp')
+            if (Path(name).suffix.lower() in FORBIDDEN_SUFFIXES and not (public_jni or public_sample)) or any(
                 (part.lower() in ('tools', 'tests', '.build', 'examples', '.git') or (part.lower()=='native' and not runtime_asset)) or part.lower().endswith('.dsym')
                 for part in parts
             ):

@@ -81,6 +81,12 @@ FISICA_API int32_t fisica_core_response_payload(const uint8_t *packet, uint32_t 
  * Preserves legacy stabilization policy and nominal 1cm cells; not clinical calibration. */
 FISICA_API int32_t fisica_core_analyze(const double *matrices, const double *weights,
     uint32_t count, uint32_t rows, uint32_t cols, double *result, uint32_t capacity);
+/* ABI 1.4: the same analysis from measurement packets exactly as received
+ * (count * 645 bytes), for hosts that only keep MEASUREMENT payloads. Each packet
+ * is decoded to its 29x29 display grid and weight; the 29x22 raw grid is not used.
+ * Same result and limits as fisica_core_analyze. */
+FISICA_API int32_t fisica_core_analyze_packets(const uint8_t *packets, uint32_t count,
+    double *result, uint32_t capacity);
 /* xy contains count coordinate pairs. Result: width,length,cx,cy then 4 corner xy pairs. */
 FISICA_API int32_t fisica_core_dimensions(const double *xy, uint32_t count,
     double cell_width, double cell_height, double *result, uint32_t capacity);
@@ -140,6 +146,68 @@ FISICA_API int32_t fisica_core_session_feed(FisicaSession *session,
 FISICA_API int32_t fisica_core_session_tick(FisicaSession *session, uint64_t now_ms);
 FISICA_API int32_t fisica_core_session_poll(FisicaSession *session,
     uint32_t *event, uint32_t event_capacity, uint8_t *payload, uint32_t capacity);
+
+/* ABI 1.4: runtime entitlement context. The same binary serves every company; no
+ * company, contract or delivery identifier is compiled in. The host injects a
+ * server-signed token (online response or offline file) and wall-clock seconds.
+ * NOTHING here gates SDK features: results are status and warnings only, and are
+ * never returned as error statuses. Serialize calls per handle; handles are isolated.
+ * Three independent facts:
+ *   base license   - granted with genuine hardware, no date expiry (always GRANTED)
+ *   verification   - how recently the server confirmed this info (30 days at most)
+ *   contract       - state of the verified company's contract, by signed dates only
+ * A token is only attributed to a company/contract after its signature verifies.
+ * A token does not prove device authenticity, code origin or contract compliance.
+ * No usage tracking: this context keeps no record of whether, when or how often the
+ * SDK is used, and has nothing to report. */
+typedef struct FisicaEntitlement FisicaEntitlement;
+enum FisicaEntitlementOutcome {
+    FISICA_ENTITLEMENT_NONE = 0, FISICA_ENTITLEMENT_ACCEPTED = 1,
+    FISICA_ENTITLEMENT_IGNORED_OLDER = 2, /* older confirmation of the same contract */
+    FISICA_ENTITLEMENT_REJECTED_FORMAT = 3, FISICA_ENTITLEMENT_REJECTED_KEY = 4,
+    FISICA_ENTITLEMENT_REJECTED_SIGNATURE = 5
+};
+enum FisicaBaseLicense { FISICA_BASE_LICENSE_GRANTED = 1 };
+enum FisicaVerification {
+    FISICA_VERIFICATION_NONE = 0, FISICA_VERIFICATION_FRESH = 1, FISICA_VERIFICATION_REFRESH_DUE = 2
+};
+enum FisicaContract {
+    FISICA_CONTRACT_UNVERIFIED = 0, FISICA_CONTRACT_ACTIVE = 1, FISICA_CONTRACT_NOT_STARTED = 2,
+    FISICA_CONTRACT_ENDED = 3, FISICA_CONTRACT_REVOKED = 4
+};
+enum FisicaContractKind { FISICA_CONTRACT_KIND_NONE = 0, FISICA_CONTRACT_KIND_BASIC = 1, FISICA_CONTRACT_KIND_SPECIAL = 2 };
+enum FisicaKeyEnvironment { FISICA_KEY_NONE = 0, FISICA_KEY_PRODUCTION = 1, FISICA_KEY_TEST = 2 };
+enum FisicaEntitlementWarning {
+    FISICA_WARN_UNVERIFIED = 1, FISICA_WARN_REFRESH_DUE = 2, FISICA_WARN_CONTRACT_ENDED = 4,
+    FISICA_WARN_CONTRACT_REVOKED = 8, FISICA_WARN_CONTRACT_NOT_STARTED = 16,
+    FISICA_WARN_IMPORT_REJECTED = 32, FISICA_WARN_TEST_KEY = 64
+};
+enum FisicaEntitlementText {
+    FISICA_ENTITLEMENT_COMPANY = 1, FISICA_ENTITLEMENT_CONTRACT = 2, FISICA_ENTITLEMENT_GRANTS = 3,
+    FISICA_ENTITLEMENT_KEY_ID = 4, FISICA_ENTITLEMENT_TOKEN = 5
+};
+FISICA_API int32_t fisica_core_entitlement_create(FisicaEntitlement **context);
+FISICA_API void fisica_core_entitlement_destroy(FisicaEntitlement *context);
+/* Token: "FSE1.<base64url payload>.<base64url Ed25519 signature>", at most 4096 bytes.
+ * Returns OK for any well-formed call; *outcome says what happened. A rejected or
+ * older token leaves previously verified information untouched. Re-importing a file
+ * cannot extend the confirmation window: it is derived from signed times only. */
+FISICA_API int32_t fisica_core_entitlement_import(FisicaEntitlement *context,
+    const uint8_t *token, uint32_t length, uint64_t now_s, uint32_t *outcome);
+/* status[12]: [base_license, verification, contract, contract_kind, verified_at,
+ * refresh_by, contract_start, contract_end, revoked_at, last_import_outcome,
+ * key_environment, warnings]. Times are Unix seconds; 0 means not set. */
+FISICA_API int32_t fisica_core_entitlement_status(FisicaEntitlement *context,
+    uint64_t now_s, uint64_t *status, uint32_t capacity);
+FISICA_API int32_t fisica_core_entitlement_text(FisicaEntitlement *context, uint32_t field,
+    uint8_t *output, uint32_t capacity, uint32_t *length);
+/* Opaque text state for the host to store: the verified token only, so the latest
+ * confirmation can be checked offline. It is not a record of SDK use. Restore
+ * verifies the stored token again. */
+FISICA_API int32_t fisica_core_entitlement_export(FisicaEntitlement *context,
+    uint8_t *output, uint32_t capacity, uint32_t *length);
+FISICA_API int32_t fisica_core_entitlement_restore(FisicaEntitlement *context,
+    const uint8_t *state, uint32_t length);
 
 #ifdef __cplusplus
 }

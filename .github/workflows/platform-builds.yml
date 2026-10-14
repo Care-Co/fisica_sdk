@@ -1,11 +1,48 @@
 name: Multi-platform core and bindings
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'examples/partner/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
   pull_request:
-    paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
+    paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'examples/partner/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
 permissions:
   contents: read
 jobs:
+  flutter-adapters:
+    if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with: {python-version: '3.11'}
+      - run: python tools/native_build.py
+      - name: Flutter 3.47.7 (pinned source)
+        run: |
+          git init .build/flutter-sdk
+          git -C .build/flutter-sdk remote add origin https://github.com/flutter/flutter.git
+          git -C .build/flutter-sdk fetch --depth 1 origin abaf9c523780a608bd46686fd5e53740a07077f8
+          git -C .build/flutter-sdk fetch --depth 1 origin tag 3.47.7
+          git -C .build/flutter-sdk checkout --detach abaf9c523780a608bd46686fd5e53740a07077f8
+          echo "$GITHUB_WORKSPACE/.build/flutter-sdk/bin" >> "$GITHUB_PATH"
+      - run: flutter --disable-analytics
+      - run: flutter pub get
+        working-directory: wrappers/flutter_transport
+      - run: flutter analyze
+        working-directory: wrappers/flutter_transport
+      - name: Adapter failures, MTU and shared-core measurement through fake BLE
+        run: flutter test
+        working-directory: wrappers/flutter_transport
+        env:
+          FISICA_CORE_TEST_LIBRARY: ${{ github.workspace }}/fisica_sdk/_native/libfisica_core.dylib
+      - run: flutter pub get
+        working-directory: examples/partner/flutter
+      - run: flutter analyze
+        working-directory: examples/partner/flutter
+      - run: flutter build bundle --debug
+        working-directory: examples/partner/flutter
   apple:
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: macos-15
@@ -18,14 +55,16 @@ jobs:
       - run: python -m pip install build pytest numpy packaging pyserial bleak
       - run: python tools/native_build.py
       - run: python -m pytest tests -q
-      - run: python tools/build_platforms.py --target apple
+      - name: Public C ABI contracts under UBSan (hostile entitlement input included)
+        run: python tools/verify_bindings.py native
+      - run: python tools/build_platforms.py --validation --target apple
         env:
           FISICA_XCODE_DEVELOPER: /Applications/Xcode.app/Contents/Developer
-      - run: FISICA_FIXTURES="$GITHUB_WORKSPACE/tests/fixtures" swift test
-        working-directory: wrappers/swift
-      - run: python tools/build_platforms.py --target macosx_11_0_universal2
+      - name: Swift contract (client, entitlement, online exchange with the mock server)
+        run: python tools/verify_bindings.py swift
+      - run: python tools/build_platforms.py --validation --target macosx_11_0_universal2
       - name: Audit public Apple artifacts
-        run: python tools/audit_artifacts.py .build/platforms/apple/fisica-swift-0.1.0.zip .build/platforms/fisica-core-1.3.0-macosx_11_0_universal2.zip
+        run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts apple macosx_11_0_universal2)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: fisica-apple-binaries
@@ -45,7 +84,7 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
         with: {arch: amd64_arm64}
       - run: python -m pip install build
-      - run: python tools/build_release.py --output release
+      - run: python tools/build_release.py --validation --output release
         env: {FISICA_BUILD_PLATFORM: win_arm64}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -53,5 +92,5 @@ jobs:
           path: |
             release/**/*-win_arm64.whl
             release/**/fisica-core-*-win_arm64.zip
-            release/**/delivery-manifest.json
+            release/**/artifact-manifest.json
           retention-days: 14

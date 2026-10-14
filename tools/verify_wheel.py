@@ -71,6 +71,14 @@ with warnings.catch_warnings(record=True) as notices:
     warnings.simplefilter('always')
     ATCommands.build_command(0x22,0x53,0,1)
     assert len(notices)==1 and issubclass(notices[0].category,FisicaDeprecationWarning)
+# Entitlement is status only: offline, nothing is blocked and no network is touched.
+assert sdk.entitlement_status()['base_license']=='granted' and sdk.entitlement_status()['contract_state']=='unverified'
+with warnings.catch_warnings():
+    warnings.simplefilter('ignore')
+    assert sdk.configure_entitlement(token='not a token',storage=None)['last_import']=='rejected_format'
+    status=sdk.configure_entitlement(token=os.environ['FISICA_VERIFY_TOKEN'],storage=None)
+assert (status['base_license'],status['company'],status['contract_state'])==('granted','acme','active')
+assert 'distribution' not in core.version_info()
 print('Installed wheel verified:',core.version_info())
 if os.environ.get('FISICA_VERIFY_GUI')=='1':
     import numpy as np
@@ -95,8 +103,10 @@ def verify_wheel(path, extras=None):
         python = root / 'venv' / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
         requirement = str(path) + (f'[{extras}]' if extras else '')
         subprocess.run([str(python),'-m','pip','install','--disable-pip-version-check',requirement],check=True,cwd=root)
+        import json
         import os
         environment = dict(os.environ)
+        environment['FISICA_VERIFY_TOKEN'] = json.loads((Path(__file__).resolve().parents[1] / 'tests' / 'fixtures' / 'entitlement.json').read_text())['valid']
         if extras == 'gui':
             environment.update(FISICA_VERIFY_GUI='1', QT_QPA_PLATFORM='offscreen')
         subprocess.run([str(python),'-I','-c',SMOKE],check=True,cwd=root,env=environment,timeout=60)

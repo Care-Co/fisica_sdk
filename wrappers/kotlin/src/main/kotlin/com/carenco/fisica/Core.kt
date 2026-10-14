@@ -15,8 +15,21 @@ internal object Bridge {
     external fun poll(handle: Long, metadata: IntArray): ByteArray?
     external fun decode(bytes: ByteArray): DoubleArray
     external fun analyze(matrices: DoubleArray, weights: DoubleArray, rows: Int, cols: Int): DoubleArray?
+    external fun analyzePackets(packets: ByteArray, count: Int): DoubleArray?
+    external fun responsePayload(packet: ByteArray): ByteArray
+    external fun entitlementCreate(): Long
+    external fun entitlementDestroy(handle: Long)
+    external fun entitlementImport(handle: Long, token: ByteArray, now: Long): Int
+    external fun entitlementStatus(handle: Long, now: Long): LongArray
+    external fun entitlementText(handle: Long, field: Int): ByteArray
+    external fun entitlementExport(handle: Long): ByteArray
+    external fun entitlementRestore(handle: Long, state: ByteArray)
 }
-data class Measurement(val raw: DoubleArray, val display: DoubleArray, val metrics: DoubleArray) {
+/**
+ * One decoded measurement. [packet] is the 645 bytes as received, [raw] the 29x22 sensor
+ * grid and [display] the processed 29x29 grid used for analysis. Relative units, not kPa.
+ */
+class Measurement(val packet: ByteArray, val raw: DoubleArray, val display: DoubleArray, val metrics: DoubleArray) {
     val weight get() = metrics[0]
     val batteryValid get() = false
 }
@@ -40,7 +53,19 @@ class FisicaCore(libraryPath: String? = null, warn: (String)->Unit = { System.er
     }
     fun decode(bytes: ByteArray): Measurement {
         val values=Bridge.decode(bytes)
-        return Measurement(values.copyOfRange(0,638),values.copyOfRange(638,1479),values.copyOfRange(1479,1481))
+        return Measurement(bytes.copyOf(),values.copyOfRange(0,638),values.copyOfRange(638,1479),values.copyOfRange(1479,1481))
+    }
+    /** Payload bytes of a fixed or variable-length command response. */
+    fun responsePayload(packet: ByteArray): ByteArray = Bridge.responsePayload(packet)
+    /**
+     * Weight and foot dimensions from measurement packets as received: [weight_kg, left_width_cm,
+     * left_length_cm, right_width_cm, right_length_cm], or null without a stable measurement.
+     * The analysis itself runs in the shared core.
+     */
+    fun analyzePackets(packets: List<ByteArray>): DoubleArray? {
+        require(packets.isNotEmpty() && packets.all { it.size==645 }) { "Expected 645-byte measurement packets" }
+        val joined=ByteArray(packets.size*645); packets.forEachIndexed { i,p -> p.copyInto(joined,i*645) }
+        return Bridge.analyzePackets(joined,packets.size)
     }
     fun analyze(matrices: DoubleArray,weights: DoubleArray,rows: Int,cols: Int): DoubleArray? {
         require(rows>0 && cols>0 && weights.size.toLong()*rows*cols==matrices.size.toLong())

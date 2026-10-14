@@ -13,7 +13,10 @@ run in the shared core. Host threads, transport reopening and callbacks stay in 
 - `fisica_sdk/native.py`: Python ctypes binding and data conversion.
 - `fisica_sdk/parser.py`, `analyzer.py`, `device.py`: legacy API adapters.
 - `wrappers/flutter`: Dart FFI package for a future Flutter host application's OS transport.
-- USB/BLE connections remain Python OS adapters. No server or firmware changes.
+- USB/BLE connections are OS adapters in each wrapper. No firmware changes.
+- `native/src/fisica_entitlement.cpp`: runtime entitlement context (signature check and status,
+  no usage record); see [entitlement](entitlement.md). Vendored Monocypher lives in
+  `native/src/third_party/` and is compiled into the private core only.
 - GUI/heatmap drawing is optional, public wrapper presentation code.
 
 The core does not require OpenCV, NumPy, Python or Qt. It requires the platform's C++
@@ -26,12 +29,12 @@ network or device access. Online package-update checks are explicitly opt-in.
 
 | Component | Authoritative file | Current version |
 |---|---|---|
-| SDK release | `sdk-release.json` | 2.3.0 |
-| Native core | `sdk-release.json` | 1.3.0 |
+| SDK release | `sdk-release.json` | 2.4.0 |
+| Native core | `sdk-release.json` | 1.4.0 |
 | ABI | `sdk-release.json` | 1.3 |
-| Python wrapper / PyPI package | `wrappers/python/wrapper.json` | 2.3.0 |
-| Flutter wrapper / Dart package | `wrappers/flutter/wrapper.json` | 0.4.0 |
-| Swift/Kotlin/C# wrappers | `wrappers/{swift,kotlin,dotnet}/wrapper.json` | 0.1.0 |
+| Python wrapper / PyPI package | `wrappers/python/wrapper.json` | 2.4.0 |
+| Flutter wrapper / Dart package | `wrappers/flutter/wrapper.json` | 0.5.0 |
+| Swift/Kotlin/C# wrappers | `wrappers/{swift,kotlin,dotnet}/wrapper.json` | 0.2.0 |
 | Result schema | `sdk-release.json` | 1 |
 
 Use semantic versioning per component. A wrapper patch release does not require a
@@ -107,9 +110,12 @@ architecture tags. Source distributions intentionally fail; use `build --wheel`.
 Keep all build output and source-baseline backups internal. Do not publish `native/`,
 `tools/`, `.build/`, samples or tests. New releases use the Fisica Scale SDK License
 for wrappers and core; rights to previously licensed source are not revoked.
-Commercial use requires a company/term agreement; operation remains offline without
-an activation key or expiry lock. `--partner-id` creates a delivery identifier embedded
-in native metadata and a hashed delivery manifest. Keep it as an internal delivery record.
+No company, contract or delivery identifier is compiled in: one binary per platform,
+architecture and core version serves every company, and the release tools write a
+hashed `artifact-manifest.json`. The core trusts the server public keys listed in
+`native/entitlement-keys.json`. While that list holds a test key, packaging tools
+stop unless `--validation` is passed, so a customer package cannot trust a key whose
+secret is in this repository. Runtime entitlement never locks a feature.
 
 ## Measurement compatibility and limits
 
@@ -226,4 +232,18 @@ cancellation, link recovery, duration, per-handle isolation and buffer canaries.
 Final session release evidence: [session core verification](session-core-verification.md).
 
 ABI 1.3 adds the shared offline wrapper-policy checker and status 12.
+ABI 1.4 adds the runtime entitlement context and `fisica_core_analyze_packets`.
+
+## Shared codes and binding verification
+
+`python tools/sync_binding_metadata.py` generates, from the public C header, the
+status/session/entitlement codes for Swift, Kotlin, C#, Dart and Python, the default
+BLE profile from `wrappers/ble-profile.json`, and the Apple podspec symbol list.
+A test fails when a generated file is stale. Do not edit generated files.
+
+`python tools/verify_bindings.py swift kotlin dotnet dart` builds a host core and runs
+each binding's contract: shared session vectors plus connect, measure, stop, report
+and entitlement through a Mock transport. Set `DART`, `DOTNET`, `FISICA_GRADLE_LIB`
+or `ANDROID_SDK_ROOT` when the tools are not on the default paths. These runs need no
+hardware and are not device, Android/iOS runtime or real Windows evidence.
 Multiplatform builds/bindings and exact verification limits: [platform support](platform-support.md).

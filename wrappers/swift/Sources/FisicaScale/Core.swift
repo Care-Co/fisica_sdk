@@ -2,10 +2,14 @@ import Foundation
 import CFisica
 
 public struct FisicaError: Error { public let code: Int32; public let message: String }
-private func check(_ status: Int32) throws {
+func check(_ status: Int32) throws {
     if status != 0 { throw FisicaError(code: status, message: String(cString: fisica_core_error_message(status))) }
 }
+/// One decoded measurement. `packet` is the 645 bytes as received, `raw` the 29x22
+/// sensor grid and `display` the processed 29x29 grid used for analysis.
+/// Values are relative sensor units, not calibrated kPa.
 public struct Measurement {
+    public let packet: [UInt8]
     public let raw: [Double], display: [Double], metrics: [Double]
     public var weight: Double { metrics[0] }
     public var batteryValid: Bool { false }
@@ -33,7 +37,24 @@ public final class FisicaCore {
     public func decode(_ bytes: [UInt8]) throws -> Measurement {
         var raw = [Double](repeating: 0, count: 638), display = [Double](repeating: 0, count: 841), metrics = [Double](repeating: 0, count: 2)
         try check(fisica_core_decode_packet(bytes, UInt32(bytes.count), &raw, 638, &display, 841, &metrics, 2))
-        return Measurement(raw: raw, display: display, metrics: metrics)
+        return Measurement(packet: bytes, raw: raw, display: display, metrics: metrics)
+    }
+    /// Payload bytes of a fixed or variable-length command response.
+    public func responsePayload(_ packet: [UInt8]) throws -> [UInt8] {
+        var output = [UInt8](repeating: 0, count: 4096), length: UInt32 = 0
+        try check(fisica_core_response_payload(packet, UInt32(packet.count), &output, UInt32(output.count), &length))
+        return Array(output.prefix(Int(length)))
+    }
+    /// Weight and foot dimensions from measurement packets as received: `[weight_kg,
+    /// left_width_cm, left_length_cm, right_width_cm, right_length_cm]`, or nil without
+    /// a stable measurement. The analysis itself runs in the shared core.
+    public func analyzePackets(_ packets: [[UInt8]]) throws -> [Double]? {
+        guard !packets.isEmpty, packets.allSatisfy({ $0.count == 645 }) else {
+            throw FisicaError(code: 1, message: "Expected 645-byte measurement packets")
+        }
+        var result = [Double](repeating: 0, count: 5)
+        let status = fisica_core_analyze_packets(packets.flatMap { $0 }, UInt32(packets.count), &result, 5)
+        if status == 3 { return nil }; try check(status); return result
     }
     public func analyze(_ matrices: [Double], weights: [Double], rows: UInt32, cols: UInt32) throws -> [Double]? {
         guard UInt64(weights.count) * UInt64(rows) * UInt64(cols) == matrices.count else {

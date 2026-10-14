@@ -172,7 +172,7 @@ def test_unverified_firmware_warns_and_keeps_connection_usable():
     try:
         with pytest.warns(FisicaFirmwareWarning) as notices:
             sdk.connect({'id': 'mock', 'type': 'Serial'}, transport=transport)
-        assert notices[0].message.code == 'FIRMWARE_UNVERIFIED'
+        assert next(n for n in notices if n.category is FisicaFirmwareWarning).message.code == 'FIRMWARE_UNVERIFIED'
         assert sdk.get_device_info()['firmware_version'] == '2.0.1'
         assert not sdk.get_device_info()['firmware_verified']
         sdk.set_zero()

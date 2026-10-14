@@ -1,13 +1,13 @@
 {
   "name": "flutter",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "core": {
-    "minimum": "1.2.0",
+    "minimum": "1.4.0",
     "maximum_exclusive": "2.0.0"
   },
   "abi": {
     "major": 1,
-    "minimum_minor": 2
+    "minimum_minor": 4
   },
   "result_schema_versions": [
     1

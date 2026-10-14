@@ -66,7 +66,7 @@ installed and smoke-tested on Python 3.11. The **same wheel** is installed
 on Python 3.9, 3.11, 3.13 and 3.14 in separate jobs.
 
 The workflow is restricted to the private source repository and internal PRs.
-It uploads only the explicit audited Windows wheel/native ZIP and delivery manifest paths, retaining
+It uploads only the explicit audited Windows wheel/native ZIP and artifact manifest paths, retaining
 them for 14 days. It does not upload the checkout, internal build tree or logs
 as distribution archives. It does not publish to PyPI or create a GitHub Release.
 Actions use pinned commit revisions. Pushing or triggering this workflow is a
@@ -93,24 +93,23 @@ metadata are copied, never neighboring sources/sidecars. Use it only for a DLL
 built from the matching private release. Always run `tools/verify_wheel.py` on
 Windows after packaging to confirm runtime compatibility and versions.
 
-## License and partner delivery
+## License and common binary
 
 Public wrappers and private compiled core use the Fisica Scale SDK License. The
 wheel uses `License-Expression: LicenseRef-Fisica-Scale-SDK` and includes the license;
-core and Flutter ZIPs also include it. Commercial business use requires a
-company/term agreement. Runtime is offline, with no activation key, usage telemetry,
-or technical expiry lock. Third-party libraries retain their own licenses; PyQt5
-GUI redistribution must meet its separate GPL/commercial conditions.
+core and Flutter ZIPs also include it. The packaged text is Version 2.0, written to the
+policy of 2026-10-14 and marked as a draft for review ([review notes](license-review.md)). Third-party libraries retain their own licenses; PyQt5 GUI redistribution
+must meet its separate GPL/commercial conditions.
 
 ```sh
-python tools/build_release.py --output release --partner-id partner-example
+python tools/build_release.py --validation --output release
 ```
 
-Partner releases use a fresh delivery ID and a separate directory. `--distribution-id`
-can specify an existing delivery identifier for a deliberate rebuild. Native policy
-embeds the partner/delivery IDs; `version_info()` exposes them. Preserve identifiers
-and license notices on redistribution. Keep `delivery-manifest.json` and its artifact
-hashes in the internal delivery record. IDs do not prevent binary editing or authenticate devices.
+Every company receives the same wheel and DLL: no partner or delivery identifier is
+compiled in, and `artifact-manifest.json` records the artifact hashes. Company and
+contract information is supplied at runtime ([entitlement](entitlement.md)) and never
+blocks a feature. `--validation` is required while the core trusts only the test
+signing key; such builds are for QA, not for customers.
 
 ## Runtime and hardware-free checks
 

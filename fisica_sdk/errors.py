@@ -46,6 +46,10 @@ class FisicaFirmwareWarning(UserWarning):
     code = 'FIRMWARE_UNVERIFIED'
 
 
+class FisicaEntitlementWarning(UserWarning):
+    """Entitlement status notice. Never a technical error and never blocks a feature."""
+
+
 class FisicaCommandError(FisicaRuntimeError):
     """Command result: stable SDK code plus the Scale's distinct 16-bit code."""
     def __init__(self, event):

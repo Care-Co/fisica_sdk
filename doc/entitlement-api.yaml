@@ -1,0 +1,84 @@
+openapi: 3.0.3
+info:
+  title: Fisica SDK entitlement API
+  version: 0.1.0-draft
+  description: |
+    Contract between the SDK and the Care&Co server (policy of 2026-10-14). DRAFT: the server
+    is not implemented; `tools/entitlement_dev.py` is the reference mock.
+
+    The SDK calls one endpoint: refresh. There is no usage, activity or telemetry endpoint.
+    Company registration, terms acceptance, contract administration and issuing the first
+    token (also downloadable as the offline file) happen in Care&Co's own registration flow,
+    authenticated as a company user; they are not SDK calls and are not specified here.
+
+    Rules the server must keep:
+    - No SDK usage tracking. The server does not receive, derive or store whether the SDK was
+      used, when it was last used, use after a contract ended, counts of measurements or API
+      calls, or anything per application, installation or device.
+    - A refresh request is not a usage record. Do not present the last confirmation time as the
+      last time the SDK was used, and do not infer real use or contract compliance from refresh
+      history: offline use and use without refreshing never reach the server.
+    - The company and contract are taken ONLY from the verified bearer token. Identifiers in a
+      request body are never trusted.
+    - The token is an identifier that ships inside partner apps. Treat it as public: it authorizes
+      nothing except refreshing itself. Rate-limit.
+    - Nothing here blocks the SDK. A refused or failed request only leaves the SDK with older
+      information; the SDK never treats a network failure as an expiry or a revocation.
+    - Three facts stay separate: the base SDK license (no date expiry, not represented here),
+      the confirmation time (`verified_at`/`refresh_by`, 30 days at most) and the contract
+      (`contract_start`/`contract_end`/`revoked_at`). Never merge them into one `expires_at`.
+    - Ending a contract ends that contract's special rights only. It does not revoke the base SDK
+      license, hardware ownership or device registration, and must not be modelled as a
+      subscription/payment state of NONE or a device state of REVOKED.
+    - The signing private key (Ed25519) stays on the server. The SDK embeds public keys by `kid`.
+servers:
+  - url: https://{host}
+    variables: {host: {default: sdk.example.invalid, description: Not decided}}
+security:
+  - entitlementToken: []
+paths:
+  /sdk/v1/entitlement/refresh:
+    post:
+      summary: Confirm the token's contract and return newly signed entitlement information.
+      description: |
+        Accepts any token whose signature verifies, including one older than 30 days: an old
+        token is the normal input. The response is signed with `verified_at` = server time now.
+        A revoked or ended contract is answered with 200 and a token that says so
+        (`revoked_at` / `contract_end`); only then may the SDK show "revoked".
+        The request body is an empty object. Anything else is refused, so no activity or
+        device information can be sent through this endpoint.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false}}}}
+      responses:
+        '200':
+          description: Newly signed entitlement information.
+          content: {application/json: {schema: {type: object, required: [token], properties: {token: {$ref: '#/components/schemas/Token'}}}}}
+        '400': {description: Body is not an empty object., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '401': {description: Missing token, bad signature, unknown key or unknown contract., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '503': {description: Temporarily unavailable. The SDK keeps what it had.}
+components:
+  securitySchemes:
+    entitlementToken: {type: http, scheme: bearer, bearerFormat: FSE1}
+  schemas:
+    Token:
+      type: string
+      maxLength: 4096
+      description: |
+        `FSE1.<base64url(payload)>.<base64url(signature)>`, no padding. The signature is
+        Ed25519 (RFC 8032) over the ASCII bytes `FSE1.<base64url(payload)>`.
+        The same string is the content of the offline entitlement file.
+        Payload: one flat JSON object, ASCII, no string escapes, members:
+        - `v` (integer, required): 1
+        - `kid` (string, required): signing key id known to the SDK build
+        - `company`, `contract` (string, required): `[A-Za-z0-9_.:-]{1,64}`; `contract` is the
+          contract reference number, also issued for a basic-terms acceptance
+        - `kind` (string, required): `basic` (registration + basic terms) or `special` (separate agreement)
+        - `verified_at` (integer, required): time the server confirmed the contract, Unix seconds.
+          It is not a time of SDK use.
+        - `refresh_by` (integer, required): > `verified_at`; the SDK caps it at `verified_at` + 30 days
+        - `contract_start`, `contract_end` (integer, optional): contract dates; omit when none
+        - `revoked_at` (integer, optional): present only when the server revoked the contract
+        - `grants` (string, optional): comma list such as `oem,rebrand,resale`; at most 256 characters
+        Unknown members are ignored; duplicate members are rejected.
+    Error:
+      type: object
+      properties: {error: {type: string}}
