@@ -23,7 +23,10 @@ await client.connect(link: FisicaLink.ble);
 - Each adapter declares its link (`FisicaLinkTransport`), so the client rejects a
   mismatched `link` before anything is sent.
 - Native binaries are supplied by the sibling core package. There is no customer
-  build of private Fisica code. No license token or network activation is required.
+  build of private Fisica code. Without an SDK key the core runs in basic mode (at
+  most one frame a second, no raw data; weight and foot size work). For full mode pass
+  a `FisicaEntitlement` holding an activated key as `FisicaClient(..., entitlement:)`;
+  see the core package README.
 - Permissions and choosing a device remain app responsibilities. The public
   sample prepares host settings and requests Android permissions.
 - No mobile USB, Wi-Fi, Web or automatic reconnect. After a link failure call

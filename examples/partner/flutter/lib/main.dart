@@ -10,6 +10,14 @@ import 'package:fisica_flutter/fisica_flutter.dart';
 
 void main() => runApp(const MaterialApp(home: ScalePage()));
 
+/// SDK key from the developer portal, e.g. `flutter run
+/// --dart-define=FISICA_SDK_KEY=FSE1...`. Without one the SDK runs in basic mode.
+const sdkKey = String.fromEnvironment('FISICA_SDK_KEY');
+const licenseEndpoint = String.fromEnvironment(
+  'FISICA_LICENSE_ENDPOINT',
+  defaultValue: 'https://developer.fisicahealthcare.com',
+);
+
 class ScalePage extends StatefulWidget {
   const ScalePage({super.key});
   @override
@@ -18,11 +26,42 @@ class ScalePage extends StatefulWidget {
 
 class _ScalePageState extends State<ScalePage> {
   String status = 'Choose USB, BLE or the hardware-free demo';
+  String license = 'License: not loaded';
   bool busy = false;
   List<({String id, String name, bool ble})> devices = [];
   FisicaClient? client;
+  FisicaEntitlement? entitlement;
+  StreamSubscription<EntitlementStatus>? licenseChanges;
   void show(String message) {
     if (mounted) setState(() => status = message);
+  }
+
+  static String describe(EntitlementStatus current) => current.isFull
+      ? 'License: full mode (key ${current.key})'
+      : 'License: basic mode. ${current.message ?? ''}'
+            '${current.activationCode == null ? '' : '\nActivation code: ${current.activationCode}'}';
+
+  void showLicense(EntitlementStatus current) {
+    if (mounted) setState(() => license = describe(current));
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    try {
+      // One license for the app. Online, a new key is activated for this app
+      // or PC and renewed automatically. Pass storageDirectory (for example
+      // from path_provider) to keep the activated key across launches.
+      final current = entitlement = FisicaEntitlement(
+        FisicaCore.platform(),
+        endpoint: licenseEndpoint,
+      );
+      licenseChanges = current.changes.listen(showLicense);
+      if (sdkKey.isNotEmpty) current.importToken(sdkKey);
+      license = describe(current.status());
+    } catch (error) {
+      license = 'License: $error';
+    }
   }
 
   Future<void> run(Future<void> Function() task) async {
@@ -71,8 +110,13 @@ class _ScalePageState extends State<ScalePage> {
     int link, {
     bool mock = false,
   }) async {
-    final core = FisicaCore.platform();
-    final current = client = FisicaClient(core, transport);
+    final core = entitlement?.core ?? FisicaCore.platform();
+    // The client applies the license to its session (full or basic mode).
+    final current = client = FisicaClient(
+      core,
+      transport,
+      entitlement: entitlement,
+    );
     final events = current.events.listen(
       (_) {},
       onError: (Object error) => show('$error'),
@@ -84,10 +128,15 @@ class _ScalePageState extends State<ScalePage> {
       await Future<void>.delayed(const Duration(seconds: 5));
       await current.stop();
       final report = current.report();
+      // Basic mode: at most one frame a second, but weight and foot size
+      // come from every packet.
       show(
         report == null
             ? 'No stable result; check load and received frames'
-            : '${mock ? "Demo: " : ""}${report.weight} kg; ${report.frames.length} frames',
+            : '${mock ? "Demo: " : ""}${report.weight} kg; '
+                  'feet ${report.leftLength.toStringAsFixed(1)} / '
+                  '${report.rightLength.toStringAsFixed(1)} cm; '
+                  '${report.frames.length} frames',
       );
     } finally {
       try {
@@ -102,7 +151,13 @@ class _ScalePageState extends State<ScalePage> {
   @override
   void dispose() {
     final current = client;
-    if (current != null) unawaited(current.close().catchError((Object _) {}));
+    final license = entitlement;
+    unawaited(licenseChanges?.cancel());
+    unawaited(
+      (current?.close() ?? Future<void>.value())
+          .catchError((Object _) {})
+          .whenComplete(() => license?.close()),
+    );
     super.dispose();
   }
 
@@ -113,6 +168,7 @@ class _ScalePageState extends State<ScalePage> {
       padding: const EdgeInsets.all(16),
       child: Column(
         children: [
+          Text(license),
           Text(status),
           Wrap(
             spacing: 8,

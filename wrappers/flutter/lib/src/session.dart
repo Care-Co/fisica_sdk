@@ -39,8 +39,13 @@ typedef _PollNative =
     );
 typedef _PollDart =
     int Function(Pointer<Void>, Pointer<Uint32>, int, Pointer<Uint8>, int);
+typedef _LicenseNative = Int32 Function(Pointer<Void>, Pointer<Void>, Uint64, Uint64);
+typedef _LicenseDart = int Function(Pointer<Void>, Pointer<Void>, int, int);
+typedef _SessionAnalyzeNative = Int32 Function(Pointer<Void>, Pointer<Double>, Uint32);
+typedef _SessionAnalyzeDart = int Function(Pointer<Void>, Pointer<Double>, int);
 
 /// Codes and payload match fisica_core.h. No platform/device policy here.
+/// A measurement event's payload is read with [FisicaCore.frameFromEvent].
 class FisicaSessionEvent {
   final int kind, state, status, deviceError, operation, header, type;
   final Uint8List payload;
@@ -57,6 +62,11 @@ class FisicaSessionEvent {
 /// Sans-IO native session, owned by one host/isolate. Always close explicitly.
 /// Supply elapsed monotonic milliseconds, tick regularly and drain events.
 /// The host sends TRANSMIT bytes, feeds received bytes and handles RECONNECT.
+///
+/// Until [license] copies a full-mode license into it, the session is in
+/// basic mode: it hands out at most one measurement frame per
+/// [FisicaLimit.basicFrameIntervalMs], without the raw grid and packet.
+/// Every packet still counts toward [analyze].
 class FisicaSession {
   final FisicaCore core;
   Pointer<Void> _handle = nullptr;
@@ -160,11 +170,11 @@ class FisicaSession {
   FisicaSessionEvent? poll() {
     if (_handle == nullptr) throw FisicaStateError(6, 'Session is closed');
     final meta = calloc<Uint32>(8);
-    final payload = calloc<Uint8>(4102);
+    final payload = calloc<Uint8>(FisicaLimit.eventBytes);
     try {
       final status = core._library.lookupFunction<_PollNative, _PollDart>(
         'fisica_core_session_poll',
-      )(_handle, meta, 8, payload, 4102);
+      )(_handle, meta, 8, payload, FisicaLimit.eventBytes);
       if (status == 3) return null;
       core._check(status);
       state = meta[1];
@@ -175,6 +185,41 @@ class FisicaSession {
     } finally {
       calloc.free(meta);
       calloc.free(payload);
+    }
+  }
+
+  /// Copy the license decision of [entitlement] into this session; null
+  /// returns it to basic mode. A full-mode decision lasts until the key or
+  /// contract would end, on the session's clock. Call it again after
+  /// importing, activating or renewing a key ([FisicaClient] does this).
+  void license(FisicaEntitlement? entitlement, {required int nowMs}) {
+    _validateTime(nowMs);
+    final context = entitlement?._open ?? nullptr;
+    final nowS =
+        entitlement?._now() ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    core._check(
+      core._library.lookupFunction<_LicenseNative, _LicenseDart>(
+        'fisica_core_session_license',
+      )(_handle, context, nowS, nowMs),
+    );
+  }
+
+  /// Weight and foot size from every measurement packet since the last
+  /// START, in any mode: `[weight_kg, left_width_cm, left_length_cm,
+  /// right_width_cm, right_length_cm]`, or null without a stable measurement.
+  List<double>? analyze() {
+    if (_handle == nullptr) throw FisicaStateError(6, 'Session is closed');
+    final output = calloc<Double>(5);
+    try {
+      final status = core._library
+          .lookupFunction<_SessionAnalyzeNative, _SessionAnalyzeDart>(
+            'fisica_core_session_analyze',
+          )(_handle, output, 5);
+      if (status == FisicaStatus.noResult) return null;
+      core._check(status);
+      return output.asTypedList(5).toList();
+    } finally {
+      calloc.free(output);
     }
   }
 

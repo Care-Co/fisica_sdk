@@ -12,6 +12,16 @@ void main() {
       'Set FISICA_CORE_TEST_LIBRARY to a trusted native test binary',
     );
   final core = FisicaCore.open(path);
+  // Shared vectors plus keys activated for this PC, from tools/verify_bindings.py.
+  final vectorsPath = Platform.environment['FISICA_LICENSE_VECTORS'];
+  if (vectorsPath == null)
+    throw StateError('Set FISICA_LICENSE_VECTORS to the license vectors JSON');
+  final vectors =
+      jsonDecode(File(vectorsPath).readAsStringSync()) as Map<String, dynamic>;
+  // Decoding grids is raw data: it needs full mode.
+  final full = FisicaEntitlement(core, clock: () => vectors['now'] as int);
+  full.importToken(vectors['full'] as String);
+  tearDownAll(full.close);
   test('API deprecation lifecycle uses the wrapper version', () {
     final manifest = Map<String, dynamic>.from(core.wrapper);
     // Fixed version: this lifecycle must not depend on the current release.
@@ -56,7 +66,7 @@ void main() {
     expect(core.versionInfo['core_version'], sdk['core_version']);
     expect(core.versionInfo.containsKey('distribution'), isFalse);
     expect(core.versionInfo['entitlement']['max_refresh_days'], 30);
-    expect(core.versionInfo['abi_major'], 1);
+    expect(core.versionInfo['abi_major'], 2);
   });
   test('same core decodes measurement and commands', () {
     final packet = Uint8List(645);
@@ -64,10 +74,15 @@ void main() {
     packet[639] = packet[644] = 0x0f;
     packet[641] = 2;
     packet[642] = 193;
-    final result = core.decodePacket(packet);
+    expect(
+      () => core.decodePacket(packet),
+      throwsA(isA<FisicaLicenseError>().having((e) => e.code, 'code', 13)),
+    );
+    final result = core.decodePacket(packet, license: full);
     expect(result.weight, 70.5);
-    expect(result.rawGrid.length, 29);
-    expect(result.rawGrid.first.length, 22);
+    expect(result.rawGrid!.length, 29);
+    expect(result.rawGrid!.first.length, 22);
+    expect(result.rawData, packet);
     expect(result.sensorMatrix.first.length, 29);
     expect(result.batteryValid, isFalse);
     expect(core.command('START_CONTINUOUS_MEASUREMENT'), [
@@ -119,6 +134,7 @@ void main() {
     for (final fixture in fixtures) {
       final result = core.decodePacket(
         fromHex(fixture['packet_hex'] as String),
+        license: full,
       );
       final values = result.sensorMatrix.expand((row) => row).toList();
       final data = ByteData(values.length * 8);
@@ -172,8 +188,11 @@ void main() {
       ),
       throwsStateError,
     );
+    // A deprecation window like the ones minor releases open (3.0.0 has none).
+    final window = jsonDecode(jsonEncode(core.policy)) as Map<String, dynamic>;
+    window['sdk_support']['minimum'] = '1.0.0';
     verifyCompatibility(
-      policy: core.policy,
+      policy: window,
       wrapper: core.wrapper,
       sdkVersion: '1.5.0',
       coreVersion: core.coreVersion,
@@ -187,7 +206,7 @@ void main() {
         wrapper: core.wrapper,
         sdkVersion: core.sdkVersion,
         coreVersion: core.coreVersion,
-        abiVersion: 131072,
+        abiVersion: 3 << 16,
         onDeprecation: warnings.add,
       ),
       throwsStateError,

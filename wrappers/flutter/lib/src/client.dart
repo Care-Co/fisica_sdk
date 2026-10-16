@@ -39,23 +39,34 @@ class FisicaClient {
   int _generation = 0;
   Future<void>? _closing;
 
-  /// Optional company/contract context. It only produces status warnings;
-  /// nothing is recorded and nothing is gated.
+  /// The SDK key's license, applied to the session before every start, every
+  /// 30 seconds and whenever it changes. Without it, or without a key
+  /// activated for this app or PC, the session runs in basic mode: at most
+  /// one frame a second without the raw grid or packet, while [report] still
+  /// analyzes every packet. Nothing about the use is recorded.
   final FisicaEntitlement? entitlement;
+  StreamSubscription<EntitlementStatus>? _licenseChanges;
+  int _licenseApplied = 0;
+  // The last applied license hands out every frame; the current measurement
+  // has had such a license throughout.
+  bool _fullRate = false, _everyFrame = false;
   final _frames = ListQueue<DecodedMeasurement>();
   int _maxFrames = FisicaLimit.analysisFrames;
   int _droppedFrames = 0;
   int? _battery;
   FisicaClient(FisicaCore core, FisicaTransport transport, {this.entitlement})
     : session = FisicaSession(core),
-      _transport = transport;
+      _transport = transport {
+    _licenseChanges = entitlement?.changes.listen((_) => _applyLicense());
+  }
   Stream<FisicaSessionEvent> get events => _events.stream;
 
   /// Transport of the current or most recent link.
   FisicaTransport get transport => _transport;
 
   /// Frames of the current measurement. [start] clears them; a reconnect keeps
-  /// them. Only the latest [maxFrames] frames are kept.
+  /// them. Only the latest [maxFrames] frames are kept. In basic mode the core
+  /// hands out at most one frame a second, without `rawGrid` and `rawData`.
   List<DecodedMeasurement> get frames => List.unmodifiable(_frames);
 
   /// Oldest frames dropped beyond [maxFrames] since the last [start] or [clearFrames].
@@ -91,9 +102,13 @@ class FisicaClient {
     }
   }
 
-  /// Analyze the collected frames in the shared core: weight and left/right
-  /// foot width and length in nominal centimetres, or null without a stable
-  /// measurement. [battery] is the last [readBattery] reading, or null.
+  /// Analyze the current measurement in the shared core: weight and
+  /// left/right foot width and length in nominal centimetres, or null without
+  /// a stable measurement. [battery] is the last [readBattery] reading, or null.
+  ///
+  /// When the measurement ran in full mode the collected frames are analyzed;
+  /// otherwise the session analyzes every packet it received since [start]
+  /// (weight and foot size are basic-mode results).
   ({
     double weight,
     double leftWidth,
@@ -106,9 +121,13 @@ class FisicaClient {
   report() {
     if (_frames.isEmpty) return null;
     entitlement?.checkStatus();
-    final result = session.core.analyzePackets(
-      _frames.map((frame) => frame.rawData).toList(),
-    );
+    final everyPacket =
+        _everyFrame && _frames.every((frame) => frame.rawData != null);
+    final result = everyPacket
+        ? session.core.analyzePackets([
+            for (final frame in _frames) frame.rawData!,
+          ])
+        : session.analyze();
     if (result == null) return null;
     return (
       weight: result[0],
@@ -122,6 +141,27 @@ class FisicaClient {
   }
 
   int get now => _clock.elapsedMilliseconds;
+
+  /// Copy the current license into the session. A license that cannot be
+  /// read leaves the session in basic mode. Never throws.
+  void _applyLicense() {
+    if (_closed) return;
+    final license = entitlement;
+    var fullRate = false;
+    try {
+      session.license(license, nowMs: now);
+      fullRate = license?.fullRate ?? false;
+    } catch (_) {
+      try {
+        session.license(null, nowMs: now);
+      } catch (_) {
+        // Session closed; nothing to apply.
+      }
+    }
+    _fullRate = fullRate;
+    if (!fullRate) _everyFrame = false;
+    _licenseApplied = now;
+  }
 
   Future<void> _unlink() {
     _linked = false;
@@ -172,7 +212,7 @@ class FisicaClient {
         _waiters.remove(event.operation)?.complete(event);
       }
       if (event.kind == FisicaSessionEventKind.measurement) {
-        _frames.add(session.core.decodePacket(event.payload));
+        _frames.add(session.core.frameFromEvent(event));
         _trimFrames();
       }
       _events.add(event);
@@ -283,6 +323,11 @@ class FisicaClient {
       _timer ??= Timer.periodic(const Duration(milliseconds: 20), (_) {
         try {
           session.tick(now);
+          if (now - _licenseApplied >= 30000) {
+            // Picks up renewals, activation and the end of full mode.
+            entitlement?.checkStatus();
+            _applyLicense();
+          }
           _drain();
         } catch (error) {
           _failure(error, sendFailure: true);
@@ -305,14 +350,19 @@ class FisicaClient {
   }
 
   /// Start measuring; [duration] null measures until [stop]. Frames of the
-  /// previous measurement are cleared once the core accepts the start.
+  /// previous measurement are cleared once the core accepts the start. The
+  /// current license is applied to the session first.
   Future<FisicaSessionEvent> start({Duration? duration}) {
     entitlement?.checkStatus();
+    _applyLicense();
     return _checked(
       _action(
         FisicaSessionAction.start,
         duration?.inMilliseconds ?? -1,
-        accepted: clearFrames,
+        accepted: () {
+          clearFrames();
+          _everyFrame = _fullRate;
+        },
       ),
     );
   }
@@ -354,6 +404,7 @@ class FisicaClient {
     } finally {
       _closed = true;
       _timer?.cancel();
+      await _licenseChanges?.cancel();
       await _unlink();
       for (final waiter in _waiters.values) {
         waiter.completeError(
