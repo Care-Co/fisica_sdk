@@ -1,9 +1,10 @@
 # 다중 플랫폼·언어 SDK 지원
 
-2026-10-13 구현 기준: SDK/Python 2.4.0, core 1.4.0, ABI 1.4,
-Dart/Flutter core 0.5.0, Flutter transport 0.1.0, Swift/Kotlin/C# 각각 0.2.0. 펌웨어 변경 없음.
+2026-10-17 구현 기준: SDK/Python 3.0.0, core 2.0.0, C ABI 2.0(라이선스: 기본·전체 모드),
+Dart/Flutter core 0.6.0, Flutter transport 0.1.0, Swift/Kotlin/C# 각각 0.3.0. 펌웨어 변경 없음.
+아래 표의 테스트 수 등 일부 검증 기록은 2026-10-13 시점 값이다.
 코어 소스는 비공개이며 모든 플랫폼이 같은 C++17 코어를 C ABI로 사용한다.
-회사가 달라도 플랫폼·아키텍처·코어 버전이 같으면 바이너리가 같다([확인 정보](entitlement.md)).
+회사가 달라도 플랫폼·아키텍처·코어 버전이 같으면 바이너리가 같다([라이선스와 SDK 키](entitlement.md)).
 
 ## 지원 구성
 

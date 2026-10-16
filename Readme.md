@@ -105,18 +105,19 @@ command authorization is added.
 ## Requirements, licensing and entitlement
 
 The [SDK requirements](doc/sdk-requirements.md) define Windows 10/11 x64
-first, BLE/USB access, unrestricted partner calibration/raw data, offline use,
+first, BLE/USB access, unrestricted partner calibration, raw data in full mode, offline use,
 and the remaining hardware/platform validation work.
 
-Policy (2026-10-14): the base SDK license comes with genuine hardware, has no date
-expiry and covers ordinary commercial apps and services after registration. Separate
-agreements are only for exceptions such as OEM supply, rebranding or SDK resale.
-The [LICENSE](LICENSE) is Version 2.0, written to this policy and marked as a draft
-for review until legal review is complete ([review notes](doc/license-review.md),
-[Version 1.0](doc/LICENSE-1.0.txt)). It does not change existing agreements, packages
-already delivered, or rights granted under earlier licenses such as MIT.
+Policy (2026-10-17): the base SDK license comes with genuine hardware, has no date expiry
+and is basic mode, for any use including commercial, without registration. Full mode needs
+an SDK key of a trial, a non-commercial extension or a commercial contract, activated for the
+app or PC. Separate agreements are for exceptions such as OEM supply, rebranding or SDK resale.
+The [LICENSE](LICENSE) is Version 2.0, rewritten on 2026-10-17 to this policy and marked as a
+draft for review until legal review is complete ([review notes](doc/license-review.md),
+[policy history](doc/policy-history.md), [Version 1.0](doc/LICENSE-1.0.txt)). It does not change
+existing agreements, packages already delivered, or rights granted under earlier licenses such as MIT.
 Wrappers may be modified; applications may redistribute wrappers and the unmodified
-compiled core. Core sources are not distributed. Previously licensed versions and
+compiled core. Core sources are not distributed and may not be reverse engineered. Previously licensed versions and
 third-party rights remain separate. The optional GUI uses PyQt5, which has separate
 GPL/commercial terms; see the
 [provider's licensing FAQ](https://riverbankcomputing.com/commercial/license-faq)
@@ -136,9 +137,7 @@ keeps connection, measurement, settings, weight and foot size; frames come at mo
 a second without raw data, decoding raw grids raises `FisicaLicenseError`, and report
 exports hold the summary only. Online, a new key is activated automatically and renewed
 before it expires; nothing else is sent. The SDK does not track its own use: no usage,
-last-use time or call counts are collected or reported. The policy text above and
-[entitlement](doc/entitlement.md) still describe the 2026-10-14 policy and are revised
-with the license documents (W5 in the plan).
+last-use time or call counts are collected or reported. See [license and SDK keys](doc/entitlement.md).
 
 ```sh
 python tools/build_release.py --validation

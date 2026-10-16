@@ -1,84 +1,137 @@
 openapi: 3.0.3
 info:
-  title: Fisica SDK entitlement API
-  version: 0.1.0-draft
+  title: Fisica SDK license API
+  version: 0.2.0-draft
   description: |
-    Contract between the SDK and the Care&Co server (policy of 2026-10-14). The server is the
-    Fisica developer portal (Care-Co/developer-portal) at https://developer.fisicahealthcare.com;
-    `tools/entitlement_dev.py` is the reference mock used by the tests.
+    Contract between the SDK and the Care&Co server (policy of 2026-10-17: SDK keys as seats,
+    basic and full mode). The server is the Fisica developer portal (Care-Co/developer-portal) at
+    https://developer.fisicahealthcare.com; `tools/entitlement_dev.py` is the reference mock used by
+    the tests.
 
-    The SDK calls one endpoint: refresh. There is no usage, activity or telemetry endpoint.
-    Company registration, terms acceptance, contract administration and issuing the first
-    token (also downloadable as the offline file) happen in Care&Co's own registration flow,
-    authenticated as a company user; they are not SDK calls and are not specified here.
+    The SDK calls two endpoints: activate (once per key, sending the key and this app's or PC's
+    target) and refresh (renewal of the same key, empty body). There is no usage, activity or
+    telemetry endpoint. Trial, extension and contract requests, approval, creating keys, offline
+    activation files, renewal files and release codes happen in the developer portal, authenticated
+    as a company user; they are not SDK calls and are not specified here.
 
     Rules the server must keep:
     - No SDK usage tracking. The server does not receive, derive or store whether the SDK was
-      used, when it was last used, use after a contract ended, counts of measurements or API
-      calls, or anything per application, installation or device.
-    - A refresh request is not a usage record. Do not present the last confirmation time as the
-      last time the SDK was used, and do not infer real use or contract compliance from refresh
-      history: offline use and use without refreshing never reach the server.
-    - The company and contract are taken ONLY from the verified bearer token. Identifiers in a
-      request body are never trusted.
-    - The token is an identifier that ships inside partner apps. Treat it as public: it authorizes
-      nothing except refreshing itself. Rate-limit.
-    - Nothing here blocks the SDK. A refused or failed request only leaves the SDK with older
-      information; the SDK never treats a network failure as an expiry or a revocation.
-    - Three facts stay separate: the base SDK license (no date expiry, not represented here),
-      the confirmation time (`verified_at`/`refresh_by`, 30 days at most) and the contract
-      (`contract_start`/`contract_end`/`revoked_at`). Never merge them into one `expires_at`.
-    - Ending a contract ends that contract's special rights only. It does not revoke the base SDK
-      license, hardware ownership or device registration, and must not be modelled as a
-      subscription/payment state of NONE or a device state of REVOKED.
+      used, when it was last used, use after a grant ended, or counts of measurements or API calls.
+      It stores per key only the target it is activated for and the times it was activated,
+      renewed and released, for seat and trial administration.
+    - A refresh is not a usage record. Do not present the last renewal as the last time the SDK
+      was used, and do not infer real use or contract compliance from renewal history: offline
+      use and use without renewing never reach the server.
+    - The company, contract and key are taken ONLY from the verified bearer token. Identifiers in a
+      request body are never trusted; the activation body carries the target only.
+    - The token ships inside partner apps. Treat it as a credential for its own seat: it
+      authorizes activating and renewing itself and nothing else. Rate-limit both endpoints.
+    - The SDK core decides the mode from signed fields only. A refused or failed request leaves
+      the SDK with the key it had; the SDK never treats a network failure as an expiry, a release
+      or a revocation.
+    - Keep the facts separate: the key's own expiry (`key_until`), the end of full mode for the
+      grant (`full_until`: trial end, extension end, or contract end plus grace), the contract
+      dates and the server confirmation time (`verified_at`/`refresh_by`). Never merge them into
+      one `expires_at`.
+    - Ending a grant ends full mode only. Basic mode, hardware ownership and device registration
+      stay; do not model it as a subscription/payment state of NONE or a device state of REVOKED.
     - The signing private key (Ed25519) stays on the server. The SDK embeds public keys by `kid`.
 servers:
   - url: https://{host}
     variables: {host: {default: developer.fisicahealthcare.com, description: Fisica developer portal}}
 security:
-  - entitlementToken: []
+  - sdkKey: []
 paths:
+  /sdk/v1/entitlement/activate:
+    post:
+      summary: Activate an SDK key for this app or PC and return the bound key.
+      description: |
+        The body is the SDK core's activation request, built from the target the core reads
+        itself: `{"bind_type": "app"|"pc", "bind": "<app ID or PC hash>"}` and nothing else.
+        Activating again for the same target (an app's `.debug`/`.dev` build is the same app)
+        renews the key and returns it; another target is refused. An app ID belongs to one
+        contract at a time; a PC holds at most one key of a contract. A trial key claims the
+        target, so a target can take part in one trial only.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Target'}}}
+      responses:
+        '200':
+          description: The key activated for the target.
+          content: {application/json: {schema: {type: object, required: [token], properties: {token: {$ref: '#/components/schemas/Token'}}}}}
+        '400': {description: '`invalid_json`, `unexpected_body` (other members or types) or `invalid_target` (not an app ID or PC hash).', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '401': {description: Missing token, bad signature, unknown signing key, unknown contract, or a token without a seat key., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '409': {description: '`key_in_use` (activated for another target), `target_already_bound` (the contract already has a key here), `app_in_another_contract`, `trial_used` (the target took part in a trial) or `key_released`.', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '429': {description: Rate limited; retry after the `Retry-After` header. The SDK keeps what it had.}
+        '503': {description: Temporarily unavailable. The SDK keeps what it had.}
   /sdk/v1/entitlement/refresh:
     post:
-      summary: Confirm the token's contract and return newly signed entitlement information.
+      summary: Renew the key and return it newly signed with the current grant.
       description: |
-        Accepts any token whose signature verifies, including one older than 30 days: an old
-        token is the normal input. The response is signed with `verified_at` = server time now.
-        A revoked or ended contract is answered with 200 and a token that says so
-        (`revoked_at` / `contract_end`); only then may the SDK show "revoked".
+        Accepts any key whose signature verifies, including an expired one. The response is signed
+        with `verified_at` = server time now, a renewed `key_until` (now plus the validity chosen
+        when the key was created) and the grant's current dates and features. Full mode still ends
+        at `full_until`: the core uses the earlier of the two.
+        A key released in the portal (or its device-side release completed) and a revoked contract
+        are answered with 200 and a key carrying `revoked_at`; the SDK then drops to basic mode and
+        forgets the key, and the portal records the release as done by the device.
         The request body is an empty object. Anything else is refused, so no activity or
         device information can be sent through this endpoint.
       requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false}}}}
       responses:
         '200':
-          description: Newly signed entitlement information.
+          description: The newly signed key.
           content: {application/json: {schema: {type: object, required: [token], properties: {token: {$ref: '#/components/schemas/Token'}}}}}
         '400': {description: Body is not an empty object., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
-        '401': {description: Missing token, bad signature, unknown key or unknown contract., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '401': {description: Missing token, bad signature, unknown signing key or unknown contract., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '429': {description: Rate limited. The SDK keeps what it had.}
         '503': {description: Temporarily unavailable. The SDK keeps what it had.}
 components:
   securitySchemes:
-    entitlementToken: {type: http, scheme: bearer, bearerFormat: FSE1}
+    sdkKey: {type: http, scheme: bearer, bearerFormat: FSE1}
   schemas:
+    Target:
+      type: object
+      additionalProperties: false
+      required: [bind_type, bind]
+      properties:
+        bind_type: {type: string, enum: [app, pc]}
+        bind:
+          type: string
+          description: |
+            `app`: reverse-DNS app ID `[A-Za-z0-9][A-Za-z0-9_-]*(\.[A-Za-z0-9_-]+)+`, at most 128 characters
+            (iOS/macOS bundle ID or Android package name). `pc`: 64 lowercase hex characters,
+            SHA-256 of `fisica-pc-v1:` + the platform machine identifier.
     Token:
       type: string
       maxLength: 4096
       description: |
         `FSE1.<base64url(payload)>.<base64url(signature)>`, no padding. The signature is
         Ed25519 (RFC 8032) over the ASCII bytes `FSE1.<base64url(payload)>`.
-        The same string is the content of the offline entitlement file.
+        The same string is the content of a key file (`.fse`).
         Payload: one flat JSON object, ASCII, no string escapes, members:
         - `v` (integer, required): 1
         - `kid` (string, required): signing key id known to the SDK build
         - `company`, `contract` (string, required): `[A-Za-z0-9_.:-]{1,64}`; `contract` is the
-          contract reference number, also issued for a basic-terms acceptance
-        - `kind` (string, required): `basic` (registration + basic terms) or `special` (separate agreement)
-        - `verified_at` (integer, required): time the server confirmed the contract, Unix seconds.
+          grant's reference number
+        - `kind` (string, required): `basic` (trial, extension) or `special` (commercial contract)
+        - `verified_at` (integer, required): time the server signed this key, Unix seconds.
           It is not a time of SDK use.
         - `refresh_by` (integer, required): > `verified_at`; the SDK caps it at `verified_at` + 30 days
-        - `contract_start`, `contract_end` (integer, optional): contract dates; omit when none
-        - `revoked_at` (integer, optional): present only when the server revoked the contract
+          and renews online after it
+        - `contract_start`, `contract_end` (integer, optional): grant dates; omit when none
+        - `revoked_at` (integer, optional): the key was released or the contract revoked
         - `grants` (string, optional): comma list such as `oem,rebrand,resale`; at most 256 characters
+        - `key` (string): the seat key id, `[A-Za-z0-9_.:-]{1,64}`. A token without it is a legacy
+          contract token and gives basic mode only.
+        - `bind_type`, `bind` (string, optional): the target the key is activated for (see `Target`);
+          both absent on an unactivated key
+        - `key_until` (integer, optional): end of the key's validity; absent for "no expiry" and on
+          an unactivated key
+        - `full_until` (integer): end of full mode for the grant; absent means no full mode
+        - `features` (string, optional): comma list of `raw_data`, `export`, `advanced`; absent means all.
+          Names the core does not know open nothing.
+        - `track` (string, optional): `trial`, `extension` or `contract`
         Unknown members are ignored; duplicate members are rejected.
     Error:
       type: object

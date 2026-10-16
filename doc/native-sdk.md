@@ -14,8 +14,9 @@ run in the shared core. Host threads, transport reopening and callbacks stay in 
 - `fisica_sdk/parser.py`, `analyzer.py`, `device.py`: legacy API adapters.
 - `wrappers/flutter`: Dart FFI package for a future Flutter host application's OS transport.
 - USB/BLE connections are OS adapters in each wrapper. No firmware changes.
-- `native/src/fisica_entitlement.cpp`: runtime entitlement context (signature check and status,
-  no usage record); see [entitlement](entitlement.md). Vendored Monocypher lives in
+- `native/src/fisica_entitlement.cpp`: license context (signature check, the app/PC target the core
+  reads itself, basic/full mode, activation and release codes, no usage record); see
+  [license and SDK keys](entitlement.md). Vendored Monocypher lives in
   `native/src/third_party/` and is compiled into the private core only.
 - GUI/heatmap drawing is optional, public wrapper presentation code.
 
@@ -29,12 +30,12 @@ network or device access. Online package-update checks are explicitly opt-in.
 
 | Component | Authoritative file | Current version |
 |---|---|---|
-| SDK release | `sdk-release.json` | 2.4.0 |
-| Native core | `sdk-release.json` | 1.4.0 |
-| ABI | `sdk-release.json` | 1.3 |
-| Python wrapper / PyPI package | `wrappers/python/wrapper.json` | 2.4.0 |
-| Flutter wrapper / Dart package | `wrappers/flutter/wrapper.json` | 0.5.0 |
-| Swift/Kotlin/C# wrappers | `wrappers/{swift,kotlin,dotnet}/wrapper.json` | 0.2.0 |
+| SDK release | `sdk-release.json` | 3.0.0 |
+| Native core | `sdk-release.json` | 2.0.0 |
+| ABI | `sdk-release.json` | 2.0 |
+| Python wrapper / PyPI package | `wrappers/python/wrapper.json` | 3.0.0 |
+| Flutter wrapper / Dart package | `wrappers/flutter/wrapper.json` | 0.6.0 |
+| Swift/Kotlin/C# wrappers | `wrappers/{swift,kotlin,dotnet}/wrapper.json` | 0.3.0 |
 | Result schema | `sdk-release.json` | 1 |
 
 Use semantic versioning per component. A wrapper patch release does not require a
@@ -114,7 +115,8 @@ No company, contract or delivery identifier is compiled in: one binary per platf
 architecture and core version serves every company, and the release tools write a
 hashed `artifact-manifest.json`. The core trusts the server public keys listed in
 `native/entitlement-keys.json`. Customer packages trust only its production keys;
-`--validation` QA builds also trust the test key, whose secret is in this repository. Runtime entitlement never locks a feature.
+`--validation` QA builds also trust the test key, whose secret is in this repository. Without an SDK key
+activated for the app or PC the core runs in basic mode ([license and SDK keys](entitlement.md)).
 
 ## Measurement compatibility and limits
 
@@ -139,8 +141,8 @@ hashed `artifact-manifest.json`. The core trusts the server public keys listed i
   known complete measurement, not from inside an incomplete grid. The legacy wire
   protocol has no newly added checksum/authentication; arbitrary corruption and
   ambiguous framing cannot be completely resolved without firmware changes.
-- `NativeCore.decode_packet` exposes raw/display arrays separately, while legacy
-  `MeasurementFrame` and `SessionReport` shapes remain usable.
+- `NativeCore.decode_packet` exposes raw/display arrays separately (full mode with raw data
+  only, ABI 2), while legacy `MeasurementFrame` and `SessionReport` shapes remain usable.
 - ABI 1.1 adds variable query response payload extraction. Wrappers preserve native
   error codes; firmware query timeout/unknown firmware emits a warning, not a lock.
 - Receiver reconnect selects the original device, using USB serial number when
@@ -242,6 +244,16 @@ two constant-only enums (no new functions): `FisicaLink` (`FISICA_LINK_BLE`/`USB
 CONNECTED value) and `FisicaLimit` (`ANALYSIS_FRAMES` 19,949 per analysis call,
 `FEED_BYTES`, `TOKEN_BYTES`). The core uses these values for its own checks, so the
 header and the enforced limits cannot drift.
+
+ABI 2.0 (core 2.0.0, SDK 3.0.0) replaces the status-only entitlement with licensing: the core reads
+the app ID or PC hash, decides basic or full mode from the signed SDK key, and limits what it hands
+out. `decode_packet`, `preprocess` and `display_grid` take the license context first and return
+`FISICA_FEATURE_NOT_LICENSED` (13) without raw data. A session copies the license
+(`fisica_core_session_license`), hands out MEASUREMENT payloads of doubles (`[weight, 29x29 display]`,
+then the raw grid and packet only with raw data) at most once a second in basic mode, and analyzes
+every packet (`fisica_core_session_analyze`). The entitlement status has 19 fields, new text fields
+give the activation request and code, and `fisica_core_entitlement_release` returns the release
+code. Nothing was shipped under ABI 1.x, so 2.0 keeps no 1.x compatibility.
 
 ## Shared codes and binding verification
 
