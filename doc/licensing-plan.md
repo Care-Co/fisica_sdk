@@ -320,7 +320,10 @@
 
 순서(2026-10-16 선택): **W3(포털 서버) 먼저** → W1 → W2·W4 → W5. 포털은 운영 중이므로 W3는 W4와 함께 배포한다.
 
-진행(2026-10-17): W3·W4 완료(체험 승인 방식 포함), developer-portal 브랜치 `licensing-trials-contracts`(푸시 전). W1·W2는 SDK 브랜치 `licensing-core`에서 함께 진행. W5 남음.
+진행(2026-10-17):
+- W3·W4 완료(체험 승인 방식 포함), developer-portal 브랜치 `licensing-trials-contracts`(푸시 전). 새 코어와의 끝단 연동 테스트 포함.
+- W1·W2 완료, SDK 브랜치 `licensing-core`(푸시 전): 코어 2.0.0(C ABI 2.0), Python 3.0.0, C#·Swift·Kotlin 0.3.0, Dart 0.6.0, 파트너 샘플. 실기기(BLE·Android·iOS 기기·Windows 실행)는 미검증.
+- W5(LICENSE·entitlement.md·정책 이력·사이트 문서) 남음.
 
 ## 11. 결정 사항
 

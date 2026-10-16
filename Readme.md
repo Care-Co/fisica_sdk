@@ -1,17 +1,16 @@
 # Fisica SDK
 
 Fisica Scale SDK with a shared C++ native core and independently versioned wrappers.
-Python 2.4.0 retains the measurement API and delegates packet processing, session states, ACK deadlines and analysis
-to core 1.4.0 (C ABI 1.4). The Dart/Flutter wrapper is 0.5.0; Swift, Kotlin and C# are 0.2.0.
-Every company uses the same binary per platform; company and contract information is
-supplied at runtime as [entitlement information](doc/entitlement.md) and never blocks a feature.
-No device firmware change is required. The entitlement server is the Fisica developer portal,
-https://developer.fisicahealthcare.com, which issues SDK keys and answers online refresh.
+Python 3.0.0 retains the measurement API and delegates packet processing, session states, ACK deadlines,
+licensing and analysis to core 2.0.0 (C ABI 2.0). The Dart/Flutter wrapper is 0.6.0; Swift, Kotlin and C# are 0.3.0.
+Every company uses the same binary per platform. An SDK key from the Fisica developer portal,
+https://developer.fisicahealthcare.com, is activated for one app or PC and opens **full mode**;
+without one the SDK runs in **basic mode** (see below). No device firmware change is required.
 
 ## Install a binary Python release
 
 ```sh
-python -m pip install /path/to/fisica-2.4.0-py3-none-PLATFORM.whl
+python -m pip install /path/to/fisica-3.0.0-py3-none-PLATFORM.whl
 ```
 
 Use a wheel for your OS/architecture. Python 3.9+ is required. macOS universal2 and
@@ -22,13 +21,13 @@ Source distributions are intentionally disabled.
 
 [Partner installation guide](doc/partner-quickstart.md) covers every language and
 [minimal applications](examples/partner/README.md). Use the supplied binary packages;
-there is no need to build private core sources or configure an entitlement server.
+there is no need to build private core sources.
 
 Optional presentation dependencies:
 
 ```sh
-python -m pip install '/path/to/fisica-2.4.0-py3-none-PLATFORM.whl[visualization]'
-python -m pip install '/path/to/fisica-2.4.0-py3-none-PLATFORM.whl[gui]'
+python -m pip install '/path/to/fisica-3.0.0-py3-none-PLATFORM.whl[visualization]'
+python -m pip install '/path/to/fisica-3.0.0-py3-none-PLATFORM.whl[gui]'
 ```
 
 ## Python measurement API
@@ -124,15 +123,22 @@ GPL/commercial terms; see the
 before redistributing a proprietary GUI product.
 
 ```python
-sdk.configure_entitlement(file='fisica-entitlement.fse')   # works on a PC that was never online
-print(sdk.entitlement_status())   # base license, confirmation freshness, contract state
+sdk.configure_entitlement(file='sdk-key.fse', endpoint='https://developer.fisicahealthcare.com')
+print(sdk.entitlement_status())   # mode, reason, features, key and trial/contract dates
+sdk.activation_code()             # offline PCs: enter this code in the portal, import the file it gives
+sdk.release_key()                 # free the seat on this app or PC; returns the portal release code
 ```
 
-Missing, outdated, rejected, ended or revoked entitlement information only produces
-a status and a `FisicaEntitlementWarning`; connection, measurement and analysis keep
-working. Online refresh of the information runs only when an `endpoint` is given. The
-SDK does not track its own use: no usage, last-use time or call counts are collected
-or reported. See [entitlement](doc/entitlement.md).
+The core decides the mode ([licensing plan](doc/licensing-plan.md), sections 2 and 4.5).
+**Full mode** needs a key activated for this app's ID or this PC, within the key's expiry
+and the trial or contract (plus 30 days of grace after a contract ends). **Basic mode**
+keeps connection, measurement, settings, weight and foot size; frames come at most once
+a second without raw data, decoding raw grids raises `FisicaLicenseError`, and report
+exports hold the summary only. Online, a new key is activated automatically and renewed
+before it expires; nothing else is sent. The SDK does not track its own use: no usage,
+last-use time or call counts are collected or reported. The policy text above and
+[entitlement](doc/entitlement.md) still describe the 2026-10-14 policy and are revised
+with the license documents (W5 in the plan).
 
 ```sh
 python tools/build_release.py --validation

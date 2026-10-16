@@ -1,15 +1,17 @@
 # 타사 앱 적용 가이드
 
-SDK/Python 2.4.0, core 1.4.0, Flutter core 0.5.0, Flutter transport 0.1.0,
-Swift/Kotlin/C# 0.2.0 기준. 설치는 회사가 제공한 **바이너리 패키지**로 한다.
+SDK/Python 3.0.0, core 2.0.0(C ABI 2.0), Flutter core 0.6.0, Flutter transport 0.1.0,
+Swift/Kotlin/C# 0.3.0 기준. 설치는 회사가 제공한 **바이너리 패키지**로 한다.
 현재 패키지를 공개 레지스트리에서 내려받는 명령은 제공하지 않는다.
 
 ## 공통 설치 원칙
 
-- 정품 Scale의 기본 사용에 계약 토큰·온라인 인증 설정은 필요 없다.
-  계약 확인 정보는 선택 사항이고, 서버가 없어도 측정·분석이 동작한다.
-- 계약 확인용 SDK 키는 https://developer.fisicahealthcare.com 에서 사용 신청 후 발급받는다.
-  온라인 갱신 주소(`endpoint`)도 같은 주소다. 인터넷이 없는 PC는 받은 `.fse` 파일을 가져온다.
+- SDK 키 없이도 정품 Scale은 **기본 모드**로 동작한다: 연결·측정·설정·체중·발 길이와 폭.
+  실시간 프레임은 초당 1장, 원본 데이터 없음, 보고서 내보내기는 요약만이다.
+- **전체 모드**는 이 앱이나 PC에 활성화된 SDK 키가 필요하다. 키는
+  https://developer.fisicahealthcare.com 에서 체험·계약 승인 후 만든다. 온라인이면 SDK가 키를
+  처음 쓸 때 이 앱 ID나 PC로 활성화하고 기한 전에 갱신한다(`endpoint`도 같은 주소).
+  인터넷이 없는 PC는 SDK가 보여주는 활성화 코드를 포털에 입력해 받은 `.fse` 파일을 가져온다.
 - 코어는 컴파일된 DLL/dylib/so/정적 라이브러리로 제공한다. 고객 앱은 코어 소스를
   받거나 컴파일하지 않는다. 공개 래퍼·샘플은 수정할 수 있다.
 - Windows x64와 ARM64 파일을 구분한다. macOS는 Intel/Apple Silicon universal2다.
@@ -25,13 +27,13 @@ Swift/Kotlin/C# 0.2.0 기준. 설치는 회사가 제공한 **바이너리 패�
 | 앱 언어 | 패키지 | 불러오기 | 샘플 |
 |---|---|---|---|
 | Python 3.9+ | OS/CPU에 맞는 wheel | `from fisica_sdk import FisicaSDK` | `python/main.py` |
-| C#/.NET 8 | `CareCo.Fisica.Scale.0.2.0.nupkg` | `using CareCo.Fisica;` | `dotnet/Quickstart.csproj` |
+| C#/.NET 8 | `CareCo.Fisica.Scale.0.3.0.nupkg` | `using CareCo.Fisica;` | `dotnet/Quickstart.csproj` |
 | Swift | 공개 소스 + XCFramework가 포함된 Swift ZIP | `import FisicaScale` | `swift/ScaleApp.swift` |
-| Kotlin/Java | `fisica-scale-0.2.0.aar` | `com.carenco.fisica` | `android/app-kotlin`, `android/app-java` |
+| Kotlin/Java | `fisica-scale-0.3.0.aar` | `com.carenco.fisica` | `android/app-kotlin`, `android/app-java` |
 | Dart/Flutter | core 플랫폼 ZIP + transport ZIP | `import 'package:fisica_flutter/fisica_flutter.dart';` | `flutter/` |
 | C/C++ | core ZIP의 공개 헤더 + 라이브러리 | `#include "fisica_core.h"` | `c/main.c`, `cpp/main.cpp` |
 
-샘플 경로는 `fisica-partner-samples-2.4.0.zip`을 푼 위치를 기준으로 한다.
+샘플 경로는 `fisica-partner-samples-3.0.0.zip`을 푼 위치를 기준으로 한다.
 저장소에서는 `examples/partner/`에 있다. 샘플은 UI/연결 방법만 구현하고 측정·분석은
 공통 코어를 호출한다. 결과가 없으면 하중과 수신 프레임을 확인한다.
 
@@ -44,7 +46,7 @@ Windows x64의 `win_amd64`, ARM64의 `win_arm64`, macOS의 `macosx_11_0_universa
 ```sh
 python -m venv .venv
 # Windows: .venv\Scripts\activate / macOS: source .venv/bin/activate
-python -m pip install /path/to/fisica-2.4.0-py3-none-PLATFORM.whl
+python -m pip install /path/to/fisica-3.0.0-py3-none-PLATFORM.whl
 python python/main.py --mock scale-mock.json
 python python/main.py --list
 python python/main.py --usb COM7
@@ -81,7 +83,7 @@ dotnet run --project dotnet/Quickstart.csproj -f net8.0-windows10.0.19041.0 -- b
 
 ## Swift: iOS/macOS
 
-1. 받은 `fisica-swift-0.2.0.zip`을 푼다. `Package.swift` 옆에 `CFisica.xcframework`가 있어야 한다.
+1. 받은 `fisica-swift-0.3.0.zip`을 푼다. `Package.swift` 옆에 `CFisica.xcframework`가 있어야 한다.
 2. Xcode에서 SwiftUI App 프로젝트를 만들고 **Add Local Package**로 이 폴더를 추가한다.
    앱 대상에 `FisicaScale` 제품을 연결한다. 저장소의 래퍼 소스만 복사하지 않는다.
 3. 기본 App/ContentView 파일을 제거하고 `swift/ScaleApp.swift`를 앱 대상에 추가한다.
@@ -96,7 +98,7 @@ dotnet run --project dotnet/Quickstart.csproj -f net8.0-windows10.0.19041.0 -- b
 
 1. 샘플 `android/`를 Android Studio에서 연다. JDK 17 또는 21, Gradle 8.7,
    Android SDK 35를 준비한다. 프로젝트의 AGP는 8.6.1이다.
-2. 받은 AAR를 `android/sdk/fisica-scale-0.2.0.aar`로 넣는다. AAR 안에 공개 클래스와
+2. 받은 AAR를 `android/sdk/fisica-scale-0.3.0.aar`로 넣는다. AAR 안에 공개 클래스와
    세 가지 CPU의 core/JNI 바이너리가 포함돼 있다. Kotlin stdlib 의존성은 샘플에 선언돼 있다.
 3. `app-kotlin` 또는 `app-java` 실행 구성을 선택한다. SDK 사용 과정은 같고 호출 문법만 다르다.
 4. 앱에서 **Scan BLE**를 누르고 권한을 허용한 뒤 기기 목록에서 Scale을 선택한다.
@@ -119,7 +121,7 @@ macOS의 USB 의존성을 처음 빌드할 때 `autoconf`, `automake`, `libtool`
 
 ```text
 sdk/
-  flutter/             # fisica-flutter-0.5.0-platforms.zip
+  flutter/             # fisica-flutter-0.6.0-platforms.zip
   flutter_transport/   # fisica-flutter-transports-0.1.0.zip
 ```
 

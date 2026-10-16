@@ -48,7 +48,7 @@ See [native SDK maintenance](../../doc/native-sdk.md) for release/build/security
 
 ## Platform packages (0.5)
 
-Use `fisica-flutter-0.5.0-platforms.zip`, not a source checkout. It includes prebuilt
+Use `fisica-flutter-0.6.0-platforms.zip`, not a source checkout. It includes prebuilt
 Android libraries, Apple XCFrameworks and Windows x64/ARM64 DLLs. `FisicaCore.platform()`
 uses the linked process symbols on iOS/macOS and the packaged DLL/.so on Windows/Android.
 The Apple podspec retains C symbols for Dart FFI; no private source build is performed.
