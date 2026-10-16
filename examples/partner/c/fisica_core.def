@@ -9,4 +9,10 @@ EXPORTS
     fisica_core_session_action
     fisica_core_session_feed
     fisica_core_session_poll
+    fisica_core_session_license
+    fisica_core_session_analyze
+    fisica_core_entitlement_create
+    fisica_core_entitlement_destroy
+    fisica_core_entitlement_import
+    fisica_core_entitlement_status
     fisica_core_analyze_packets

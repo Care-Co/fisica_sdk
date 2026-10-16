@@ -11,8 +11,16 @@ def main():
     parser.add_argument('--ble', metavar='ID', help='ID printed by --list')
     parser.add_argument('--list', action='store_true')
     parser.add_argument('--mock', type=Path, help='Path to scale-mock.json; no hardware needed')
+    parser.add_argument('--key', type=Path, help='SDK key file from the developer portal (full mode)')
+    parser.add_argument('--endpoint', help='Developer portal URL, to activate and renew the key online')
     args = parser.parse_args()
     sdk = FisicaSDK()
+    if args.key:
+        sdk.configure_entitlement(file=args.key, endpoint=args.endpoint)
+        if args.endpoint:
+            sdk._entitlement.sync(wait=True)  # activate a new key before measuring
+    status = sdk.entitlement_status()
+    print(f"License: {status['mode']} mode" + (f" ({status['reason']})" if status['reason'] else ''))
     if args.list:
         print(json.dumps(sdk.scan_devices(), indent=2, default=str))
         return

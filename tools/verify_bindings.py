@@ -26,47 +26,61 @@ def host_core(output):
     return build_native(output / 'core')
 
 
-@contextmanager
-def entitlement_server(output):
-    """Reference mock server for the online part of each binding's contract.
-
-    Yields the values a binding needs; afterwards checks what the server received:
-    refresh requests with an empty body and nothing else, so no binding sends usage
-    or activity data.
-    """
-    from entitlement_dev import MockEntitlementServer
-    now = json.loads((FIXTURES / 'entitlement.json').read_text())['now'] + 86400
-    server = MockEntitlementServer(clock=lambda: now)
-    server.add_contract('acme', 'ctr-1')
-    storage = output / 'storage'
-    shutil.rmtree(storage, ignore_errors=True)
-    try:
-        yield {'endpoint': server.start(), 'storage': storage.as_posix(), 'server_now': now}
-        assert server.requests, 'the binding never contacted the server'
-        unexpected = [(path, body) for path, body in server.requests if path != '/sdk/v1/entitlement/refresh' or body]
-        assert not unexpected, f'binding sent more than an empty refresh: {unexpected}'
-        print('mock server: only empty refresh requests received')
-    finally:
-        server.stop()
-
-
-def flat_fixtures(output, extra=None):
-    """Key=value copy of the shared vectors for hosts without a JSON library."""
-    packets = json.loads((FIXTURES / 'legacy-processing.json').read_text())
-    values = {key: value for key, value in json.loads((FIXTURES / 'entitlement.json').read_text()).items() if key != 'note'}
-    values['packet'] = next(item['packet_hex'] for item in packets if item.get('id') == 'synthetic-recorded-layout')
-    values.update(extra or {})
-    path = output / 'vectors.properties'
-    path.write_text(''.join(f'{key}={value}\n' for key, value in values.items()))
-    return path
-
-
 def license_vectors():
     """Shared vectors plus keys activated for this host's PC (command-line test programs bind to the PC)."""
     from entitlement_dev import host_pc_vectors
     values = {key: value for key, value in json.loads((FIXTURES / 'entitlement.json').read_text()).items() if key != 'note'}
     values.update(host_pc_vectors(values['now']))
     return values
+
+
+@contextmanager
+def entitlement_server(output):
+    """Reference mock developer portal for the online part of each binding's contract.
+
+    It holds the shared vectors' unactivated key (key_test_1, a 14-day trial). A binding
+    imports `unbound` with this endpoint, activates it for this PC and renews it. Yields
+    the values a binding needs; afterwards checks what the server received: activation
+    requests carrying exactly this PC's target and empty refreshes, nothing else, so no
+    binding sends usage or activity data.
+    """
+    from entitlement_dev import MockEntitlementServer
+    vectors = license_vectors()
+    now = vectors['now'] + 86400
+    server = MockEntitlementServer(clock=lambda: now)
+    server.add_contract('acme', 'ctr-1', track='trial', full_until=vectors['now'] + 14 * 86400)
+    server.add_key('key_test_1', 'acme', 'ctr-1', days=90)
+    storage = output / 'storage'
+    shutil.rmtree(storage, ignore_errors=True)
+    target = {'bind_type': vectors['target_type'], 'bind': vectors['target']}
+    try:
+        yield {'endpoint': server.start(), 'storage': storage.as_posix(), 'server_now': now}
+        assert any(path.endswith('/activate') for path, _ in server.requests), 'the binding never activated the key'
+        unexpected = [(path, body) for path, body in server.requests
+                      if not ((path == '/sdk/v1/entitlement/refresh' and body == {}) or
+                              (path == '/sdk/v1/entitlement/activate' and body == target))]
+        assert not unexpected, f'binding sent more than its target and empty refreshes: {unexpected}'
+        print('mock server: only activation for this PC and empty refreshes received')
+    finally:
+        server.stop()
+
+
+def vectors_json(output):
+    """License vectors (shared plus this PC's) as JSON, for bindings that read FISICA_LICENSE_VECTORS."""
+    path = output / 'license-vectors.json'
+    path.write_text(json.dumps(license_vectors(), indent=2) + '\n')
+    return path
+
+
+def flat_fixtures(output, extra=None):
+    """Key=value copy of the shared vectors for hosts without a JSON library."""
+    packets = json.loads((FIXTURES / 'legacy-processing.json').read_text())
+    values = license_vectors()
+    values['packet'] = next(item['packet_hex'] for item in packets if item.get('id') == 'synthetic-recorded-layout')
+    values.update(extra or {})
+    path = output / 'vectors.properties'
+    path.write_text(''.join(f'{key}={value}\n' for key, value in values.items()))
+    return path
 
 
 def native(output):
@@ -95,7 +109,8 @@ def kotlin(output):
     library = output / ('libfisica_jni.dylib' if system == 'darwin' else 'libfisica_jni.so')
     run([os.environ.get('CXX', 'c++'), '-std=c++17', '-O2', '-shared', '-fPIC', '-ffp-contract=off', '-DFISICA_CORE_STATIC',
          '-I', ROOT / 'native/include', '-I', generated, '-I', java_home / 'include', '-I', java_home / 'include' / system,
-         *sorted((ROOT / 'native/src').glob('*.cpp')), ROOT / 'wrappers/kotlin/bridge/fisica_jni.cpp', '-o', library])
+         *sorted((ROOT / 'native/src').glob('*.cpp')), ROOT / 'wrappers/kotlin/bridge/fisica_jni.cpp',
+         *(['-framework', 'CoreFoundation'] if system == 'darwin' else []), '-o', library])
     sources = sorted((ROOT / 'wrappers/kotlin/src/main/kotlin').rglob('*.kt'))
     compiler = ['java', '-cp', str(gradle / '*'), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler', '-no-stdlib', '-no-reflect', '-jvm-target', '1.8']
     jar = output / 'fisica-kotlin-test.jar'
@@ -107,7 +122,7 @@ def kotlin(output):
     else:
         print('Android SDK not found: BleTransport.kt was not compiled')
     classpath = os.pathsep.join(str(p) for p in [jar, stdlib, *gradle.glob('groovy-[0-9]*.jar'), *gradle.glob('groovy-json-*.jar')])
-    run(['java', '-cp', classpath, 'groovy.ui.GroovyMain', ROOT / 'tests/kotlin_contract.groovy', library, FIXTURES])
+    run(['java', '-cp', classpath, 'groovy.ui.GroovyMain', ROOT / 'tests/kotlin_contract.groovy', library, FIXTURES, vectors_json(output)])
     with entitlement_server(output) as online:
         run(['java', '-cp', classpath, 'Kotlin_clientKt', library, flat_fixtures(output, online)])
 
@@ -115,7 +130,8 @@ def kotlin(output):
 def swift(output):
     with entitlement_server(output) as online:
         run(['swift', 'test'], cwd=ROOT / 'wrappers/swift', env={
-            **os.environ, 'FISICA_FIXTURES': str(FIXTURES), 'FISICA_ENTITLEMENT_ENDPOINT': online['endpoint'],
+            **os.environ, 'FISICA_FIXTURES': str(FIXTURES), 'FISICA_LICENSE_VECTORS': str(vectors_json(output)),
+            'FISICA_ENTITLEMENT_ENDPOINT': online['endpoint'],
             'FISICA_ENTITLEMENT_STORAGE': online['storage'], 'FISICA_ENTITLEMENT_NOW': str(online['server_now'])})
 
 
@@ -135,7 +151,8 @@ def dart(output):
     core = host_core(output)
     executable = os.environ.get('DART', shutil.which('dart') or 'dart')
     with entitlement_server(output) as online:
-        environment = {**os.environ, 'FISICA_CORE_TEST_LIBRARY': str(core), 'FISICA_ENTITLEMENT_ENDPOINT': online['endpoint'],
+        environment = {**os.environ, 'FISICA_CORE_TEST_LIBRARY': str(core), 'FISICA_LICENSE_VECTORS': str(vectors_json(output)),
+                       'FISICA_ENTITLEMENT_ENDPOINT': online['endpoint'],
                        'FISICA_ENTITLEMENT_STORAGE': online['storage'], 'FISICA_ENTITLEMENT_NOW': str(online['server_now'])}
         for command in (['pub', 'get'], ['analyze'], ['test']):
             run([executable, *command], cwd=ROOT / 'wrappers/flutter', env=environment)
