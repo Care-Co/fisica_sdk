@@ -11,10 +11,13 @@ Dart/Flutter core 0.5.0, Flutter transport 0.1.0, Swift/Kotlin/C# 각각 0.2.0. 
 |---|---|---|---|
 | Windows x64 | Python wheel, DLL+C header, NuGet, Flutter DLL | Python, C#, Dart, C/C++ | Python/C#/Flutter BLE·USB, C/C++는 앱 Transport 구현 |
 | Windows ARM64 | 별도 ARM64 wheel/DLL, NuGet, Flutter DLL | Python, C#, Dart, C/C++ | 동일 계약, 실제 ARM64 드라이버/연결 검증 필요 |
-| macOS Intel·Apple Silicon | universal2 wheel/dylib, SwiftPM/XCFramework, NuGet, Flutter | Python, Swift, C#, Dart, C/C++ | 기존 Python BLE/USB, Swift CoreBluetooth 어댑터 |
+| macOS 11+ Intel·Apple Silicon (Flutter 12+) | universal2 wheel/dylib, SwiftPM/XCFramework, NuGet, Flutter | Python, Swift, C#, Dart, C/C++ | 기존 Python BLE/USB, Swift CoreBluetooth 어댑터 |
 | Android API 23+ | arm64-v8a/armeabi-v7a/x86_64 AAR, Flutter .so (16KB 페이지 정렬) | Kotlin/Java, Dart, C/C++ | Kotlin GATT 및 Flutter BLE 어댑터, 앱 권한/기기 선택 필요 |
 | iOS 13+ | arm64 기기, arm64/x86_64 simulator XCFramework | Swift, Dart, C/C++ | Swift CoreBluetooth 및 Flutter BLE 어댑터, 앱 권한/기기 선택 필요 |
 
+Flutter macOS 앱은 12.0 이상을 대상으로 한다. Xcode 27은 12.0 미만 macOS 배포 대상을 빌드 오류로
+거절하고, CocoaPods pod target은 podspec이 선언한 최소 버전을 그대로 쓰기 때문이다. Swift package
+(`.macOS(.v11)`)는 Xcode가 지원 범위로 올려 빌드하므로 Xcode 27에서도 그대로 빌드된다.
 .NET은 .NET 8 자체의 OS 지원 조건도 충족해야 한다. Python GUI extra의 PyQt5/
 OpenCV 등 플랫폼별 바이너리 의존성은 별도 확인 대상이다. Windows ARM64 측정
 SDK wheel과 GUI extra의 설치 가능성을 같은 지원 수준으로 표시하지 않는다.
