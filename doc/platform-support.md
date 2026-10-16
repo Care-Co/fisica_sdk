@@ -69,8 +69,8 @@ BLE 프로필:
 - GATT write 완료를 명령 ACK로 취급하지 않는다.
 
 USB 시리얼 transport는 115200 8N1, 흐름 제어 없음, DTR·RTS on으로 포트를 연다(Python `SerialUART`,
-C# `SerialTransport`, Flutter `FisicaUsbTransport`). 실제 Scale(펌웨어 2.0.2-RC1, CP2102)에서 Python과
-C#(macOS)으로 확인한 값이다. Flutter USB와 Windows COM 포트는 실기기에서 확인하지 않았다.
+C# `SerialTransport`, Flutter `FisicaUsbTransport`). 실제 Scale(펌웨어 2.0.2-RC1, CP2102)에서 Python,
+C#(macOS), Flutter(macOS)로 확인한 값이다. Windows COM 포트는 실기기에서 확인하지 않았다.
 
 - 9600에서는 응답이 없다.
 - Scale 안의 ESP32는 DTR/RTS 자동 리셋 회로에 연결돼 있다. DTR·RTS를 모두 끄면(.NET `SerialPort` 기본값)
