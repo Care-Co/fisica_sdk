@@ -34,19 +34,20 @@ Browser/Flutter Web is not supported by this native FFI package.
 checks SDK, core, ABI and wrapper support policy offline before decoding or analysis.
 Supported older versions produce warnings; unsupported versions fail explicitly.
 
-The wrapper and compiled core use the Fisica Scale SDK License Version 2.0, included
-in the wrapper ZIP and core bundle. The base SDK license comes with genuine Fisica
-hardware, has no date-based expiry and covers non-commercial and ordinary commercial
-use. Wrapper modifications and inclusion in your own applications are allowed under
-its terms; OEM supply, rebranding, standalone SDK resale and use with other hardware
-require a separate agreement. Private core sources are never included.
+The wrapper and compiled core use the Fisica Scale SDK License Version 2.0 (draft),
+included in the wrapper ZIP and core bundle. The base SDK license comes with genuine Fisica
+hardware, has no date-based expiry and is basic mode, for any use including commercial;
+full mode needs an SDK key of a trial, extension or contract activated for the app or PC.
+Wrapper modifications and inclusion in your own applications are allowed under its terms;
+OEM supply, rebranding, standalone SDK resale and use with other hardware require a separate
+agreement. Private core sources are never included and may not be reverse engineered.
 `versionInfo` reports release and entitlement
 key information; the binary carries no company or delivery identifier. Native errors retain their numeric `code`. `decodeResponse` exposes
 fixed and variable query payloads without reimplementing the protocol in Dart.
 
 See [native SDK maintenance](../../doc/native-sdk.md) for release/build/security details.
 
-## Platform packages (0.5)
+## Platform packages (0.6)
 
 Use `fisica-flutter-0.6.0-platforms.zip`, not a source checkout. It includes prebuilt
 Android libraries, Apple XCFrameworks and Windows x64/ARM64 DLLs. `FisicaCore.platform()`
