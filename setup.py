@@ -61,7 +61,6 @@ setup(
     install_requires=['numpy>=1.21', 'packaging>=21.0', 'pyserial>=3.5', 'bleak>=0.22.3'],
     extras_require={
         'visualization': ['opencv-python>=4.5', 'Pillow>=8.0'],
-        'gui': ['opencv-python>=4.5', 'Pillow>=8.0', 'PyQt5>=5.15'],
         'updates': ['requests>=2.25'],
     },
     python_requires='>=3.9',

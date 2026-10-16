@@ -1,9 +1,8 @@
 import json
 from pathlib import Path
-from queue import Queue
 import pytest
 from fisica_sdk import NativeCore
-from fisica_sdk.parser import DataParser
+from tests.test_native_core import split_stream
 
 ROOT = Path(__file__).parent / 'fixtures'
 
@@ -25,15 +24,12 @@ def test_recorded_footer_layout_and_variable_response_in_fragmented_stream(chunk
     packet = bytes.fromhex(next(f['packet_hex'] for f in fixtures if f.get('id') == 'synthetic-recorded-layout'))
     response = bytes.fromhex(json.loads((ROOT / 'protocol.json').read_text())['responses'][0]['hex'])
     stream = response + packet + packet + response
-    frames, responses = Queue(), Queue()
-    parser, buffer = DataParser(frames, responses, full_license), bytearray()
-    for start in range(0, len(stream), chunk_size):
-        buffer.extend(stream[start:start+chunk_size])
-        parser.process_all_data_by_terminator(buffer)
+    frames, responses, buffer = split_stream(NativeCore(), [stream[start:start+chunk_size] for start in range(0, len(stream), chunk_size)],
+                                             full_license)
     assert not buffer
-    assert frames.qsize() == 2 and responses.qsize() == 2
-    assert frames.get().weight == 70.5
-    assert responses.get()['payload'] == b'2.0.1'
+    assert len(frames) == 2 and len(responses) == 2
+    assert frames[0].weight == 70.5
+    assert responses[0]['payload'] == b'2.0.1'
 
 
 def test_long_response_does_not_overflow_wrapper_packet_buffer():

@@ -34,7 +34,7 @@
 | 공개 래퍼, 예제, 문서, 공개 C 헤더 | Fisica Scale SDK License (소스 공개, 수정·앱 포함 배포 허용) |
 | 네이티브 코어 | Fisica Scale SDK License. 컴파일된 바이너리만 제공, 소스 비공개, 역설계 금지(법이 허용하는 범위 제외) |
 | 코어에 포함된 Monocypher 4.0.2 | CC0-1.0 또는 BSD-2-Clause (CC0 선택) |
-| Python GUI extra의 PyQt5 | GPL 또는 상용 라이선스 (별도 조건) |
+| Python 시각화 extra의 OpenCV·Pillow | Apache-2.0 / HPND (각자의 조건) |
 | NumPy, bleak, pyserial, System.IO.Ports 등 의존성 | 각자의 오픈소스 라이선스 |
 | 포함된 모델 | 없음 |
 | PyPI `fisica` 1.0.0, 1.0.1 | MIT. 이미 부여된 권리이며 2.0으로 소급 제한하지 않는다(릴리스 삭제 예정, W6) |

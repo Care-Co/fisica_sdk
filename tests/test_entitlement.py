@@ -424,6 +424,7 @@ def test_connect_measure_analyze_work_in_every_license_state(state, tmp_path):
             report = sdk.analyze()
             assert report.weight == 70.5  # every packet is analyzed in every mode
             exported = sdk.export_report(output=str(tmp_path / 'report'))
+            assert exported == str((tmp_path / 'report.json').resolve())
             saved = json.loads((tmp_path / 'report.json').read_text())[0]
             assert ('total_frame' in saved) == (state == 'full') and saved['weight'] == 70.5
         finally:

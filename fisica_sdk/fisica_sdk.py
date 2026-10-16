@@ -1,16 +1,18 @@
 import asyncio
+import logging
 import time
 import threading
+from typing import Optional, Union
 import numpy as np
 
 from .analyzer import analyze as global_analyzer
 from .codes import FisicaLimit
 from .native import get_core
 from .receiver import Receiver
-from .exporter import *
-from .models import *
-from .device import *
-from .utils import *
+from .exporter import export_session_reports_to_json, serialize_session_frame, serialize_session_report
+from .models import MeasurementFrame, MeasurementSession, SessionReport
+from .device import scan
+from .utils import log, resolve_output_path
 
 logger = logging.getLogger(__name__)
 _ANALYSIS_FRAMES = int(FisicaLimit.ANALYSIS_FRAMES)
@@ -593,11 +595,7 @@ class FisicaSDK:
             executed `analyze()`. Note that this function must be called after
             the current session measurement has ended and `analyze()` has been executed.
         """
-        try:
-            if not self._current_report:
-                raise
-            return [serialize_session_report(self._current_report, frames=self._has_feature('export'))]
-        except Exception as e:
+        if not self._current_report:
             log.error(
                 "\nFisica SDK\n"
                 "   It seems that analyze has not been run."
@@ -606,6 +604,8 @@ class FisicaSDK:
                 "   For guidance on device scanning and connection, use:\n"
                 "   `print(FisicaSDK.analyze.__doc__)` and `print(FisicaSDK.get_report.__doc__)`.\n"
             )
+            return None
+        return [serialize_session_report(self._current_report, frames=self._has_feature('export'))]
 
 
     def get_all_reports(self):
@@ -690,7 +690,10 @@ class FisicaSDK:
             If no argument is provided for report exports information from the most recently analyzed SessionReport.
             Calling this method without having performed `analyze()` may result in an error.
             e.g., "output/sample/result" becomes "output/sample/result.json" if result folder doesn't exist.
+            In basic mode the report is exported as its summary (weight, foot size) without frames.
 
+        Returns:
+            str: The path of the written JSON file, or None when there is no report.
         """
         try:
             if report is None:
@@ -818,51 +821,35 @@ class FisicaSDK:
         self._session.frames = []
         return self._current_report
 
-    def render(self, frame: Optional[MeasurementFrame] = None, grid_data: Optional[np.ndarray] = None, mode: str = "BLUR", scale: float = 1.0, bbox: bool = False):
+    def render(self, frame: Optional[MeasurementFrame] = None, grid_data: Optional[np.ndarray] = None, mode: str = "BLUR",
+               scale: float = 1.0, bbox: bool = False, vmax: Optional[float] = None):
         """
-    Fisica SDK: render
+    Fisica SDK: render (needs the visualization extra: pip install fisica[visualization])
+
         Parameters:
-            frame (MeasurementFrame): This dataclass is used when measurement data is received through the on_data callback function.
-                                          If you are calling the render function directly, please provide grid_data instead.
-                                          When calling render from within the on_data callback, you can pass the data argument directly.
-                                          For more details, refer to the example below.
-
-            grid_data (str): Hexadecimal string from the sensor (645 bytes). > deprecated
-
-            mode (str): Visualization mode for rendering the sensor data.
-                       Available options: 'ALL', 'PIXEL', 'BLUR', 'BINARY', 'BINARY_NONZERO', 'CONTOUR'.
-                       Default is 'BLUR'. You can also import VisualOptions for these constants.
-
-            scale (float): Scaling factor for the output image. The default resolution is 456x512 pixels,
-                           and the image will be scaled up proportionally.
-
-            bbox (bool): When set to True, bounding boxes will be drawn on the rendered image.
+            frame (MeasurementFrame): A frame from the on_data callback; its sensor_matrix is drawn.
+            grid_data (np.ndarray): A 2D grid to draw instead of a frame, for example a stored sensor_matrix.
+            mode (str): 'PIXEL', 'BLUR', 'BINARY', 'BINARY_NONZERO', 'CONTOUR' or 'ALL' (VisualOptions).
+                        Default 'BLUR'. 'ALL' returns a list of six images (see VisualOptions).
+            scale (float): The image is 512x512 pixels times scale.
+            bbox (bool): Draws each foot's oriented box (left green, right magenta).
+            vmax (float): Value drawn as the top of the colour map, for colours that compare across
+                          frames. Default: each frame's own maximum.
 
         Returns:
-            np.ndarray: It returns image data as a NumPy array.
-                        Implement your own logic using the image data.
+            np.ndarray: BGR image (uint8), or a list of them for 'ALL'.
 
         Notes:
-            If you need to display image data in real time during scale measurement,
-            you can use the built-in visualize function provided by the Fisica SDK.
-            Refer to realtime_monitoring.py in the examples directory.
+            Works in every license mode: sensor_matrix is the display grid, which basic mode
+            hands out at most once a second. Showing the image is up to your application.
         """
-
         if frame is None and grid_data is None:
-            log.error(
-                "\nFisica SDK\n"
-                "   No data was detected.\n"
-                "   Please make sure you have entered valid data.\n"
-                "   If you want to know about the how use render func, please call `print(FisicaSDK.render.__doc__)`.\n"
-                "   If you want to know about the how use receive data from the scale, please call `print(FisicaSDK.__doc__)`.\n\n"
-            )
-            raise ValueError("Check Paramater")
-
-        if frame:
+            raise ValueError('Pass a frame from on_data or a grid_data array')
+        if frame is not None:
             grid_data = np.array(frame.sensor_matrix)
 
         from .visualizer import render as global_render
-        return global_render(grid_data, mode, scale=scale, bbox=bbox)
+        return global_render(grid_data, mode, scale=scale, bbox=bbox, vmax=vmax)
 
     def wait(self):
         """

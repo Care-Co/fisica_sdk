@@ -17,16 +17,5 @@
     "deprecated_before": "3.0.0",
     "maximum_exclusive": "4.0.0"
   },
-  "deprecated_apis": {
-    "ATCommands.build_command": {
-      "since": "2.0.0",
-      "removed_in": "3.0.0",
-      "replacement": "NativeCore.command(name, value=..., payload=...)"
-    },
-    "ATCommands.build_variable_command": {
-      "since": "2.0.0",
-      "removed_in": "3.0.0",
-      "replacement": "NativeCore.command(name, value=..., payload=...)"
-    }
-  }
+  "deprecated_apis": {}
 }

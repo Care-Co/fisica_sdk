@@ -54,10 +54,9 @@ No remote registry is required. Already-distributed SDKs do not gain these check
 retroactively; replace them with a new wrapper release.
 
 Python API deprecations use `deprecated_apis` entries with `since`, `removed_in`, and
-`replacement`. `ATCommands.build_command` and `build_variable_command` retain their
-legacy behavior with a visible `FisicaDeprecationWarning` in wrapper 2.x; policy
-removes them in 3.0.0. Add entries and call `warn_deprecated_api` in future deprecated
-Python APIs. Dart provides `warnDeprecatedApi` for the same lifecycle and a callback
+`replacement`. The legacy `ATCommands` facade was removed in 3.0.0 (use
+`NativeCore.command`), so the list is empty now. Add entries and call
+`warn_deprecated_api` in future deprecated Python APIs. Dart provides `warnDeprecatedApi` for the same lifecycle and a callback
 to route warnings to a Flutter logger. Do not globally suppress these warnings.
 
 ## Adding or updating a wrapper

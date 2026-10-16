@@ -34,7 +34,7 @@ def test_shared_native_wrapper_policy(name):
 def test_ble_handler_has_native_input_queue():
     from fisica_sdk.bluetooth_handler import BluetoothHandler
     handler=BluetoothHandler('unused')
-    assert handler.raw_queue.empty() and not handler.session_input
+    assert handler.raw_queue.empty()
 
 
 def test_generated_language_codes_match_the_public_header():

@@ -19,13 +19,12 @@ def offline_connect(sock,address):
         return original_connect(sock,address)
     raise AssertionError('SDK attempted external network access')
 socket.socket.connect=offline_connect
-from fisica_sdk import NativeCore,FisicaSDK,FisicaLicenseError,CoreCompatibilityError
+from fisica_sdk import NativeCore,FisicaSDK,FisicaLicenseError
 from fisica_sdk.models import MeasurementFrame
-from fisica_sdk.device import ATCommands
 from fisica_sdk import MockTransport,FisicaFirmwareWarning
 core=NativeCore()
 sdk=FisicaSDK()
-assert 'PyQt5' not in sys.modules
+assert 'cv2' not in sys.modules and 'PIL' not in sys.modules
 packet=bytearray(645)
 packet[639:641]=packet[643:645]=b'\\xf0\\x0f'
 packet[641:643]=(705).to_bytes(2,'big')
@@ -88,24 +87,14 @@ assert core.analyze(frames)==(70.5,1.0,1.0,1.0,1.0)
 sdk.set_metadata(id='installed-wheel-smoke',name='fixture')
 sdk._session.frames=frames
 assert sdk.analyze().weight==70.5
-try:
-    ATCommands.build_command(0x22,0x53,0,1)
-    raise AssertionError('removed in 3.0.0')
-except CoreCompatibilityError:
-    pass
 assert 'distribution' not in core.version_info()
 print('Installed wheel verified:',core.version_info())
-if os.environ.get('FISICA_VERIFY_GUI')=='1':
-    import numpy as np
-    from fisica_sdk import Visualizer
-    image=Visualizer().render(np.asarray(grid),mode='PIXEL',bbox=True)
-    assert image.shape==(512,512,3)
-    from fisica_sdk.gui_viewer import setup_gui,update_gui
-    app=setup_gui()
-    update_gui(image)
-    app.processEvents()
-    app.quit()
-    print('GUI extras render and Qt initialization verified')
+if os.environ.get('FISICA_VERIFY_VISUALIZATION')=='1':
+    from fisica_sdk import VisualOptions
+    for mode in ('PIXEL','BLUR','BINARY','CONTOUR'):
+        assert sdk.render(grid_data=grid,mode=mode,bbox=True).shape==(512,512,3)
+    assert len(sdk.render(grid_data=grid,mode=VisualOptions.ALL))==6
+    print('Visualization extra renders every mode')
 '''
 
 
@@ -124,14 +113,14 @@ def verify_wheel(path, extras=None):
         environment = dict(os.environ)
         # A test-signed key for this PC: verify validation wheels (release wheels trust production keys only).
         environment['FISICA_VERIFY_TOKEN'] = host_pc_vectors(int(time.time()))['full']
-        if extras == 'gui':
-            environment.update(FISICA_VERIFY_GUI='1', QT_QPA_PLATFORM='offscreen')
+        if extras == 'visualization':
+            environment.update(FISICA_VERIFY_VISUALIZATION='1')
         subprocess.run([str(python),'-I','-c',SMOKE],check=True,cwd=root,env=environment,timeout=60)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('wheel',type=Path)
-    parser.add_argument('--extras', choices=['visualization', 'gui'])
+    parser.add_argument('--extras', choices=['visualization'])
     args = parser.parse_args()
     verify_wheel(args.wheel, extras=args.extras)

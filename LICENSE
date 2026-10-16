@@ -165,7 +165,7 @@ published under the MIT License, are not restricted retroactively by this licens
 Examples, wrappers, the Native Core and included third-party libraries or models are
 each under the license stated for them; third-party licenses are not replaced by this
 one. The Native Core includes Monocypher (CC0-1.0 or BSD-2-Clause). The optional Python
-GUI extra depends on PyQt5 under its own GPL/commercial terms.
+visualization extra depends on OpenCV and Pillow under their own licenses.
 
 12. Warranty and liability
 

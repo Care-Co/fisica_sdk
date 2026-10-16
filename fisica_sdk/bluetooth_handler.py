@@ -4,10 +4,8 @@ import queue
 import asyncio
 from bleak import BleakClient
 
-from .parser import DataParser
 from .utils import log
 from .errors import FisicaTransportError
-import errno
 
 class BluetoothHandler:
     def __init__(self, device_address):
@@ -16,14 +14,7 @@ class BluetoothHandler:
         self.listen_thread = None
         self._listening = False
         self.last_heartbeat = time.time()
-        self._buffer = bytearray()
-        self.raw_queue = queue.Queue()
-        self.session_input = False
-        self.data_queue = queue.Queue()
-        self.at_response_queue = queue.Queue()
-
-        # 공통 파서 초기화
-        self.parser = DataParser(self.data_queue, self.at_response_queue)
+        self.raw_queue = queue.Queue()  # bytes for the native session, which does all framing and decoding
 
         # 전용 이벤트 루프와 스레드
         self._loop = None
@@ -424,12 +415,9 @@ class BluetoothHandler:
         def notification_callback(sender, data):
             """데이터 수신 콜백"""
             try:
-                if self.session_input:
-                    self.raw_queue.put(bytes(data))
-                else:
-                    self._buffer.extend(data)
+                self.raw_queue.put(bytes(data))
                 self.last_heartbeat = time.time()
-                log.debug(f"Data received: {len(data)} bytes, buffer length: {len(self._buffer)}")
+                log.debug(f"Data received: {len(data)} bytes")
             except Exception as e:
                 log.error(f"Bluetooth notification processing error: {e}")
 
@@ -455,30 +443,11 @@ class BluetoothHandler:
         self._execute_command("stop_notify")
 
     def listen_loop(self):
+        """Keeps the heartbeat the receiver checks; notifications arrive through the callback."""
         try:
             while self._listening:
                 self.last_heartbeat = time.time()
-                try:
-                    # 공통 파서 사용
-                    if not self.session_input:
-                        self.parser.process_all_data_by_terminator(self._buffer)
-
-                except Exception as e:
-                    if isinstance(e, OSError) and e.errno == errno.ENXIO:
-                        log.error(
-                            "\nFisica SDK\n"
-                            "   The connection to the device appears to have been lost during measurement.\n"
-                            "   Entering standby mode until the device is reconnected.\n"
-                        )
-                    else:
-                        log.critical(f"[Unexpected Exception] {e}")
-                    self._listening = False
                 time.sleep(0.5)
-            # log.debug("listen_loop stopped.")
-            # self.listen_thread = None
-        except Exception as e:
-            log.critical(f"listen_loop exception: {e}")
-            raise RuntimeError
         finally:
             self.listen_thread = None
 

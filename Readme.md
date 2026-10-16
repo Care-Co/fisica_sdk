@@ -23,11 +23,10 @@ Source distributions are intentionally disabled.
 [minimal applications](examples/partner/README.md). Use the supplied binary packages;
 there is no need to build private core sources.
 
-Optional presentation dependencies:
+Optional image rendering (`sdk.render()`, OpenCV and Pillow):
 
 ```sh
 python -m pip install '/path/to/fisica-3.0.0-py3-none-PLATFORM.whl[visualization]'
-python -m pip install '/path/to/fisica-3.0.0-py3-none-PLATFORM.whl[gui]'
 ```
 
 ## Python measurement API
@@ -118,10 +117,7 @@ draft for review until legal review is complete ([review notes](doc/license-revi
 existing agreements, packages already delivered, or rights granted under earlier licenses such as MIT.
 Wrappers may be modified; applications may redistribute wrappers and the unmodified
 compiled core. Core sources are not distributed and may not be reverse engineered. Previously licensed versions and
-third-party rights remain separate. The optional GUI uses PyQt5, which has separate
-GPL/commercial terms; see the
-[provider's licensing FAQ](https://riverbankcomputing.com/commercial/license-faq)
-before redistributing a proprietary GUI product.
+third-party rights remain separate.
 
 ```python
 sdk.configure_entitlement(file='sdk-key.fse', endpoint='https://developer.fisicahealthcare.com')

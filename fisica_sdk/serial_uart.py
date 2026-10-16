@@ -1,8 +1,7 @@
 import serial
-from .base_uart import BaseUART
 from .errors import FisicaTransportError
 
-class SerialUART(BaseUART):
+class SerialUART:
     """USB serial link to a Scale: 115200 8N1 with DTR and RTS asserted.
 
     The Scale's ESP32 is wired for auto-reset: with DTR off it reboots (DTR and

@@ -238,7 +238,6 @@ class Receiver:
                 raise FisicaTransportError('Bluetooth connection failed')
         else:
             raise ValueError('Device type must be Serial or Bluetooth')
-        self._handler.session_input = True
         self._handler.start_listening()
         if not self._handler._listening:
             raise FisicaTransportError('Cannot start device receive loop')
