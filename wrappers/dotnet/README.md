@@ -38,7 +38,8 @@ await client.CloseAsync();
 - Events are raised on the thread that delivered the input; marshal to the UI thread
   in the app. Codes are generated enums: `FisicaStatus`, `FisicaSessionState`, ...
 
-Transports: `SerialTransport` (USB virtual COM port, 9600 8N1 like the Python SDK),
+Transports: `SerialTransport` (USB virtual COM port, 115200 8N1 with DTR and RTS on,
+like the Python SDK; with DTR off the Scale's ESP32 reboots or stays in reset),
 `BleTransport` (Windows BLE), `MockTransport` (scripted, no hardware), or your own
 `IFisicaTransport`. A missing or busy port is reported through `Error` and `Lost`,
 never thrown into the caller. Finding the Scale's COM port by USB VID is not included yet.

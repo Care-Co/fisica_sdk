@@ -68,7 +68,16 @@ BLE 프로필:
   요청하고 실제 협상값 기준으로 분할 송신한다. 요청이 거절되면 기본 23으로 동작하고 재연결 때 초기화한다.
 - GATT write 완료를 명령 ACK로 취급하지 않는다.
 
-C# `SerialTransport`는 9600 8N1(Python과 동일)로 COM 포트를 연다. 포트 선택은 앱이 한다.
+USB 시리얼 transport는 115200 8N1, 흐름 제어 없음, DTR·RTS on으로 포트를 연다(Python `SerialUART`,
+C# `SerialTransport`, Flutter `FisicaUsbTransport`). 실제 Scale(펌웨어 2.0.2-RC1, CP2102)에서 Python,
+C#(macOS), Flutter(macOS)로 확인한 값이다. Windows COM 포트는 실기기에서 확인하지 않았다.
+
+- 9600에서는 응답이 없다.
+- Scale 안의 ESP32는 DTR/RTS 자동 리셋 회로에 연결돼 있다. DTR·RTS를 모두 끄면(.NET `SerialPort` 기본값)
+  ESP32가 재부팅되고 부트 ROM 로그가 들어온다. RTS만 켜면 리셋 상태로 멈춘다. DTR을 켜야 동작한다.
+- 직접 만든 transport도 DTR(권장: DTR·RTS 모두)을 켜야 한다.
+
+C# `SerialTransport`는 이 설정으로 COM 포트를 연다. 포트 선택은 앱이 한다.
 Windows에서 VID로 Scale 포트를 찾는 기능은 아직 없다.
 
 C# `BleTransport`는 Windows WinRT BLE를 쓴다. 앱이 `net8.0-windows10.0.19041.0` 이상을 대상으로 할 때만

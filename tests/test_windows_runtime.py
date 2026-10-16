@@ -89,6 +89,9 @@ def test_serial_open_is_explicit_and_command_lists_are_written_as_bytes(monkeypa
     monkeypatch.setattr(serial, 'Serial', lambda **kwargs: kwargs_seen.append(kwargs) or fake)
     uart = SerialUART('COM7')
     assert 'port' not in kwargs_seen[0]
+    # A real Scale answers only at 115200, and only while DTR is asserted.
+    assert kwargs_seen[0]['baudrate'] == 115200
+    assert fake.dtr is True and fake.rts is True
     uart.connect()
     uart.send([0x24, 0xff, 0xf0])
     assert writes == [b'\x24\xff\xf0']

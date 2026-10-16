@@ -4,8 +4,9 @@ import 'dart:typed_data';
 import 'package:fisica_core/fisica_core.dart';
 import 'package:flutter_libserialport/flutter_libserialport.dart';
 
-/// USB virtual serial port on Windows/macOS, matching Python's 9600 8N1.
-/// Mobile USB is deliberately unsupported.
+/// USB virtual serial port on Windows/macOS, matching Python's 115200 8N1
+/// with DTR and RTS asserted (see [configure]). Mobile USB is deliberately
+/// unsupported.
 ///
 /// After a link loss or a failed connect, [connect] opens the port again;
 /// called while open it closes the port first. [close] is final.
@@ -25,6 +26,21 @@ class FisicaUsbTransport implements FisicaLinkTransport {
         'Scale USB is supported on Windows and macOS only',
       );
     }
+  }
+
+  /// Line settings the Scale needs: 115200 8N1, no flow control, DTR and RTS
+  /// on. The Scale's ESP32 is wired for auto-reset: with DTR off it reboots
+  /// (DTR and RTS both off) or is held in reset (only RTS on), so DTR and RTS
+  /// are set explicitly instead of being left to the OS.
+  static void configure(SerialPortConfig config) {
+    config.baudRate = 115200;
+    config.bits = 8;
+    config.parity = SerialPortParity.none;
+    config.stopBits = 1;
+    // A new config leaves DTR and RTS as they are; no flow control keeps it so.
+    config.setFlowControl(SerialPortFlowControl.none);
+    config.dtr = SerialPortDtr.on;
+    config.rts = SerialPortRts.on;
   }
 
   static List<String> ports() {
@@ -83,11 +99,7 @@ class FisicaUsbTransport implements FisicaLinkTransport {
         throw StateError('Cannot open $portName: ${SerialPort.lastError}');
       final config = SerialPortConfig();
       try {
-        config.baudRate = 9600;
-        config.bits = 8;
-        config.parity = SerialPortParity.none;
-        config.stopBits = 1;
-        config.setFlowControl(SerialPortFlowControl.none);
+        configure(config);
         port.config = config;
       } finally {
         config.dispose();

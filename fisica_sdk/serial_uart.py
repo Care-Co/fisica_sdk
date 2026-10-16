@@ -3,9 +3,18 @@ from .base_uart import BaseUART
 from .errors import FisicaTransportError
 
 class SerialUART(BaseUART):
-    def __init__(self, port, baudrate=9600, timeout=1):
+    """USB serial link to a Scale: 115200 8N1 with DTR and RTS asserted.
+
+    The Scale's ESP32 is wired for auto-reset: with DTR off it reboots (DTR and
+    RTS both off) or is held in reset (only RTS on). pyserial asserts both on
+    open by default; they are set here so that stays explicit.
+    """
+
+    def __init__(self, port, baudrate=115200, timeout=1):
         self.port = port
         self.ser = serial.Serial(baudrate=baudrate, timeout=timeout, write_timeout=timeout)
+        self.ser.dtr = True
+        self.ser.rts = True
         self.ser.port = port
 
     def connect(self):

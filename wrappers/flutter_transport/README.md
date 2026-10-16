@@ -17,7 +17,8 @@ await client.connect(link: FisicaLink.ble);
 ```
 
 - BLE: Android/iOS/macOS/Windows through pinned `universal_ble 0.21.1`.
-- USB serial: Windows/macOS through `flutter_libserialport 0.6.0`, 9600 8N1.
+- USB serial: Windows/macOS through `flutter_libserialport 0.6.0`, 115200 8N1 with
+  DTR and RTS on (with DTR off the Scale's ESP32 reboots or stays in reset).
   Select a port from `FisicaUsbTransport.ports()` and connect with `link: FisicaLink.usb`.
 - Each adapter declares its link (`FisicaLinkTransport`), so the client rejects a
   mismatched `link` before anything is sent.
