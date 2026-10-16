@@ -4,6 +4,11 @@
       "kid": "test-2026-10",
       "environment": "test",
       "public_key": "a975adcba3aabfdfea0768b9598916b7d0183eb751aa46c7c19426a3fbaee854"
+    },
+    {
+      "kid": "prod-2026-10-15",
+      "environment": "production",
+      "public_key": "8cf752f5d8664a7e936dfc4523750ad6441a7c8edf648b314232db9a6550682e"
     }
   ]
 }

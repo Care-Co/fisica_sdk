@@ -8,6 +8,8 @@ Swift/Kotlin/C# 0.2.0 기준. 설치는 회사가 제공한 **바이너리 패�
 
 - 정품 Scale의 기본 사용에 계약 토큰·온라인 인증 설정은 필요 없다.
   계약 확인 정보는 선택 사항이고, 서버가 없어도 측정·분석이 동작한다.
+- 계약 확인용 SDK 키는 https://developer.fisicahealthcare.com 에서 사용 신청 후 발급받는다.
+  온라인 갱신 주소(`endpoint`)도 같은 주소다. 인터넷이 없는 PC는 받은 `.fse` 파일을 가져온다.
 - 코어는 컴파일된 DLL/dylib/so/정적 라이브러리로 제공한다. 고객 앱은 코어 소스를
   받거나 컴파일하지 않는다. 공개 래퍼·샘플은 수정할 수 있다.
 - Windows x64와 ARM64 파일을 구분한다. macOS는 Intel/Apple Silicon universal2다.

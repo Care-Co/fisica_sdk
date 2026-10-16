@@ -12,7 +12,7 @@
 - 기존 `fisica_sdk` 기능 전체를 Windows에서 우선 제공한다. 가능한 한 빨리
   제공하되 테스트하지 않은 기기 동작을 완료로 표시하지 않는다.
 - 기기 펌웨어는 변경하지 않는다. 서버는 등록·계약 관리와 확인 정보 발급·갱신에 필요한 최소 변경만 한다.
-  서버는 아직 구현하지 않았고 계약만 정의했다([entitlement-api.yaml](entitlement-api.yaml)).
+  서버는 개발자 포털(https://developer.fisicahealthcare.com)로 구현했다([entitlement-api.yaml](entitlement-api.yaml)).
 - 현재 특정 파트너나 내부 프로젝트는 없다.
 
 ## 지원 환경

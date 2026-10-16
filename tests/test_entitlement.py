@@ -42,6 +42,20 @@ def test_test_signer_matches_rfc8032_vectors():
     assert sign(secret, b'').hex().startswith('e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155')
 
 
+def test_core_trusts_the_production_portal_key():
+    """developer.fisicahealthcare.com signs with this kid. Its private key is not here, so a forged
+    signature must reach the signature check (REJECTED_SIGNATURE), not fail as an unknown key."""
+    import os
+    production = [key['kid'] for key in json.loads(
+        (Path(__file__).resolve().parents[1] / 'native' / 'entitlement-keys.json').read_text())['keys']
+        if key['environment'] == 'production']
+    assert 'prod-2026-10-15' in production
+    with NativeEntitlement() as context:
+        forged = issue_token('acme', 'ctr-1', NOW, kid='prod-2026-10-15', secret=os.urandom(32))
+        assert context.import_token(forged, NOW) == REJECTED_SIGNATURE
+        assert context.import_token(issue_token('acme', 'ctr-1', NOW, kid='retired-key'), NOW) == REJECTED_KEY
+
+
 def test_unverified_context_keeps_base_license_and_attributes_nothing():
     with NativeEntitlement() as context:
         status = context.status(NOW)

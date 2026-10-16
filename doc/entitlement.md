@@ -1,6 +1,7 @@
 # 런타임 확인 정보(entitlement)
 
-2026-10-14 정책 기준. 구현은 SDK/Python 2.4.0, core 1.4.0, C ABI 1.4이며 서버는 아직 없다.
+2026-10-14 정책 기준. 구현은 SDK/Python 2.4.0, core 1.4.0, C ABI 1.4이며 서버는 개발자 포털
+https://developer.fisicahealthcare.com 이다(별도 저장소 Care-Co/developer-portal).
 서버 계약은 [entitlement-api.yaml](entitlement-api.yaml), 약관은 [LICENSE](../LICENSE) 8·9조,
 약관 검토 자료는 [license-review.md](license-review.md), 바뀐 정책은 [policy-history.md](policy-history.md)에 있다.
 
@@ -51,11 +52,14 @@
 
 - 형식: `FSE1.<base64url(payload)>.<base64url(Ed25519 서명)>`. 오프라인 파일의 내용도 같은 문자열이다.
 - payload 필드와 규칙은 [entitlement-api.yaml](entitlement-api.yaml)의 `Token` 참조.
-- 신뢰하는 공개키는 `native/entitlement-keys.json`에 `kid`별로 둔다. 현재는 **테스트 키 하나뿐**이며
-  비밀키가 저장소(`tests/fixtures/entitlement-test-key.json`)에 있다.
+- 신뢰하는 공개키는 `native/entitlement-keys.json`에 `kid`별로 둔다.
+  - `prod-2026-10-15`(production): 개발자 포털의 운영 서명 키. 비밀키는 포털 서버에만 있다.
+  - `test-2026-10`(test): 비밀키가 저장소(`tests/fixtures/entitlement-test-key.json`)에 있다.
+- 고객용 빌드(`--validation` 없음)는 production 키만 넣는다. 테스트 키는 넣지 않는다.
+  `--validation` QA 빌드와 개발용 `tools/native_build.py`는 두 키를 모두 넣는다.
+  선택은 `FISICA_ENTITLEMENT_KEYS=release`(production만)로 전달되며 릴리스 도구가 설정한다.
 - 테스트 키로 확인된 상태에는 `key_environment=test`와 `test_key` 경고가 붙는다.
-- 고객용 패키징 도구는 테스트 키가 있으면 실패한다. QA용은 `--validation`을 명시한다.
-  운영 키(공개키와 `kid`)는 서버 쪽에서 생성해 전달해야 한다.
+- 운영 키를 교체할 때는 새 `kid`를 이 목록에 추가해 SDK를 먼저 배포한 뒤 포털의 서명 키를 바꾼다.
 
 ## 사용 추적 없음
 
@@ -75,7 +79,7 @@
 ```python
 sdk = FisicaSDK()
 sdk.configure_entitlement(file='fisica-entitlement.fse')            # 인터넷이 없는 PC
-sdk.configure_entitlement(token=token, endpoint='https://<server>')  # 온라인 갱신 포함
+sdk.configure_entitlement(token=token, endpoint='https://developer.fisicahealthcare.com')  # 온라인 갱신 포함
 print(sdk.entitlement_status())
 ```
 
@@ -117,6 +121,8 @@ Mock 서버와 테스트 서명기는 테스트 키만 쓴다. 서명기는 RFC 
 구현으로 테스트·개발 전용이다. 운영 서버는 검증된 라이브러리로 서명한다.
 
 ## 서버 쪽에 필요한 것
+
+개발자 포털(Care-Co/developer-portal)이 아래 항목을 구현해 운영 중이다.
 
 1. 운영 Ed25519 키 쌍 생성, 공개키와 `kid` 전달. 키 교체는 `kid` 추가로 처리한다.
 2. 회사·앱·서비스 등록과 기본 약관 수락 → `kind=basic` 계약 참조번호와 최초 토큰(파일) 발급.

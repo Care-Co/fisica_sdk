@@ -8,6 +8,10 @@ from partner_samples import PARTNER_SAMPLE_FILES
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--input',type=Path,default=ROOT/'.build/platforms');p.add_argument('--output',type=Path,default=ROOT/'.build/multiplatform-releases');p.add_argument('--validation',action='store_true');a=p.parse_args();require_release_keys(a.validation)
+ if not a.validation:  # Prebuilt cores from a --validation build_platforms run still trust the test key.
+  for meta in a.input.rglob('release.json'):
+   if any(k['environment']=='test' for k in json.loads(meta.read_text())['entitlement']['keys']):
+    raise SystemExit(f'{meta} trusts test entitlement keys; rebuild the platforms without --validation')
  release=release_metadata();out=a.output/release['sdk_version'];out.mkdir(parents=True,exist_ok=True)
  for file in a.input.rglob('*'):
   if file.suffix in ('.zip','.aar'): shutil.copyfile(file,out/file.name)

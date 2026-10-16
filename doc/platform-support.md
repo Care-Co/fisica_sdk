@@ -160,8 +160,8 @@ Android NDK 경로는 `--ndk` 또는 FISICA_ANDROID_NDK로 준다.
 
 Apple SDK 경로는 FISICA_XCODE_DEVELOPER, Android SDK는 ANDROID_SDK_ROOT,
 Kotlin compiler runtime은 FISICA_GRADLE_LIB로 설정한다. 소비 앱은 private 코어를
-컴파일하지 않는다. `--validation`은 코어가 테스트 서명 키를 신뢰하는 동안 필요하며 QA용 빌드라는 뜻이다.
-운영 키를 `native/entitlement-keys.json`에 넣으면 플래그 없이 빌드한다.
+컴파일하지 않는다. 플래그 없이 빌드하면 고객용으로 운영 서명 키만 신뢰한다. `--validation`은 테스트 서명 키도 신뢰하는 QA용 빌드다.
+`package_platforms.py`를 플래그 없이 실행하면 `--validation`으로 만든 코어가 섞였을 때 멈춘다.
 
 바이너리에 회사별 정보가 없으므로 Maven, SwiftPM, NuGet, pub 같은 레지스트리에 같은 패키지를 올리는 방식도
 가능하다. 실제 등록·퍼블리시는 하지 않았다.

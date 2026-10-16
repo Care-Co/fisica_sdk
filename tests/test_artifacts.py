@@ -1,7 +1,7 @@
 import zipfile
 import pytest
 from tools.audit_artifacts import audit_archive
-from tools.native_build import prepare_release, release_metadata, require_release_keys
+from tools.native_build import KEY_MODE, entitlement_keys, prepare_release, release_metadata, require_release_keys
 
 
 def make_archive(path,extras=None):
@@ -70,14 +70,31 @@ def test_core_metadata_is_identical_for_every_company(monkeypatch, tmp_path):
     assert baseline['entitlement']['max_refresh_days'] == 30
 
 
-def test_customer_packages_refuse_test_entitlement_keys():
-    keys = release_metadata()['entitlement']['keys']
-    if any(key['environment'] == 'test' for key in keys):
-        with pytest.raises(SystemExit, match='test entitlement keys'):
-            require_release_keys(validation=False)
-        assert require_release_keys(validation=True) is True
-    else:
-        assert require_release_keys(validation=False) is False
+def test_customer_packages_trust_only_production_keys(monkeypatch, tmp_path):
+    """The test key's secret is in this repository, so a customer core must not trust it."""
+    monkeypatch.setenv(KEY_MODE, 'unset-by-test')  # restored after the test
+    assert {key['environment'] for key in entitlement_keys(include_test=True)} == {'production', 'test'}
+    assert require_release_keys(validation=False) is False
+    release = prepare_release(tmp_path / 'release')
+    header = (tmp_path / 'release' / 'fisica_release.h').read_text()
+    production = [key['kid'] for key in entitlement_keys(include_test=False)]
+    tests = [key['kid'] for key in entitlement_keys(include_test=True) if key['environment'] == 'test']
+    assert [key['environment'] for key in release['entitlement']['keys']] == ['production'] * len(production)
+    assert all(f'"{kid}"' in header for kid in production) and not any(f'"{kid}"' in header for kid in tests)
+
+    assert require_release_keys(validation=True) is True
+    qa = prepare_release(tmp_path / 'qa')
+    assert {key['environment'] for key in qa['entitlement']['keys']} == {'production', 'test'}
+    assert all(f'"{kid}"' in (tmp_path / 'qa' / 'fisica_release.h').read_text() for kid in production + tests)
+
+
+def test_release_without_production_key_stops(monkeypatch):
+    monkeypatch.setenv(KEY_MODE, 'unset-by-test')
+    import tools.native_build as native_build
+    monkeypatch.setattr(native_build, 'entitlement_keys',
+                        lambda include_test=None: [] if include_test is False else [{'kid': 't', 'environment': 'test'}])
+    with pytest.raises(SystemExit, match='No production entitlement key'):
+        native_build.require_release_keys(validation=False)
 
 
 def test_native_binary_is_byte_identical_whoever_it_is_built_for(monkeypatch, tmp_path):

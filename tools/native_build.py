@@ -38,6 +38,19 @@ def release_metadata(validate_flutter=True):
     release['license'] = 'Fisica Scale SDK License'
     # One binary per platform/architecture/core version for every company: trusted
     # server keys are the only entitlement data compiled in, never a company or contract.
+    release['entitlement'] = {'token_format': 'FSE1', 'max_refresh_days': 30,
+                              'keys': [{'kid': key['kid'], 'environment': key['environment']} for key in entitlement_keys()]}
+    return release
+
+
+# Which keys the core trusts. 'release': production keys only, for customer packages.
+# Anything else, including unset: production and test keys, for development, tests and
+# --validation QA builds. The release tools set it (see require_release_keys); the
+# variable also reaches the wheel build that setup.py runs in a separate process.
+KEY_MODE = 'FISICA_ENTITLEMENT_KEYS'
+
+
+def entitlement_keys(include_test=None):
     keys = json.loads((ROOT / 'native' / 'entitlement-keys.json').read_text())['keys']
     for key in keys:
         if (not re.fullmatch(r'[A-Za-z0-9_.:-]{1,64}', key['kid']) or key['environment'] not in ('production', 'test')
@@ -45,18 +58,25 @@ def release_metadata(validate_flutter=True):
             raise ValueError('Invalid entitlement key entry')
     if len({key['kid'] for key in keys}) != len(keys):
         raise ValueError('Entitlement key ids must be unique')
-    release['entitlement'] = {'token_format': 'FSE1', 'max_refresh_days': 30,
-                              'keys': [{'kid': key['kid'], 'environment': key['environment']} for key in keys]}
-    return release
+    if include_test is None:
+        include_test = os.environ.get(KEY_MODE) != 'release'
+    return [key for key in keys if include_test or key['environment'] == 'production']
 
 
 def require_release_keys(validation):
-    """Customer packages must not trust a test key whose secret lives in this repository."""
-    test_keys = [key['kid'] for key in release_metadata()['entitlement']['keys'] if key['environment'] == 'test']
-    if test_keys and not validation:
-        raise SystemExit('Core trusts test entitlement keys ' + ', '.join(test_keys) +
-                         '; pass --validation for a QA-only build or configure production keys.')
-    return bool(test_keys)
+    """Choose the trusted keys for every package this process builds and return whether test keys are in.
+
+    Customer packages trust production keys only: the test key's secret lives in this repository.
+    --validation builds keep the test keys as well, for QA with test-signed tokens.
+    """
+    if not validation:
+        if not entitlement_keys(include_test=False):
+            raise SystemExit('No production entitlement key in native/entitlement-keys.json; '
+                             'pass --validation for a QA-only build.')
+        os.environ[KEY_MODE] = 'release'
+        return False
+    os.environ[KEY_MODE] = 'validation'
+    return any(key['environment'] == 'test' for key in entitlement_keys())
 
 
 def library_name():
@@ -104,7 +124,7 @@ def prepare_release(directory):
     header += '};\n'
     header += 'struct FisicaEntitlementKey { const char *kid; unsigned environment; unsigned char public_key[32]; };\n'
     header += 'static const FisicaEntitlementKey fisica_entitlement_keys[] = {\n'
-    for key in json.loads((ROOT / 'native' / 'entitlement-keys.json').read_text())['keys']:
+    for key in entitlement_keys():
         data = ','.join('0x' + key['public_key'][i:i+2] for i in range(0, 64, 2))
         header += '{' + json.dumps(key['kid']) + ',' + ('1' if key['environment'] == 'production' else '2') + ',{' + data + '}},\n'
     header += '{nullptr,0,{0}},\n};\n'
