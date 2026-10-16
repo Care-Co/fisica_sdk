@@ -111,7 +111,7 @@ public enum FisicaContractKind: UInt32, CaseIterable {
 public enum FisicaTrack: UInt32, CaseIterable {
     case none = 0
     case trial = 1
-    case extension = 2
+    case `extension` = 2
     case contract = 3
 }
 public enum FisicaBindType: UInt32, CaseIterable {

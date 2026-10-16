@@ -52,10 +52,12 @@ public struct FisicaCommandError: Error {
     public var deviceCode: UInt32 { event.deviceError }
 }
 
-/// Result of the shared analysis over the collected frames. Centimetres use the
-/// nominal 1 cm cell; values are not clinically calibrated.
+/// Result of the shared analysis of a measurement. Centimetres use the nominal 1 cm cell;
+/// values are not clinically calibrated. Weight and foot size work in every license mode.
 public struct SessionReport {
     public let weight: Double, leftWidth: Double, leftLength: Double, rightWidth: Double, rightLength: Double
+    /// The frames the client received: every packet in full mode, at most one display frame a
+    /// second without raw data in basic mode.
     public let frames: [Measurement]
     /// The client's last `readBattery` reading in percent, or nil. Packets carry no battery field.
     public let battery: Int?
@@ -67,6 +69,11 @@ public struct SessionReport {
 /// timeouts and recovery decisions live in the shared core; this class only runs the
 /// clock, moves bytes and turns core events into callbacks.
 /// Every callback and completion runs on `queue`; read `frames` and call `report()` there.
+///
+/// The license decides what the core hands out. Without an `entitlement`, or in basic mode,
+/// `onFrame` gets at most one display frame (29x29 grid and weight) a second without raw data;
+/// full mode (an SDK key activated for this app or PC) gets every packet with the raw grid and
+/// packet. The client applies the license before each start, when it changes and every 30 s.
 public final class FisicaClient {
     public typealias Link = FisicaLink
     public typealias Completion = (Result<SessionEvent, Error>) -> Void
@@ -79,7 +86,7 @@ public final class FisicaClient {
     public var onLinkLost: (() -> Void)?
     public var onError: ((Error) -> Void)?
     /// Frames of the current measurement. `start` clears them; a reconnect keeps them.
-    /// Only the latest `maxFrames` are kept.
+    /// Only the latest `maxFrames` are kept. In basic mode this is a sample (one a second).
     public private(set) var frames: [Measurement] = []
     /// Oldest frames dropped beyond `maxFrames` since the last `start` or `clearFrames`.
     public private(set) var droppedFrames = 0
@@ -100,6 +107,11 @@ public final class FisicaClient {
     private var timer: DispatchSourceTimer?
     private var readyDeadline: DispatchWorkItem?
     private var linkReady = false, closed = false
+    // License as applied to the session: when, which revision, and whether the current
+    // measurement has had every frame since its start (otherwise the core analyzes the packets).
+    private var licensedAt: Int64 = 0, licenseRevision = -1, fullRate = false, everyFrame = false
+    private var finalAnalysis: [Double]?
+    private static let licenseInterval: Int64 = 30_000
 
     public init(core: FisicaCore, transport: FisicaTransport, entitlement: FisicaEntitlement? = nil, queue: DispatchQueue = .main) throws {
         self.core = core; self.transport = transport; self.entitlement = entitlement; self.queue = queue
@@ -148,10 +160,27 @@ public final class FisicaClient {
         if timer == nil {
             let source = DispatchSource.makeTimerSource(queue: queue)
             source.schedule(deadline: .now() + .milliseconds(20), repeating: .milliseconds(20))
-            source.setEventHandler { [weak self] in self?.step { try $0.tick($1) } }
+            source.setEventHandler { [weak self] in
+                guard let self else { return }
+                self.step { try $0.tick($1) }
+                // Picks up activation, renewal, release and the end of full mode.
+                if (self.entitlement?.revision ?? 0) != self.licenseRevision || self.now - self.licensedAt >= FisicaClient.licenseInterval {
+                    self.applyLicense()
+                }
+            }
             source.resume(); timer = source
         }
         step { try $0.action(FisicaSessionAction.connected.rawValue, value: Int64(link.rawValue), nowMs: $1) }
+    }
+    /// Copy the current license into the session (on `queue`).
+    private func applyLicense() {
+        step { session, now in
+            licenseRevision = entitlement?.revision ?? 0; licensedAt = now  // a failure is retried after the interval
+            let full = entitlement?.fullRate ?? false
+            fullRate = false; everyFrame = everyFrame && full
+            try session.license(entitlement, nowMs: now)
+            fullRate = full
+        }
     }
     private func received(_ bytes: [UInt8]) {
         guard linkReady else { return }
@@ -185,7 +214,7 @@ public final class FisicaClient {
         switch FisicaSessionEvent(rawValue: event.kind) {
         case .transmit: transport.send(event.payload)
         case .measurement:
-            if let frame = try? core.decode(event.payload) { frames.append(frame); trimFrames(); onFrame?(frame) }
+            if let frame = event.measurement { frames.append(frame); trimFrames(); onFrame?(frame) }
         case .result:
             let probe = event.operation == operation(.probe)
             if probe, event.status == 0, let payload = try? core.responsePayload(event.payload) {
@@ -201,13 +230,14 @@ public final class FisicaClient {
     }
 
     private func request(_ action: FisicaSessionAction, value: Int64, waitFor: FisicaSessionOperation,
-                         accepted: (() -> Void)? = nil, completion: @escaping Completion) {
+                         prepare: (() -> Void)? = nil, accepted: (() -> Void)? = nil, completion: @escaping Completion) {
         queue.async {
             let key = self.operation(waitFor)
             guard !self.closed, self.waiters[key] == nil else {
                 completion(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Another operation is pending"))); return
             }
             self.waiters[key] = completion
+            prepare?()
             do {
                 try self.session.action(action.rawValue, value: value, nowMs: self.now)
                 accepted?()
@@ -216,10 +246,14 @@ public final class FisicaClient {
         }
     }
     /// Start measuring; `durationMs` nil measures until `stop`. Completes when the Scale confirmed the start.
-    /// Frames of the previous measurement are cleared once the core accepts the start.
+    /// The current license is applied first. Frames of the previous measurement are cleared once
+    /// the core accepts the start.
     public func start(durationMs: Int64? = nil, completion: @escaping Completion) {
         entitlement?.checkStatus()
-        request(.start, value: durationMs ?? -1, waitFor: .begin, accepted: { [weak self] in self?.clearFrames() }, completion: completion)
+        request(.start, value: durationMs ?? -1, waitFor: .begin, prepare: { [weak self] in self?.applyLicense() }, accepted: { [weak self] in
+            guard let self else { return }
+            self.clearFrames(); self.everyFrame = self.fullRate; self.finalAnalysis = nil
+        }, completion: completion)
     }
     public func stop(completion: @escaping Completion) { request(.stop, value: 0, waitFor: .end, completion: completion) }
 
@@ -260,16 +294,28 @@ public final class FisicaClient {
         closed = true; linkReady = false
         timer?.cancel(); timer = nil; readyDeadline?.cancel()
         transport.onReady = nil; transport.onBytes = nil; transport.onLost = nil; transport.onSendFailure = nil; transport.onError = nil
+        // Keep the core's analysis of the last measurement for `report()` after close.
+        if !everyFrame { finalAnalysis = try? session.analyze() }
         transport.close(); session.close()
         let pending = waiters; waiters.removeAll()
         for waiter in pending.values { waiter(.failure(FisicaError(code: Int32(FisicaStatus.cancelled.rawValue), message: "Client closed"))) }
     }
 
-    /// Analyze the frames collected so far; nil without a stable measurement.
+    /// Weight and foot size of the current measurement; nil without a stable measurement.
+    /// With every frame (full mode since `start`) the collected `frames` are analyzed; otherwise
+    /// the core analyzes every packet it received since `start`, so basic mode gives the same result.
     public func report() throws -> SessionReport? {
-        guard !frames.isEmpty else { return nil }
         entitlement?.checkStatus()
-        guard let result = try core.analyzePackets(frames.map { $0.packet }) else { return nil }
+        let analysis: [Double]?
+        if everyFrame {
+            guard !frames.isEmpty else { return nil }
+            analysis = try core.analyze(frames.flatMap { $0.display }, weights: frames.map { $0.weight }, rows: 29, cols: 29)
+        } else if closed {
+            analysis = finalAnalysis
+        } else {
+            analysis = try session.analyze()
+        }
+        guard let result = analysis else { return nil }
         return SessionReport(weight: result[0], leftWidth: result[1], leftLength: result[2], rightWidth: result[3], rightLength: result[4],
                              frames: frames, battery: battery)
     }
