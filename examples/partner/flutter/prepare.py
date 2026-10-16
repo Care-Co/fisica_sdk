@@ -10,9 +10,10 @@ import re
 import subprocess
 import xml.etree.ElementTree as ET
 
-# Xcode 27 rejects macOS deployment targets below 12.0, also in plugin pods that declare lower ones.
+# Xcode 27 rejects iOS deployment targets below 15.0 and macOS below 12.0, also in plugin pods that declare lower ones.
+DEPLOYMENT_TARGETS = (('ios', 'ios', 'IPHONEOS_DEPLOYMENT_TARGET', '15.0'), ('macos', 'osx', 'MACOSX_DEPLOYMENT_TARGET', '12.0'))
 POD_DEPLOYMENT_TARGET = """    target.build_configurations.each do |config|
-      config.build_settings['MACOSX_DEPLOYMENT_TARGET'] = '12.0' if config.build_settings['MACOSX_DEPLOYMENT_TARGET'].to_f < 12.0
+      config.build_settings['KEY'] = 'MINIMUM' if config.build_settings['KEY'].to_f < MINIMUM
     end
 """
 
@@ -68,27 +69,26 @@ def main():
         data = plistlib.loads(path.read_bytes())
         data.update({'com.apple.security.device.bluetooth': True, 'com.apple.security.device.serial': True})
         path.write_bytes(plistlib.dumps(data))
-    macos_podfile = root / 'macos/Podfile'
-    if not macos_podfile.exists():
-        # flutter create leaves the Podfile to the first build; start from the same Flutter template now.
-        version = subprocess.run([args.flutter, '--version', '--machine'], cwd=root, check=True, capture_output=True, text=True)
-        template = Path(json.loads(version.stdout)['flutterRoot']) / 'packages/flutter_tools/templates/cocoapods/Podfile-macos'
-        macos_podfile.write_text(template.read_text())
-    for platform, key, minimum in (('ios', 'IPHONEOS_DEPLOYMENT_TARGET', 13.0), ('macos', 'MACOSX_DEPLOYMENT_TARGET', 12.0)):
+    flutter_root = None
+    for platform, pod_platform, key, minimum in DEPLOYMENT_TARGETS:
         project = root / platform / 'Runner.xcodeproj/project.pbxproj'
         def raise_target(match):
-            version = max(float(match.group(1)), minimum)
+            version = max(float(match.group(1)), float(minimum))
             return key + ' = ' + str(version)
         project.write_text(re.sub(key + r' = (\d+\.\d+)', raise_target, project.read_text()))
         podfile = root / platform / 'Podfile'
-        if podfile.exists():
-            podfile.write_text(re.sub(r"(#\s*)?platform :(ios|osx), '[\d.]+'",
-                lambda match: "platform :" + match.group(2) + ", '" + str(minimum) + "'", podfile.read_text()))
-    podfile = macos_podfile.read_text()
-    if 'MACOSX_DEPLOYMENT_TARGET' not in podfile:
-        anchor = '    flutter_additional_macos_build_settings(target)\n'
-        if anchor not in podfile: parser.error('macos/Podfile post_install must raise pod MACOSX_DEPLOYMENT_TARGET to 12.0')
-        macos_podfile.write_text(podfile.replace(anchor, anchor + POD_DEPLOYMENT_TARGET))
+        if not podfile.exists():
+            # flutter create leaves the Podfile to the first build; start from the same Flutter template now.
+            if flutter_root is None:
+                version = subprocess.run([args.flutter, '--version', '--machine'], cwd=root, check=True, capture_output=True, text=True)
+                flutter_root = Path(json.loads(version.stdout)['flutterRoot'])
+            podfile.write_text((flutter_root / 'packages/flutter_tools/templates/cocoapods' / ('Podfile-' + platform)).read_text())
+        text = re.sub(r"(#\s*)?platform :(ios|osx), '[\d.]+'", "platform :" + pod_platform + ", '" + minimum + "'", podfile.read_text())
+        if key not in text:
+            anchor = '    flutter_additional_' + platform + '_build_settings(target)\n'
+            if anchor not in text: parser.error(platform + '/Podfile post_install must raise pod ' + key + ' to ' + minimum)
+            text = text.replace(anchor, anchor + POD_DEPLOYMENT_TARGET.replace('KEY', key).replace('MINIMUM', minimum))
+        podfile.write_text(text)
     print('Host scaffold ready. Run flutter pub get, then flutter run -d <device>.')
 
 

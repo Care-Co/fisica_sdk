@@ -134,9 +134,10 @@ flutter run -d windows      # Windows에서 실행
 ```
 
 `prepare.py`는 Flutter 기본 host 프로젝트를 만들고 Bluetooth 설명/권한, macOS Serial
-권한 및 최소 OS 설정을 추가한다. macOS 최소 버전은 12.0이다(Xcode 27은 12.0 미만 배포 대상을
-빌드 오류로 거절한다). 이를 위해 `macos/Podfile`을 만들어 `platform :osx, '12.0'`으로 하고,
-더 낮은 버전을 선언한 플러그인 pod(`libserialport` 등)를 `post_install`에서 12.0으로 올린다. Android 런타임 권한 요청은 샘플 Dart 코드에 있다.
+권한 및 최소 OS 설정을 추가한다. 최소 버전은 iOS 15.0, macOS 12.0이다(Xcode 27은 그 미만 배포
+대상을 빌드 오류로 거절하므로 iOS 13/14 기기는 지원하지 않는다). 이를 위해 `ios/Podfile`과
+`macos/Podfile`을 만들어 `platform :ios, '15.0'`, `platform :osx, '12.0'`으로 하고, 더 낮은 버전을
+선언한 pod(`Flutter`, `libserialport` 등)를 `post_install`에서 최소 버전으로 올린다. Android 런타임 권한 요청은 샘플 Dart 코드에 있다.
 **Demo without hardware**로 합성 데이터의 70.5kg·12프레임을 확인한 뒤 실제 연결을 시도한다.
 
 기존 앱에는 다음 의존성을 추가한다.
@@ -175,8 +176,9 @@ UUID 미발견/권한·전원 문제를 오류로 알리고 준비 작업에 tim
 명령 ACK로 간주하지 않는다. 프로토콜과 측정 계산은 transport에 구현하지 않는다.
 
 기존 앱은 Android Manifest/런타임 권한, Apple Info.plist와 capabilities를 샘플과 같이
-설정해야 한다. macOS 앱은 Runner의 `MACOSX_DEPLOYMENT_TARGET`과 `macos/Podfile`의
-`platform :osx`를 12.0 이상으로 하고, 샘플 Podfile과 같이 `post_install`에서 pod 대상을 올린다. Windows 패키징 시에는 사용하는 BLE 플러그인의 `bluetooth`, `radios`
+설정해야 한다. iOS 앱은 Runner의 `IPHONEOS_DEPLOYMENT_TARGET`과 `ios/Podfile`의 `platform :ios`를
+15.0 이상으로, macOS 앱은 `MACOSX_DEPLOYMENT_TARGET`과 `macos/Podfile`의 `platform :osx`를 12.0 이상으로
+하고, 샘플 Podfile과 같이 `post_install`에서 pod 대상을 올린다. Windows 패키징 시에는 사용하는 BLE 플러그인의 `bluetooth`, `radios`
 capabilities 조건도 확인한다. Web와 모바일 USB는 지원하지 않는다.
 
 ## 반복 측정·재연결 공통 규칙
