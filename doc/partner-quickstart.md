@@ -134,8 +134,19 @@ flutter run -d windows      # Windows에서 실행
 ```
 
 `prepare.py`는 Flutter 기본 host 프로젝트를 만들고 Bluetooth 설명/권한, macOS Serial
-권한 및 최소 OS 설정을 추가한다. Android 런타임 권한 요청은 샘플 Dart 코드에 있다.
+권한 및 최소 OS 설정을 추가한다. 최소 버전은 iOS 15.0, macOS 12.0이다(Xcode 27은 그 미만 배포
+대상을 빌드 오류로 거절하므로 iOS 13/14 기기는 지원하지 않는다). 이를 위해 `ios/Podfile`과
+`macos/Podfile`을 만들어 `platform :ios, '15.0'`, `platform :osx, '12.0'`으로 하고, 더 낮은 버전을
+선언한 pod(`Flutter`, `libserialport` 등)를 `post_install`에서 최소 버전으로 올린다. Android 런타임 권한 요청은 샘플 Dart 코드에 있다.
 **Demo without hardware**로 합성 데이터의 70.5kg·12프레임을 확인한 뒤 실제 연결을 시도한다.
+
+Xcode 27에서는 Flutter 3.44.8 이상(최신 stable 권장)을 쓴다. 그보다 낮은 Flutter(예: 3.41.x)는
+여러 아키텍처를 한 번에 확인하는 `lipo -verify_arch`를 Xcode 27의 `lipo`가 거절해, arm64와 x86_64를
+함께 빌드하는 `flutter build macos --release`와 `flutter build ios --simulator`가
+`does not contain architectures "arm64 x86_64"` 오류로 실패한다([flutter/188346](https://github.com/flutter/flutter/issues/188346)).
+한 아키텍처만 빌드하는 iOS 기기 빌드(`flutter build ios`), 부팅된 시뮬레이터에서의 `flutter run`,
+macOS debug 실행은 영향이 없다. Flutter를 올릴 수 없으면 `FLUTTER_XCODE_ARCHS=arm64 flutter build macos --release`로
+arm64만 빌드한다. 이 앱은 Intel Mac에서 실행되지 않는다.
 
 기존 앱에는 다음 의존성을 추가한다.
 
@@ -173,7 +184,9 @@ UUID 미발견/권한·전원 문제를 오류로 알리고 준비 작업에 tim
 명령 ACK로 간주하지 않는다. 프로토콜과 측정 계산은 transport에 구현하지 않는다.
 
 기존 앱은 Android Manifest/런타임 권한, Apple Info.plist와 capabilities를 샘플과 같이
-설정해야 한다. Windows 패키징 시에는 사용하는 BLE 플러그인의 `bluetooth`, `radios`
+설정해야 한다. iOS 앱은 Runner의 `IPHONEOS_DEPLOYMENT_TARGET`과 `ios/Podfile`의 `platform :ios`를
+15.0 이상으로, macOS 앱은 `MACOSX_DEPLOYMENT_TARGET`과 `macos/Podfile`의 `platform :osx`를 12.0 이상으로
+하고, 샘플 Podfile과 같이 `post_install`에서 pod 대상을 올린다. Windows 패키징 시에는 사용하는 BLE 플러그인의 `bluetooth`, `radios`
 capabilities 조건도 확인한다. Web와 모바일 USB는 지원하지 않는다.
 
 ## 반복 측정·재연결 공통 규칙

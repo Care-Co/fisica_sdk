@@ -45,6 +45,8 @@ Use `fisica-flutter-0.5.0-platforms.zip`, not a source checkout. It includes pre
 Android libraries, Apple XCFrameworks and Windows x64/ARM64 DLLs. `FisicaCore.platform()`
 uses the linked process symbols on iOS/macOS and the packaged DLL/.so on Windows/Android.
 The Apple podspec retains C symbols for Dart FFI; no private source build is performed.
+iOS apps target 15.0 or later and macOS apps 12.0 or later (Xcode 27 rejects lower deployment
+targets), so iOS 13/14 devices are not supported.
 Desktop Windows uses CMake to copy the matching architecture's DLL.
 
 `FisicaClient` adapts core operations to Futures and native events to Streams.
