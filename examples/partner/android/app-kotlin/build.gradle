@@ -6,6 +6,6 @@ android {
     kotlinOptions { jvmTarget = '1.8' }
 }
 dependencies {
-    implementation files("${rootProject.projectDir}/sdk/fisica-scale-0.2.0.aar")
+    implementation files("${rootProject.projectDir}/sdk/fisica-scale-0.3.0.aar")
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.0.21'
 }

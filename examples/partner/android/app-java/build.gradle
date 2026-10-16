@@ -5,6 +5,6 @@ android {
     compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
 }
 dependencies {
-    implementation files("${rootProject.projectDir}/sdk/fisica-scale-0.2.0.aar")
+    implementation files("${rootProject.projectDir}/sdk/fisica-scale-0.3.0.aar")
     implementation 'org.jetbrains.kotlin:kotlin-stdlib:2.0.21'
 }
