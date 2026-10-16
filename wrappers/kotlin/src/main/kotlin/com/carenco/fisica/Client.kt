@@ -66,10 +66,14 @@ class FisicaCommandException(val event: SessionEvent) :
 }
 
 /** Result of the shared analysis over the collected frames. Centimetres use the nominal 1 cm cell; not clinically calibrated. */
-class SessionReport(val weight: Double, val leftWidth: Double, val leftLength: Double, val rightWidth: Double,
-                    val rightLength: Double, val frames: List<Measurement>) {
+class SessionReport @JvmOverloads constructor(
+    val weight: Double, val leftWidth: Double, val leftLength: Double, val rightWidth: Double,
+    val rightLength: Double, val frames: List<Measurement>,
+    /** The client's last [FisicaClient.readBattery] reading in percent, or null. Packets carry no battery field. */
+    val battery: Int? = null,
+) {
     val frameCount get() = frames.size
-    val batteryValid get() = false
+    val batteryValid get() = battery != null
 }
 
 /**
@@ -92,6 +96,8 @@ class FisicaClient(
     @Volatile var onLinkLost: () -> Unit = {}
     @Volatile var onError: (Throwable) -> Unit = {}
     @Volatile var firmwareVersion: String? = null; private set
+    /** Battery level in percent from the last [readBattery], or null. Measurement packets carry no battery field. */
+    @Volatile var battery: Int? = null; private set
     @Volatile var state = FisicaSessionState.DISCONNECTED; private set
 
     private val worker = Executors.newSingleThreadScheduledExecutor { Thread(it, "fisica-client").apply { isDaemon = true } }
@@ -238,6 +244,28 @@ class FisicaClient(
     fun stop(completion: (SessionEvent?, Throwable?) -> Unit) = request(FisicaSessionAction.STOP, 0, FisicaSessionOperation.END, completion = completion)
 
     /**
+     * Ask the Scale for its battery level (GET_BATTERY_LEVEL), idle or during a measurement, without
+     * interrupting it. A refused or unanswered query fails only this call; the session carries on.
+     */
+    fun readBattery(completion: (Int?, Throwable?) -> Unit) = serial {
+        val key = FisicaSessionOperation.REQUEST
+        if (closed || waiters.containsKey(key)) {
+            post { completion(null, FisicaException(FisicaStatus.BUSY, "Another operation is pending")) }; return@serial
+        }
+        waiters[key] = { event, error ->
+            if (event == null) completion(null, error)
+            else {
+                val data = core.responsePayload(event.payload)
+                val percent = if (data.size == 2) ((data[0].toInt() and 0xff) shl 8) or (data[1].toInt() and 0xff) else -1
+                if (percent in 0..100) { battery = percent; completion(percent, null) }
+                else completion(null, FisicaCommandException(event))
+            }
+        }
+        try { session.command("GET_BATTERY_LEVEL", nowMs = now); session.drain().forEach(::deliver) }
+        catch (error: Throwable) { finish(key, null, error) }
+    }
+
+    /**
      * Stop if needed, release the Scale's measurement mode, then close the transport.
      * Resources are released even when the Scale does not confirm.
      */
@@ -266,6 +294,6 @@ class FisicaClient(
         if (snapshot.isEmpty()) return null
         entitlement?.checkStatus()
         val result = core.analyzePackets(snapshot.map { it.packet }) ?: return null
-        return SessionReport(result[0], result[1], result[2], result[3], result[4], snapshot)
+        return SessionReport(result[0], result[1], result[2], result[3], result[4], snapshot, battery)
     }
 }

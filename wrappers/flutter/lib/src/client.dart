@@ -45,6 +45,7 @@ class FisicaClient {
   final _frames = ListQueue<DecodedMeasurement>();
   int _maxFrames = FisicaLimit.analysisFrames;
   int _droppedFrames = 0;
+  int? _battery;
   FisicaClient(FisicaCore core, FisicaTransport transport, {this.entitlement})
     : session = FisicaSession(core),
       _transport = transport;
@@ -59,6 +60,10 @@ class FisicaClient {
 
   /// Oldest frames dropped beyond [maxFrames] since the last [start] or [clearFrames].
   int get droppedFrames => _droppedFrames;
+
+  /// Battery level in percent from the last [readBattery], or null.
+  /// Measurement packets carry no battery field.
+  int? get battery => _battery;
 
   /// How many recent frames to keep; at most [FisicaLimit.analysisFrames], the
   /// most one analysis accepts. This also bounds memory in long sessions.
@@ -88,7 +93,7 @@ class FisicaClient {
 
   /// Analyze the collected frames in the shared core: weight and left/right
   /// foot width and length in nominal centimetres, or null without a stable
-  /// measurement.
+  /// measurement. [battery] is the last [readBattery] reading, or null.
   ({
     double weight,
     double leftWidth,
@@ -96,6 +101,7 @@ class FisicaClient {
     double rightWidth,
     double rightLength,
     List<DecodedMeasurement> frames,
+    int? battery,
   })?
   report() {
     if (_frames.isEmpty) return null;
@@ -111,6 +117,7 @@ class FisicaClient {
       rightWidth: result[3],
       rightLength: result[4],
       frames: frames,
+      battery: _battery,
     );
   }
 
@@ -312,6 +319,30 @@ class FisicaClient {
 
   Future<FisicaSessionEvent> stop() =>
       _checked(_action(FisicaSessionAction.stop, 0));
+
+  /// Ask the Scale for its battery level (GET_BATTERY_LEVEL), idle or during
+  /// a measurement, without interrupting it. A refused or unanswered query
+  /// fails only this call; the session carries on.
+  Future<int> readBattery() async {
+    if (_closed) throw StateError('Client is closed');
+    if (_waiters.isNotEmpty) {
+      throw FisicaStateError(FisicaStatus.busy, 'Another operation is pending');
+    }
+    final waiter = Completer<FisicaSessionEvent>();
+    _waiters[FisicaSessionOperation.request] = waiter;
+    try {
+      session.command('GET_BATTERY_LEVEL', nowMs: now);
+      _drain();
+    } catch (error, stack) {
+      _waiters.remove(FisicaSessionOperation.request);
+      waiter.completeError(error, stack);
+    }
+    final event = await _checked(waiter.future);
+    final data = session.core.decodeResponse(event.payload)['payload'] as Uint8List;
+    final percent = data.length == 2 ? (data[0] << 8) | data[1] : -1;
+    if (percent < 0 || percent > 100) throw FisicaCommandError(event);
+    return _battery = percent;
+  }
 
   /// Stop if needed, release the Scale's measurement mode and close the
   /// transport. Without a link (after a loss) it only frees resources.

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 from fisica_sdk import FisicaSDK, NativeCore, MockTransport, FisicaFirmwareWarning
-from fisica_sdk import FisicaError, FisicaErrorCode, FisicaTransportError
+from fisica_sdk import FisicaCommandError, FisicaError, FisicaErrorCode, FisicaTransportError
 from fisica_sdk.receiver import Receiver
 from fisica_sdk.serial_uart import SerialUART
 from fisica_sdk import port_scanner
@@ -198,6 +198,58 @@ def test_firmware_timeout_does_not_block_connection():
     finally:
         sdk.disconnect()
         sdk.wait()
+
+
+def test_battery_is_read_from_the_scale_and_carried_into_reports(tmp_path):
+    """Measurement packets have no battery field; GET_BATTERY_LEVEL is the real reading."""
+    core = NativeCore()
+    transport = firmware_transport(core)
+    battery = core.command('GET_BATTERY_LEVEL')
+    transport.exchanges[battery] = [bytes.fromhex('243147010050fff0')]  # 0x50 = 80 %
+    transport.exchanges[core.command('START_CONTINUOUS_MEASUREMENT')] = [bytes.fromhex('245153010000fff0') + packet() * 12]
+    sdk = FisicaSDK()
+    try:
+        with pytest.warns(FisicaFirmwareWarning):
+            sdk.connect({'id': 'mock', 'type': 'Serial'}, transport=transport)
+        # An injected transport is never queried automatically: it may not answer.
+        assert battery not in transport.sent and sdk.get_device_info()['battery'] is None
+        assert sdk.get_battery() == 80
+        assert sdk.get_device_info()['battery'] == 80 and sdk.get_device_info()['battery_valid'] is True
+        frames = []
+        sdk.on_data(frames.append)
+        sdk.start_measurement()
+        wait_until(lambda: len(frames) == 12)
+        assert sdk.get_battery() == 80  # also answers during a measurement
+        sdk.stop_measurement()
+        sdk.wait()
+        report = sdk.analyze()
+        assert (report.battery, report.battery_valid) == (80, True)
+        assert all(frame.battery_valid is False for frame in report.total_frame)  # packets carry no battery
+        sdk.export_report(report, output=str(tmp_path / 'report.json'))
+        exported = json.loads((tmp_path / 'report.json').read_text())
+        assert (exported[0]['battery'], exported[0]['battery_valid']) == (80, True)
+    finally:
+        sdk.disconnect()
+        sdk.wait()
+    assert transport.sent.count(battery) == 2
+
+
+def test_battery_refused_by_the_scale_raises_and_keeps_no_reading():
+    core = NativeCore()
+    transport = firmware_transport(core)
+    transport.exchanges[core.command('GET_BATTERY_LEVEL')] = [bytes.fromhex('243147000001fff0')]  # NACK
+    sdk = FisicaSDK()
+    try:
+        with pytest.warns(FisicaFirmwareWarning):
+            sdk.connect({'id': 'mock', 'type': 'Serial'}, transport=transport)
+        with pytest.raises(FisicaCommandError):
+            sdk.get_battery()
+        assert sdk.get_device_info()['battery_valid'] is False
+    finally:
+        sdk.disconnect()
+        sdk.wait()
+    with pytest.raises(RuntimeError, match='Connect a Scale'):
+        sdk.get_battery()
 
 
 def test_public_sdk_measurement_reports_preserve_raw_data_and_validity(tmp_path):

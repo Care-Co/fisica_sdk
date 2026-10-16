@@ -42,6 +42,7 @@ if devices:
     sdk.connect(devices[0])
     try:
         sdk.set_metadata(id='partner-session-123', name='Member')
+        print(sdk.get_battery(), '%')   # read from the Scale; also read on connect and each start
         sdk.start_measurement(duration=10)
         sdk.wait()
         report = sdk.analyze()

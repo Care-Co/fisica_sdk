@@ -52,6 +52,11 @@ SDK wheel과 GUI extra의 설치 가능성을 같은 지원 수준으로 표시�
 - 보고서 분석은 Python과 같이 29×29 display grid와 프레임별 체중을 쓴다. 29×22 raw grid는 분석에
   쓰지 않는다. 다른 언어는 수집한 패킷을 `analyze_packets`로 코어에 넘기며 결과가 Python 경로와 같음을
   테스트로 확인한다. Python `SessionReport`는 표시용으로 소수 2자리 반올림하고 다른 언어는 코어 값을 그대로 준다.
+- 배터리: 측정 패킷에는 배터리 값이 없어 프레임은 고정값 99와 `battery_valid=false`다. 실제 잔량은
+  `GET_BATTERY_LEVEL` 조회로 읽는다(대기·측정 중 모두 가능, 측정을 끊지 않음). Python은 SDK가 연 USB/BLE
+  연결에서 연결 직후와 측정 시작 전에 자동으로 읽고 `get_battery()`로도 읽는다. Swift·Kotlin·C#·Dart는
+  `readBattery`/`ReadBatteryAsync`로 읽는다(측정 시작 등 다른 요청과 겹치지 않게 자동 조회는 하지 않음).
+  보고서는 마지막 조회값을 `battery`, `battery_valid=true`로 담는다. GET 조회가 거부·무응답이면 그 호출만 실패하고 세션은 유지된다.
 - UI·파일 저장·보고서 내보내기는 Python에만 있다. 다른 언어에서는 앱이 구현한다.
 - 새 래퍼는 자체 wrapper.json/버전/지원 기간을 가진다. ABI 1.3의 check_wrapper가 지원 범위와 deprecated
   여부를 코어에서 계산한다. 경고 bit 1은 SDK, bit 2는 래퍼 deprecated다. 지원하지 않는 버전은 코드 12.

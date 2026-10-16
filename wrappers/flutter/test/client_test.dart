@@ -60,10 +60,41 @@ Uint8List fixturePacket() {
 
 Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 60));
 
+/// Answers GET_BATTERY_LEVEL with [battery] percent, or refuses it (NACK) when null.
+class BatteryBytes extends MockBytes {
+  int? battery = 80;
+  @override
+  Future<void> send(Uint8List bytes) async {
+    if (bytes[1] != 0x31) return super.send(bytes);
+    sent.add(bytes);
+    final level = battery;
+    input.add(Uint8List.fromList(level == null
+        ? [0x24, 0x31, 0x47, 0, 0, 1, 255, 240]
+        : [0x24, 0x31, 0x47, 1, 0, level, 255, 240]));
+  }
+}
+
 void main() {
   final core = FisicaCore.open(
     Platform.environment['FISICA_CORE_TEST_LIBRARY']!,
   );
+  test('battery comes from GET_BATTERY_LEVEL, idle or measuring', () async {
+    final transport = BatteryBytes();
+    final client = FisicaClient(core, transport);
+    await client.connect(link: FisicaLink.usb);
+    expect(client.battery, isNull);
+    expect(transport.sent.any((s) => s[1] == 0x31), isFalse);
+    expect(await client.readBattery(), 80);
+    await client.start();
+    expect(await client.readBattery(), 80);
+    expect(client.battery, 80);
+    await client.stop();
+    transport.battery = null;
+    await expectLater(client.readBattery(), throwsA(isA<FisicaCommandError>()));
+    expect(client.battery, 80);
+    expect((await client.start()).state, 3); // the refusal did not fault the session
+    await client.close();
+  });
   test('async client uses core for start stop release', () async {
     final transport = MockBytes();
     final client = FisicaClient(core, transport);

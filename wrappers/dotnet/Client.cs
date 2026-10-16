@@ -56,7 +56,10 @@ public sealed class FisicaCommandException(SessionEvent sessionEvent)
 
 /// <summary>Result of the shared analysis over the collected frames. Centimetres use the nominal 1 cm cell; not clinically calibrated.</summary>
 public sealed record SessionReport(double Weight,double LeftWidth,double LeftLength,double RightWidth,double RightLength,IReadOnlyList<Measurement> Frames) {
-    public int FrameCount => Frames.Count; public bool BatteryValid => false;
+    public int FrameCount => Frames.Count;
+    /// <summary>The client's last ReadBatteryAsync reading in percent, or null. Packets carry no battery field.</summary>
+    public int? Battery { get; init; }
+    public bool BatteryValid => Battery is not null;
 }
 
 /// <summary>Connect, measure, stop and report over any transport. Command order, ACK waits, timeouts and recovery
@@ -70,6 +73,8 @@ public sealed class FisicaClient : IAsyncDisposable {
     public event Action? LinkLost;
     public event Action<Exception>? Error;
     public string? FirmwareVersion { get; private set; }
+    /// <summary>Battery level in percent from the last ReadBatteryAsync, or null. Measurement packets carry no battery field.</summary>
+    public int? Battery { get; private set; }
     public FisicaSessionState State { get; private set; }=FisicaSessionState.Disconnected;
 
     readonly FisicaSession session; readonly Stopwatch clock=Stopwatch.StartNew();
@@ -208,6 +213,26 @@ public sealed class FisicaClient : IAsyncDisposable {
     }
     public Task<SessionEvent> StopAsync() => Request(FisicaSessionAction.Stop,0,FisicaSessionOperation.End);
 
+    /// <summary>Ask the Scale for its battery level (GET_BATTERY_LEVEL), idle or during a measurement, without
+    /// interrupting it. A refused or unanswered query fails only this task; the session carries on.</summary>
+    public async Task<int> ReadBatteryAsync() {
+        var result=await Query("GET_BATTERY_LEVEL");
+        var data=Core.ResponsePayload(result.Payload);
+        var percent=data.Length==2 ? (data[0]<<8)|data[1] : -1;
+        if (percent is < 0 or > 100) throw new FisicaCommandException(result);
+        Battery=percent; return percent;
+    }
+    Task<SessionEvent> Query(string name) {
+        var waiter=Waiter();
+        Post(() => {
+            if (closed || waiters.ContainsKey(FisicaSessionOperation.Request)) { waiter.TrySetException(new FisicaException((int)FisicaStatus.Busy,"Another operation is pending")); return; }
+            waiters[FisicaSessionOperation.Request]=waiter;
+            try { session.Command(name,clock.ElapsedMilliseconds); foreach (var next in session.Drain()) Deliver(next); }
+            catch (Exception error) { Finish(FisicaSessionOperation.Request,null,error); }
+        });
+        return waiter.Task;
+    }
+
     /// <summary>Stop if needed, release the Scale's measurement mode, then close the transport. Resources are
     /// released even when the Scale does not confirm; the task then carries that error.</summary>
     public Task CloseAsync() {
@@ -236,6 +261,6 @@ public sealed class FisicaClient : IAsyncDisposable {
         var snapshot=Frames; if (snapshot.Count==0) return null;
         Entitlement?.CheckStatus();
         var result=Core.AnalyzePackets(snapshot.Select(f => f.Packet).ToArray());
-        return result==null ? null : new(result[0],result[1],result[2],result[3],result[4],snapshot);
+        return result==null ? null : new(result[0],result[1],result[2],result[3],result[4],snapshot) { Battery=Battery };
     }
 }

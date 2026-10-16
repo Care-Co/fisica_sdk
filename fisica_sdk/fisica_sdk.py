@@ -69,6 +69,7 @@ class FisicaSDK:
         self._callback = None
         self._duration = None
         self._receiver = None
+        self._last_device_info = None  # kept after disconnect so a later analyze() keeps the battery reading
         self._session = None
         self._working = None
         self._loop = None
@@ -342,8 +343,31 @@ class FisicaSDK:
             raise e
 
     def get_device_info(self):
-        """Firmware query result and verification state; unknown firmware never blocks use."""
+        """Firmware query result and verification state, and the last battery reading; unknown firmware never blocks use."""
         return dict(self._receiver.device_info) if self._receiver else None
+
+    def get_battery(self):
+        """
+    Fisica SDK: get_battery
+
+        Returns:
+            int: Battery level in percent (0-100), read from the Scale now.
+
+        Notes:
+            Works while idle or during a measurement without interrupting it.
+            On USB/BLE links the SDK opens, it also reads the level on connect and
+            before each measurement; with an injected transport, call this method.
+            Reports carry the latest reading with `battery_valid=True`; measurement
+            frames have no battery field and keep `battery_valid=False`.
+            Raises FisicaCommandError if the Scale does not answer.
+        """
+        if not self._receiver:
+            raise RuntimeError('Connect a Scale before reading its battery level')
+        return self._receiver.battery()
+
+    def _battery_reading(self):
+        info = self._receiver.device_info if self._receiver else self._last_device_info
+        return info.get('battery') if info and info.get('battery_valid') else None
     def disconnect(self):
         """
     Fisica SDK: disconnect
@@ -383,6 +407,9 @@ class FisicaSDK:
                 self._working = False
                 if self._loop and self._loop.is_running():
                     self._loop.call_soon_threadsafe(self._loop.stop)
+                info = getattr(self._receiver, 'device_info', None)
+                if info:
+                    self._last_device_info = dict(info)
                 self._receiver = None
                 self._connected_device = None
                 self._connected = False
@@ -738,8 +765,9 @@ class FisicaSDK:
             frame_count=len(frames),
             duration_sec=round(self._duration or 0.0, 2),
             weight=weight,
-            battery=frames[-1].battery,
-            battery_valid=frames[-1].battery_valid,
+            # Measurement packets have no battery field; the Scale's last GET_BATTERY_LEVEL answer does.
+            battery=reading if (reading := self._battery_reading()) is not None else frames[-1].battery,
+            battery_valid=reading is not None or frames[-1].battery_valid,
         )
 
         self._reports.append(self._current_report)
