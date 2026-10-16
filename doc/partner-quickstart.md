@@ -140,6 +140,14 @@ flutter run -d windows      # Windows에서 실행
 선언한 pod(`Flutter`, `libserialport` 등)를 `post_install`에서 최소 버전으로 올린다. Android 런타임 권한 요청은 샘플 Dart 코드에 있다.
 **Demo without hardware**로 합성 데이터의 70.5kg·12프레임을 확인한 뒤 실제 연결을 시도한다.
 
+Xcode 27에서는 Flutter 3.44.8 이상(최신 stable 권장)을 쓴다. 그보다 낮은 Flutter(예: 3.41.x)는
+여러 아키텍처를 한 번에 확인하는 `lipo -verify_arch`를 Xcode 27의 `lipo`가 거절해, arm64와 x86_64를
+함께 빌드하는 `flutter build macos --release`와 `flutter build ios --simulator`가
+`does not contain architectures "arm64 x86_64"` 오류로 실패한다([flutter/188346](https://github.com/flutter/flutter/issues/188346)).
+한 아키텍처만 빌드하는 iOS 기기 빌드(`flutter build ios`), 부팅된 시뮬레이터에서의 `flutter run`,
+macOS debug 실행은 영향이 없다. Flutter를 올릴 수 없으면 `FLUTTER_XCODE_ARCHS=arm64 flutter build macos --release`로
+arm64만 빌드한다. 이 앱은 Intel Mac에서 실행되지 않는다.
+
 기존 앱에는 다음 의존성을 추가한다.
 
 ```yaml
