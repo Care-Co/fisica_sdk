@@ -1,9 +1,11 @@
 using System.IO.Ports;
 namespace CareCo.Fisica;
 
-/// <summary>USB serial link to a Scale (CP210x virtual COM port, 9600 8N1 as in the Python SDK).
+/// <summary>USB serial link to a Scale (CP210x virtual COM port, 115200 8N1 as in the Python SDK).
+/// DTR and RTS are asserted: the Scale's ESP32 is wired for auto-reset, and with DTR off it reboots
+/// (DTR and RTS both off) or is held in reset (only RTS on).
 /// OS I/O only: bytes in, bytes out. Choose the port in the app, for example from PortNames().</summary>
-public sealed class SerialTransport(string portName,int baudRate=9600) : IFisicaTransport {
+public sealed class SerialTransport(string portName,int baudRate=115200) : IFisicaTransport {
     public event Action? Ready; public event Action<byte[]>? Bytes; public event Action? Lost;
     public event Action<Exception>? SendFailed; public event Action<Exception>? Error;
     public FisicaLink? Link => FisicaLink.Usb;
@@ -11,12 +13,13 @@ public sealed class SerialTransport(string portName,int baudRate=9600) : IFisica
     public string PortName { get; }=portName;
     public static string[] PortNames() => SerialPort.GetPortNames();
 
+    internal SerialPort CreatePort() =>
+        new(PortName,baudRate,Parity.None,8,StopBits.One) { Handshake=Handshake.None, DtrEnable=true, RtsEnable=true, ReadTimeout=200, WriteTimeout=1000 };
     public void Open() {
         lock(gate) {
             if (open) return;
             try {
-                port=new SerialPort(PortName,baudRate,Parity.None,8,StopBits.One) { ReadTimeout=200, WriteTimeout=1000 };
-                port.Open(); open=true;
+                port=CreatePort(); port.Open(); open=true;
             } catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException) {
                 port?.Dispose(); port=null;
                 Error?.Invoke(new FisicaException(1001,$"Cannot open serial port {PortName}: {error.Message}")); Lost?.Invoke(); return;

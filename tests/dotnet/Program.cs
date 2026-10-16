@@ -143,6 +143,10 @@ async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.
     serial.Lost+=() => lost=true; serial.Error+=e => reported=e; serial.Open();
     Require(lost && reported is FisicaException { Code: 1001 },"serial open failure");
     serial.Close();
+    // Line settings a real Scale needs: 115200 8N1, and DTR asserted or its ESP32 reboots or stays in reset.
+    using var port=new SerialTransport("COM9").CreatePort();
+    Require(port is { BaudRate: 115200, DataBits: 8, Parity: System.IO.Ports.Parity.None, StopBits: System.IO.Ports.StopBits.One,
+        Handshake: System.IO.Ports.Handshake.None, DtrEnable: true, RtsEnable: true } && !port.IsOpen,"serial line settings");
 }
 #if WINDOWS
 {
