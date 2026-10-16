@@ -4,7 +4,6 @@ import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
-import java.security.MessageDigest
 
 /**
  * The license of one [FisicaEntitlement] at one moment. Codes are the generated constants;
@@ -181,13 +180,10 @@ class FisicaEntitlement @JvmOverloads constructor(
 
     private fun stateFile(): File? {
         val directory = storage ?: return null
-        val company = text(FisicaEntitlementText.COMPANY).orEmpty()
-        if (company.isEmpty()) return null
-        val contract = text(FisicaEntitlementText.CONTRACT).orEmpty()
-        // Keyed by company and contract, the attribution unit; the key inside says which seat.
-        // Never an installation or device ID.
-        val digest = MessageDigest.getInstance("SHA-256").digest("$company\n$contract".toByteArray(Charsets.UTF_8))
-        return File(directory, "entitlement-" + digest.take(8).joinToString("") { "%02x".format(it) } + ".state")
+        // One file per seat on this device, named by the core from the company, the contract and this
+        // app's or PC's target, so every wrapper on a PC finds the same file. Never a usage record.
+        val name = text(FisicaEntitlementText.STATE_NAME).orEmpty()
+        return if (name.isEmpty()) null else File(directory, name)
     }
     private fun save() {
         try {

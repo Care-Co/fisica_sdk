@@ -119,10 +119,10 @@ public sealed class FisicaEntitlement : IDisposable {
 
     string? StateFile() {
         if (storage==null) return null;
-        string company=Text(FisicaEntitlementText.Company); if (company.Length==0) return null;
-        // Named by company and contract, the attribution unit; the key inside says which seat. Never an installation id.
-        var name=new string((company+"-"+Text(FisicaEntitlementText.Contract)).Select(c => char.IsAsciiLetterOrDigit(c) || c=='_' || c=='-' ? c : '_').ToArray());
-        return Path.Combine(storage,"entitlement-"+name+".state");
+        // One file per seat on this device, named by the core from the company, the contract and this
+        // app's or PC's target, so every wrapper on a PC finds the same file. Never a usage record.
+        string name=Text(FisicaEntitlementText.StateName);
+        return name.Length==0 ? null : Path.Combine(storage,name);
     }
     void Save() {
         try {

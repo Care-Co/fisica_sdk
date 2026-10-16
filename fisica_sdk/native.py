@@ -429,6 +429,10 @@ class NativeEntitlement:
     def token(self):
         return self._text(5)
 
+    def state_name(self):
+        """File name for the stored state of this seat (company, contract and this app or PC); '' without a key."""
+        return self._text(12)
+
     def activation_request(self):
         """JSON body for POST /sdk/v1/entitlement/activate, or None when the core cannot read a target."""
         try:

@@ -299,15 +299,12 @@ class FisicaEntitlement {
   File? _stateFile() {
     final directory = _storageDirectory;
     if (directory == null) return null;
-    final company = _text(FisicaEntitlementText.company);
-    if (company.isEmpty) return null;
-    // Named by company and contract, the attribution unit (the key inside
-    // says which seat); never an installation or device id.
-    final name = '$company-${_text(FisicaEntitlementText.contract)}'.replaceAll(
-      RegExp(r'[^A-Za-z0-9_-]'),
-      '_',
-    );
-    return File('$directory${Platform.pathSeparator}entitlement-$name.state');
+    // One file per seat on this device, named by the core from the company,
+    // the contract and this app's or PC's target, so every wrapper on a PC
+    // finds the same file. Never a usage record.
+    final name = _text(FisicaEntitlementText.stateName);
+    if (name.isEmpty) return null;
+    return File('$directory${Platform.pathSeparator}$name');
   }
 
   void _save() {

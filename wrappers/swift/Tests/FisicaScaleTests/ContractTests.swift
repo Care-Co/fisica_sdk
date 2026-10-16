@@ -155,7 +155,9 @@ final class LicenseTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: storage) }
         let entitlement = try FisicaEntitlement(core: core, storage: storage, clock: { now })
         XCTAssertEqual(try entitlement.importToken(try Vectors.string("full")), .accepted)
-        let state = storage.appendingPathComponent("entitlement-acme-ctr-1.state")
+        // One file per seat: the core names it from company, contract and this PC's target.
+        let digest = SHA256.hash(data: Data("acme\nctr-1\n\(target)".utf8)).map { String(format: "%02x", $0) }.joined()
+        let state = storage.appendingPathComponent("entitlement-\(digest.prefix(16)).state")
         XCTAssertTrue(FileManager.default.fileExists(atPath: state.path))
         let code = try entitlement.release()
         XCTAssertEqual(try Vectors.readCode(code, "FRC1"), ["k": "key_test_1", "t": "pc", "b": target])

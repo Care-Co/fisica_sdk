@@ -164,6 +164,7 @@ class FisicaEntitlementText(IntEnum):
     FEATURES = 9
     ACTIVATION_REQUEST = 10
     ACTIVATION_CODE = 11
+    STATE_NAME = 12
 
 
 # GATT characteristics used by the Scale. BLE_PROFILE_VERIFIED stays False until confirmed on production firmware.

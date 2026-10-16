@@ -187,10 +187,10 @@ public final class FisicaEntitlement {
         try importToken(String(decoding: try Data(contentsOf: url), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
     }
     private func stateFile() -> URL? {
-        guard let storage, let company = try? text(.company), !company.isEmpty, let contract = try? text(.contract) else { return nil }
-        // Named by company and contract, the attribution unit; the key inside says which seat.
-        let name = String("\(company)-\(contract)".map { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "_" || $0 == "-") ? $0 : "_" })
-        return storage.appendingPathComponent("entitlement-\(name).state")
+        // One file per seat on this device, named by the core from the company, the contract and this
+        // app's or PC's target, so every wrapper on a PC finds the same file. Never a usage record.
+        guard let storage, let name = try? text(.stateName), !name.isEmpty else { return nil }
+        return storage.appendingPathComponent(name)
     }
     private func save() {
         guard let file = stateFile(), let state = try? exportState() else { return }

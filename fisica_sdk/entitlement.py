@@ -7,7 +7,6 @@ key, activates it online, renews it and reports the status.
 The SDK does not track its own use: nothing here records or reports whether, when or how often
 it is used. The stored state is the signed key and the latest time seen, kept for offline checks.
 """
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -119,9 +118,9 @@ class Entitlement:
             return None
         if self._storage is not AUTO:
             return Path(self._storage)
-        # Keyed by company + contract, the attribution unit; the key inside says which seat.
-        name = hashlib.sha256((status['company'] + '\n' + status['contract']).encode()).hexdigest()[:16]
-        return default_storage_directory() / ('entitlement-' + name + '.state')
+        # One file per seat on this device, named by the core from the company, the contract and this
+        # app's or PC's target: every wrapper on the PC finds the same file. Never a usage record.
+        return default_storage_directory() / self._native.state_name()
 
     def _save(self, path=None):
         try:

@@ -143,6 +143,7 @@ public enum FisicaEntitlementText: UInt32, CaseIterable {
     case features = 9
     case activationRequest = 10
     case activationCode = 11
+    case stateName = 12
 }
 /// GATT characteristics used by the Scale. `verified` is false until confirmed on production firmware.
 public struct FisicaBleProfile: Equatable {

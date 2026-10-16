@@ -144,6 +144,7 @@ object FisicaEntitlementText {
     const val FEATURES = 9
     const val ACTIVATION_REQUEST = 10
     const val ACTIVATION_CODE = 11
+    const val STATE_NAME = 12
 }
 /** GATT characteristics used by the Scale. VERIFIED is false until confirmed on production firmware. */
 data class FisicaBleProfile(val write: String, val notify: String) {

@@ -239,12 +239,16 @@ enum FisicaEntitlementWarning {
 /* ACTIVATION_REQUEST: JSON body for POST /sdk/v1/entitlement/activate with this target.
  * ACTIVATION_CODE: FAC1 code for activating the current unactivated key on another device.
  * Both return FISICA_INVALID_STATE when the core cannot read a target or (code) when no
- * unactivated key is loaded. */
+ * unactivated key is loaded.
+ * STATE_NAME: file name for the exported state, "entitlement-<16 hex>.state", from the key's
+ * company and contract and this app's or PC's target, so every wrapper on a device uses the
+ * same file for the same seat; empty without a key. */
 enum FisicaEntitlementText {
     FISICA_ENTITLEMENT_COMPANY = 1, FISICA_ENTITLEMENT_CONTRACT = 2, FISICA_ENTITLEMENT_GRANTS = 3,
     FISICA_ENTITLEMENT_SIGNING_KEY = 4, FISICA_ENTITLEMENT_TOKEN = 5, FISICA_ENTITLEMENT_KEY = 6,
     FISICA_ENTITLEMENT_BIND = 7, FISICA_ENTITLEMENT_TARGET = 8, FISICA_ENTITLEMENT_FEATURES = 9,
-    FISICA_ENTITLEMENT_ACTIVATION_REQUEST = 10, FISICA_ENTITLEMENT_ACTIVATION_CODE = 11
+    FISICA_ENTITLEMENT_ACTIVATION_REQUEST = 10, FISICA_ENTITLEMENT_ACTIVATION_CODE = 11,
+    FISICA_ENTITLEMENT_STATE_NAME = 12
 };
 FISICA_API int32_t fisica_core_entitlement_create(FisicaEntitlement **context);
 FISICA_API void fisica_core_entitlement_destroy(FisicaEntitlement *context);

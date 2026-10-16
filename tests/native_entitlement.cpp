@@ -132,6 +132,8 @@ int main(int argc, char **argv) {
     assert(values[0] == FISICA_MODE_BASIC && values[1] == FISICA_REASON_NOT_ACTIVATED && values[5] == FISICA_TRACK_TRIAL);
     assert(values[6] == FISICA_BIND_NONE && values[11] == now + 14 * day && (values[17] & FISICA_WARN_TEST_KEY));
     assert(text(context, FISICA_ENTITLEMENT_KEY) == "key_test_1");
+    const std::string state_name = text(context, FISICA_ENTITLEMENT_STATE_NAME);
+    assert(state_name.rfind("entitlement-", 0) == 0 && state_name.size() == 12 + 16 + 6 && state_name.substr(28) == ".state");
     const std::string code = text(context, FISICA_ENTITLEMENT_ACTIVATION_CODE);
     assert(code.rfind("FAC1.", 0) == 0 && code.size() > 15 && code[code.size() - 9] == '.');
     std::array<uint8_t,8> small{}; small.fill(99); uint32_t length = 0;

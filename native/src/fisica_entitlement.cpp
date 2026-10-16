@@ -533,6 +533,10 @@ int32_t fisica_core_entitlement_text(FisicaEntitlement *context, uint32_t field,
             if (!target.type) return FISICA_INVALID_STATE;
             return copy_out(std::string("{\"bind_type\":\"") + bind_name(target.type) + "\",\"bind\":\"" + target.value + "\"}",
                             output, capacity, length);
+        case FISICA_ENTITLEMENT_STATE_NAME:
+            // One file per seat on this device: a key per contract and target.
+            return copy_out(context->verified ? "entitlement-" + sha256_hex(token.company + "\n" + token.contract + "\n" +
+                            target.value).substr(0, 16) + ".state" : std::string(), output, capacity, length);
         case FISICA_ENTITLEMENT_ACTIVATION_CODE:
             if (!length) return FISICA_INVALID_ARGUMENT;
             if (!target.type || !context->verified || token.key.empty() || token.bind_type) return FISICA_INVALID_STATE;
