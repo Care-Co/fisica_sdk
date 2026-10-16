@@ -42,7 +42,7 @@ FISICA_CORE_TEST_LIBRARY=/absolute/path/libfisica_core.dylib flutter test
 flutter analyze
 ```
 
-`--validation`은 테스트 서명 키가 포함된 QA 빌드를 다루는 옵션이다. 파트너별 키나
+`--validation`은 운영 키와 함께 테스트 서명 키도 신뢰하는 QA 빌드를 다루는 옵션이다. 파트너별 키나
 온라인 인증을 필수로 만드는 옵션이 아니다. 공식 공개나 버전 태그는 만들지 않았다.
 
 QA 실행 로그는 `.build/partner-*.log`, 소비 앱의 임시 프로젝트는

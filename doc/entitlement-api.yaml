@@ -3,8 +3,9 @@ info:
   title: Fisica SDK entitlement API
   version: 0.1.0-draft
   description: |
-    Contract between the SDK and the Care&Co server (policy of 2026-10-14). DRAFT: the server
-    is not implemented; `tools/entitlement_dev.py` is the reference mock.
+    Contract between the SDK and the Care&Co server (policy of 2026-10-14). The server is the
+    Fisica developer portal (Care-Co/developer-portal) at https://developer.fisicahealthcare.com;
+    `tools/entitlement_dev.py` is the reference mock used by the tests.
 
     The SDK calls one endpoint: refresh. There is no usage, activity or telemetry endpoint.
     Company registration, terms acceptance, contract administration and issuing the first
@@ -33,7 +34,7 @@ info:
     - The signing private key (Ed25519) stays on the server. The SDK embeds public keys by `kid`.
 servers:
   - url: https://{host}
-    variables: {host: {default: sdk.example.invalid, description: Not decided}}
+    variables: {host: {default: developer.fisicahealthcare.com, description: Fisica developer portal}}
 security:
   - entitlementToken: []
 paths:

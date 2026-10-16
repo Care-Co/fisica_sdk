@@ -113,9 +113,8 @@ for wrappers and core; rights to previously licensed source are not revoked.
 No company, contract or delivery identifier is compiled in: one binary per platform,
 architecture and core version serves every company, and the release tools write a
 hashed `artifact-manifest.json`. The core trusts the server public keys listed in
-`native/entitlement-keys.json`. While that list holds a test key, packaging tools
-stop unless `--validation` is passed, so a customer package cannot trust a key whose
-secret is in this repository. Runtime entitlement never locks a feature.
+`native/entitlement-keys.json`. Customer packages trust only its production keys;
+`--validation` QA builds also trust the test key, whose secret is in this repository. Runtime entitlement never locks a feature.
 
 ## Measurement compatibility and limits
 

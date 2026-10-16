@@ -5,7 +5,8 @@ Python 2.4.0 retains the measurement API and delegates packet processing, sessio
 to core 1.4.0 (C ABI 1.4). The Dart/Flutter wrapper is 0.5.0; Swift, Kotlin and C# are 0.2.0.
 Every company uses the same binary per platform; company and contract information is
 supplied at runtime as [entitlement information](doc/entitlement.md) and never blocks a feature.
-No device firmware change is required. The entitlement server is specified but not yet implemented.
+No device firmware change is required. The entitlement server is the Fisica developer portal,
+https://developer.fisicahealthcare.com, which issues SDK keys and answers online refresh.
 
 ## Install a binary Python release
 
@@ -137,9 +138,9 @@ python tools/build_release.py --validation
 ```
 
 The trusted builder produces the same binary for every company, includes the license
-in each archive and writes a SHA-256 `artifact-manifest.json`. The core currently
-trusts a test signing key only, so packaging requires `--validation` until production
-keys are configured.
+in each archive and writes a SHA-256 `artifact-manifest.json`. Customer builds (no
+`--validation`) trust only the production portal key; `--validation` builds also trust
+the repository test key for QA with test-signed tokens.
 Read `sdk.version_info()` for release information and
 `sdk.get_device_info()` for queried firmware and its verification state. Unverified
 firmware warns and continues without an opt-in flag.

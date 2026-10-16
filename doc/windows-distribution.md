@@ -108,8 +108,8 @@ python tools/build_release.py --validation --output release
 Every company receives the same wheel and DLL: no partner or delivery identifier is
 compiled in, and `artifact-manifest.json` records the artifact hashes. Company and
 contract information is supplied at runtime ([entitlement](entitlement.md)) and never
-blocks a feature. `--validation` is required while the core trusts only the test
-signing key; such builds are for QA, not for customers.
+blocks a feature. Without `--validation` the core trusts only the production portal
+key; `--validation` also trusts the test signing key and is for QA, not for customers.
 
 ## Runtime and hardware-free checks
 
