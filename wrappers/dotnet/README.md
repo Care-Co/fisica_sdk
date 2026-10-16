@@ -7,9 +7,11 @@ osx-x64 and osx-arm64. Depends on `System.IO.Ports` for the USB serial transport
 
 ```csharp
 var core = new FisicaCore();
+using var license = new FisicaEntitlement(core, endpoint: "https://developer.fisicahealthcare.com");
+license.ImportFile("sdk-key.fse");                    // SDK key from the developer portal; omit for basic mode
 var transport = new SerialTransport("COM7");          // pick from SerialTransport.PortNames()
-await using var client = new FisicaClient(core, transport);
-client.Frame += frame => { /* frame.Weight, frame.Display (29x29), frame.Raw (29x22) */ };
+await using var client = new FisicaClient(core, transport, license);
+client.Frame += frame => { /* frame.Weight, frame.Display (29x29); full mode: frame.Raw (29x22), frame.Packet */ };
 await client.ConnectAsync(FisicaLink.Usb);
 await client.StartAsync(TimeSpan.FromSeconds(5));
 // ... after the measurement
@@ -26,7 +28,8 @@ await client.CloseAsync();
   after `timeout` (default 15 s).
 - `CloseAsync` releases resources even when the Scale does not confirm. On `LinkLost`,
   reopen the same Scale with `ConnectAsync`.
-- `Report()` analyzes the collected packets in the core and returns unrounded values.
+- `Report()` returns unrounded weight and foot size from the core: in full mode from the
+  collected frames, in basic mode from every packet the core received since the start.
 - `StartAsync` clears the frames of the previous measurement once the core accepts it,
   so measuring several people in a row needs no `ClearFrames()`. A reconnect keeps them.
   Only the latest `MaxFrames` (at most `FisicaLimit.AnalysisFrames`, the most one
@@ -62,20 +65,39 @@ UUIDs and a ready timeout as events, splits writes by the MTU Windows negotiated
 (`Mtu`, 23 until known) and resets on reconnect. `FisicaBleProfile.Scale` comes from the
 Python SDK and is not yet confirmed on production firmware.
 
-Entitlement: `FisicaEntitlement` imports a server-signed token or file and reports
-three separate values (base license, confirmation freshness, contract state) plus
-warnings through `Warning`. Pass it to `FisicaClient` so warnings appear when features are used. It
-never blocks a feature. The signed token is stored under LocalApplicationData by default
-(`storage`) for offline verification. With `endpoint` it refreshes the information in
-the background (`Sync()` or `await SyncAsync()`); without an endpoint no network is
-used. A failed exchange only sets `LastSyncError`. The SDK does not track its own use;
-see `doc/entitlement.md`.
+License: the shared core decides between two modes and limits what it hands out itself.
+
+- **Full mode**: an SDK key (a seat from the developer portal) activated for this app's
+  ID or this PC's hash, within its key expiry and its trial or contract. Every frame,
+  with `Raw` and `Packet`; `FisicaCore.Decode` works.
+- **Basic mode**: everything else (no key, a key not activated yet or activated for
+  another app or PC, an expired key, an ended trial or contract, a clock set back).
+  Connection, measurement, settings, battery, weight and foot size work; frames come at
+  most once a second, without `Raw` and `Packet`, and `Decode` throws
+  `FisicaLicenseException` (`FisicaStatus.FeatureNotLicensed`), which is distinct from
+  measurement and communication errors.
+
+`FisicaEntitlement` imports a key or key file (`ImportToken`, `ImportFile`). `Status()`
+gives the mode, the reason for basic mode (`Message` explains it), the open features,
+company, contract, key, track, what the key is activated for and this app or PC, the
+key's dates and warnings, and the `ActivationCode` while the key is not activated. With
+`endpoint` a new key is activated for this app or PC automatically and renewed before it
+expires (`Sync()` in the background or `await SyncAsync()`); without an endpoint no
+network is used. Offline, enter `ActivationCode()` in the developer portal and import the
+file it gives. `Release()` frees the key on this app or PC: it forgets the key, deletes
+the stored key and returns the code to enter in the portal. The activated key is stored
+per company and contract under LocalApplicationData by default (`storage`) and wins over
+an older original key file. A failed exchange only sets `LastSyncError`; it never changes
+the license or throws. `Warning` and `Changed` report new warnings and license changes.
+Pass the license to `FisicaClient`: it is applied to the session before every start,
+every 30 seconds and whenever it changes. The SDK does not track its own use; the stored
+state is the signed key and the latest time seen. See `doc/licensing-plan.md`.
 
 `new FisicaCore()` loads the packaged core; an explicit trusted path can be supplied.
 One core binary is loaded per process. The low-level `FisicaSession` remains available.
 
-Verified: shared vectors, client, entitlement (including online refresh and storage
-against the mock server) and serial open-failure handling on macOS and on
+Verified: shared vectors, client in basic and full mode, license states (including
+online activation, renewal and storage against the mock server, and a released key) and serial open-failure handling on macOS and on
 the Windows CI runner; `BleTransport` compiles on both and its failure paths run on
 the Windows runner, which has no Bluetooth device. Not verified: a real COM port or BLE
 connection with a Scale, real Windows drivers, and Windows ARM64 execution.
