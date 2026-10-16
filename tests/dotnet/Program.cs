@@ -62,6 +62,24 @@ async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.
     Require(transport.Sent.Any(s => s.SequenceEqual(core.Command("SET_DEVICE_USB"))),"usb mode");
 }
 {
+    // Packets carry no battery field: the level comes from GET_BATTERY_LEVEL, idle or measuring.
+    var transport=Scale(); var battery=core.Command("GET_BATTERY_LEVEL");
+    transport.Reply(battery,Convert.FromHexString("243147010050fff0"));
+    var client=new FisicaClient(core,transport);
+    await client.ConnectAsync(FisicaLink.Usb).WaitAsync(TimeSpan.FromSeconds(5));
+    Require(client.Battery==null && !transport.Sent.Any(s => s.SequenceEqual(battery)),"no battery query unless asked");
+    Require(await client.ReadBatteryAsync().WaitAsync(TimeSpan.FromSeconds(5))==80 && client.Battery==80,"battery idle");
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(await client.ReadBatteryAsync().WaitAsync(TimeSpan.FromSeconds(5))==80 && client.State==FisicaSessionState.Measuring,"battery while measuring");
+    await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    var report=client.Report()!;
+    Require(report.Battery==80 && report.BatteryValid && !report.Frames[0].BatteryValid,"battery in report");
+    transport.Reply(battery,Convert.FromHexString("243147000001fff0"));
+    Require(await Failure(client.ReadBatteryAsync()) is FisicaCommandException && client.State==FisicaSessionState.Idle,"refused battery keeps session");
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+}
+{
     var transport=new MockTransport { BecomesReady=false }; var client=new FisicaClient(core,transport);
     var error=await Failure(client.ConnectAsync(FisicaLink.Ble,TimeSpan.FromMilliseconds(200)));
     Require(error is FisicaException { Code: 1001 } && !transport.IsOpen,"ready timeout");

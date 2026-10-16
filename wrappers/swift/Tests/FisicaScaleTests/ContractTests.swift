@@ -71,6 +71,28 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(transport.sent.last, try core.command("SET_DEVICE_STOP"))
         XCTAssertFalse(transport.isOpen)
     }
+    func testBatteryIsReadFromTheScaleIdleOrMeasuring() throws {
+        // Packets carry no battery field: the level comes from GET_BATTERY_LEVEL.
+        let core = try FisicaCore(), transport = try scale(core), battery = try core.command("GET_BATTERY_LEVEL")
+        transport.exchanges[battery] = [bytes("243147010050fff0")]
+        let client = try FisicaClient(core: core, transport: transport)
+        waitFor("connect") { done in client.connect(.usb) { _ in done() } }
+        XCTAssertNil(client.battery); XCTAssertFalse(transport.sent.contains(battery))
+        waitFor("battery") { done in client.readBattery { result in XCTAssertEqual(try? result.get(), 80); done() } }
+        waitFor("start") { done in client.start { result in self.ok(result); done() } }
+        waitFor("battery while measuring") { done in client.readBattery { result in XCTAssertEqual(try? result.get(), 80); done() } }
+        XCTAssertEqual(client.state, .measuring)
+        waitFor("stop") { done in client.stop { result in self.ok(result); done() } }
+        let report = try XCTUnwrap(try client.report())
+        XCTAssertEqual(report.battery, 80); XCTAssertTrue(report.batteryValid); XCTAssertFalse(report.frames[0].batteryValid)
+        transport.exchanges[battery] = [bytes("243147000001fff0")]
+        waitFor("refused battery") { done in client.readBattery { result in
+            if case .failure(let error) = result { XCTAssertTrue(error is FisicaCommandError) } else { XCTFail("Expected failure") }
+            done() } }
+        XCTAssertEqual(client.state, .idle)
+        waitFor("start after refusal") { done in client.start { result in self.ok(result); done() } }
+        waitFor("close") { done in client.close { _ in done() } }
+    }
     func testTransportThatNeverBecomesReadyFailsInsteadOfHanging() throws {
         let core = try FisicaCore(), transport = MockTransport(); transport.becomesReady = false
         let client = try FisicaClient(core: core, transport: transport)

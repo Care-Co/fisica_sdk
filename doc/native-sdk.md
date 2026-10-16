@@ -120,9 +120,15 @@ hashed `artifact-manifest.json`. The core trusts the server public keys listed i
 
 - Raw packet remains 645 bytes with a 29x22 raw grid. Display grid remains 29x29 with
   a center gap and legacy processing. Raw values are not calibrated physical kPa.
-- The legacy battery placeholder 99 is preserved; `battery_valid` is false in the
-  decoded result, frames, reports and serialized output. No actual battery-reading
-  support is claimed. Raw packet/grid data now survives high-level serialization.
+- Measurement packets carry no battery field, so a decoded packet and each frame keep
+  the legacy placeholder 99 with `battery_valid` false. The real level comes from the
+  `GET_BATTERY_LEVEL` query, which works idle or during a measurement (about 30 ms on
+  the USB Scale, firmware 2.0.2-RC1, no frame gap). Python reads it on connect and
+  before each measurement on links it opens, and `get_battery()` reads it on demand;
+  Swift, Kotlin, C# and Dart read it with `readBattery`/`ReadBatteryAsync`. Reports
+  carry the latest reading with `battery_valid` true. A refused or unanswered GET_*
+  query only fails that call; the session is not faulted. Raw packet/grid data
+  survives high-level serialization.
 - Weight stabilization, IQR processing and nominal 1cm-cell foot dimensions retain
   existing behavior. Stabilization can return a result with fewer than ten retained
   frames, matching the old implementation; this is not a new quality guarantee.

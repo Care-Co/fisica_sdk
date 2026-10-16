@@ -25,7 +25,8 @@ class Receiver:
         self._target_device = dict(device)
         self._transport = transport
         self.device_info = {'id': self._device_id, 'transport': device.get('type'),
-                            'firmware_version': None, 'firmware_verified': False}
+                            'firmware_version': None, 'firmware_verified': False,
+                            'battery': None, 'battery_valid': False}
         self._callback = callback
         self._record_callback = record_callback
         self.on_stopped = self.on_error = None
@@ -74,6 +75,7 @@ class Receiver:
         if duration is not None and (not isinstance(duration, (int,float)) or not math.isfinite(duration) or duration < 0):
             raise FisicaArgumentError(1, 'Measurement duration must be nonnegative finite seconds')
         value = -1 if duration is None or duration == 0 else int(duration * 1000)
+        self._refresh_battery()  # so this measurement's report carries a current reading
         self._stop_event.clear()
         self._request(2, lambda: self._session.action(2, value))
         log.info('Measurement start acknowledged.')
@@ -240,6 +242,7 @@ class Receiver:
             finally:
                 self._waiters.discard(1)
         self._warn_firmware()
+        self._refresh_battery()
 
     def _update_firmware(self, event):
         version = None
@@ -293,6 +296,30 @@ class Receiver:
                 self._session.close()
                 self.loop_alive = False
         log.debug('Scale disconnected.')
+
+    def battery(self):
+        """Ask the Scale for its battery level (GET_BATTERY_LEVEL); works idle or measuring.
+
+        Measurement packets carry no battery field, so this query is the only real reading.
+        """
+        event = self._request(5, lambda: self._session.command('GET_BATTERY_LEVEL'))
+        response = get_core().decode_response(event['payload'])
+        percent = (response['data_high'] << 8) | response['data_low']
+        if not response['success'] or percent > 100:
+            raise FisicaCommandError(event)
+        self.device_info.update(battery=percent, battery_valid=True)
+        return percent
+
+    def _refresh_battery(self):
+        # Only on links the SDK opened itself: an injected (mock, replay or partner) transport may
+        # not answer, and the core would wait its 2 s ACK deadline. Those call battery() explicitly.
+        # A missing reading only leaves the previous one (or none); it never stops use.
+        if self._transport is not None:
+            return
+        try:
+            self.battery()
+        except (FisicaCommandError, FisicaTransportError) as error:
+            log.debug(f'Battery level not read: {error}')
 
     def zeroset(self):
         self._request(5, lambda: self._session.command('SET_WEIGHT_ZERO'))

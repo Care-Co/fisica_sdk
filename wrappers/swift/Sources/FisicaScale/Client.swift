@@ -57,8 +57,10 @@ public struct FisicaCommandError: Error {
 public struct SessionReport {
     public let weight: Double, leftWidth: Double, leftLength: Double, rightWidth: Double, rightLength: Double
     public let frames: [Measurement]
+    /// The client's last `readBattery` reading in percent, or nil. Packets carry no battery field.
+    public let battery: Int?
     public var frameCount: Int { frames.count }
-    public var batteryValid: Bool { false }
+    public var batteryValid: Bool { battery != nil }
 }
 
 /// Connect, measure, stop and report over any transport. Command order, ACK waits,
@@ -87,6 +89,8 @@ public final class FisicaClient {
         didSet { maxFrames = min(max(maxFrames, 1), Int(FisicaLimit.analysisFrames.rawValue)); trimFrames() }
     }
     public private(set) var firmwareVersion: String?
+    /// Battery level in percent from the last `readBattery`, or nil. Measurement packets carry no battery field.
+    public private(set) var battery: Int?
     public private(set) var state: FisicaSessionState = .disconnected
 
     private let queue: DispatchQueue
@@ -219,6 +223,30 @@ public final class FisicaClient {
     }
     public func stop(completion: @escaping Completion) { request(.stop, value: 0, waitFor: .end, completion: completion) }
 
+    /// Ask the Scale for its battery level (GET_BATTERY_LEVEL), idle or during a measurement, without
+    /// interrupting it. A refused or unanswered query fails only this call; the session carries on.
+    public func readBattery(completion: @escaping (Result<Int, Error>) -> Void) {
+        queue.async {
+            let key = self.operation(.request)
+            guard !self.closed, self.waiters[key] == nil else {
+                completion(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Another operation is pending"))); return
+            }
+            self.waiters[key] = { [weak self] result in
+                completion(result.flatMap { event in
+                    let data = (try? self?.core.responsePayload(event.payload)) ?? []
+                    let percent = data.count == 2 ? Int(data[0]) << 8 | Int(data[1]) : -1
+                    guard let self, (0...100).contains(percent) else { return .failure(FisicaCommandError(event: event)) }
+                    self.battery = percent
+                    return .success(percent)
+                })
+            }
+            do {
+                try self.session.command("GET_BATTERY_LEVEL", nowMs: self.now)
+                for event in try self.session.drain() { self.deliver(event) }
+            } catch { self.waiters.removeValue(forKey: key)?(.failure(error)) }
+        }
+    }
+
     /// Stop if needed, release the Scale's measurement mode, then close the transport.
     /// Resources are released even when the Scale does not confirm.
     public func close(completion: ((Result<SessionEvent, Error>?) -> Void)? = nil) {
@@ -242,7 +270,8 @@ public final class FisicaClient {
         guard !frames.isEmpty else { return nil }
         entitlement?.checkStatus()
         guard let result = try core.analyzePackets(frames.map { $0.packet }) else { return nil }
-        return SessionReport(weight: result[0], leftWidth: result[1], leftLength: result[2], rightWidth: result[3], rightLength: result[4], frames: frames)
+        return SessionReport(weight: result[0], leftWidth: result[1], leftLength: result[2], rightWidth: result[3], rightLength: result[4],
+                             frames: frames, battery: battery)
     }
     public func clearFrames() { frames.removeAll(); droppedFrames = 0 }
     private func trimFrames() {

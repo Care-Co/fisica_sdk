@@ -46,6 +46,25 @@ fun main(args: Array<String>) {
         check(!transport.isOpen && transport.sent.last().contentEquals(core.command("SET_DEVICE_STOP")))
         check(transport.sent.any { it.contentEquals(core.command("SET_DEVICE_USB")) })
     }
+    // Packets carry no battery field: the level comes from GET_BATTERY_LEVEL, idle or measuring.
+    run {
+        val transport = scale(core, packet); val battery = core.command("GET_BATTERY_LEVEL")
+        transport.reply(battery, hex("243147010050fff0"))
+        val client = FisicaClient(core, transport)
+        check(await<SessionEvent>("connect") { client.connect(FisicaLink.USB, completion = it) }.second == null)
+        check(client.battery == null && transport.sent.none { it.contentEquals(battery) })
+        check(await<Int>("battery") { client.readBattery(it) }.first == 80 && client.battery == 80)
+        check(await<SessionEvent>("start") { client.start(completion = it) }.second == null)
+        check(await<Int>("battery while measuring") { client.readBattery(it) }.first == 80 && client.state == FisicaSessionState.MEASURING)
+        check(await<SessionEvent>("stop") { client.stop(it) }.second == null)
+        val report = client.report()!!
+        check(report.battery == 80 && report.batteryValid && !report.frames[0].batteryValid)
+        transport.reply(battery, hex("243147000001fff0"))
+        check(await<Int>("refused battery") { client.readBattery(it) }.second is FisicaCommandException)
+        check(client.state == FisicaSessionState.IDLE)
+        check(await<SessionEvent>("start after refusal") { client.start(completion = it) }.second == null)
+        await<SessionEvent>("close") { client.close(it) }
+    }
     // A transport that never becomes ready fails instead of hanging.
     run {
         val transport = MockTransport().apply { becomesReady = false }; val client = FisicaClient(core, transport)

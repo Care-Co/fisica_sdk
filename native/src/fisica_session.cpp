@@ -59,9 +59,25 @@ struct FisicaSession {
         else send(MODE,mode==2 ? "SET_DEVICE_USB" : "SET_DEVICE_BLE");
     }
     void end() { transition(FISICA_STOPPING); send(END,"STOP_CONTINUOUS_MEASUREMENT"); }
+    // Stop or close requests that arrived while a command was pending run once it is answered.
+    void finish_command() {
+        if (closing) { if (state==FISICA_MEASURING) end(); else release(); }
+        else if (stop_requested) {
+            if (state==FISICA_MEASURING) end();
+            else { stop_requested=false; emit(FISICA_RESULT,0,0,FISICA_END); }
+        }
+    }
     void fault(uint32_t status, uint32_t device_error=0, const std::vector<uint8_t>& bytes={}) {
         const auto op=operation(); const auto old=phase;
+        // GET_* queries (type 0x47) change nothing on the Scale, so a refused or unanswered one is
+        // reported and the session carries on, as after a success; only state-changing commands fault.
+        const bool query=old==COMMAND && pending.size()>2 && pending[2]==0x47;
         clear_pending();
+        if (query) {
+            emit(FISICA_RESULT,status,device_error,op,bytes);
+            finish_command();
+            return;
+        }
         if (old==PROBE) {
             emit(FISICA_RESULT,status,device_error,op,bytes);
             if (closing) release();
@@ -129,11 +145,7 @@ struct FisicaSession {
             break;
         case COMMAND:
             emit(FISICA_RESULT,0,0,op,packet);
-            if (closing) { if (state==FISICA_MEASURING) end(); else release(); }
-            else if (stop_requested) {
-                if (state==FISICA_MEASURING) end();
-                else { stop_requested=false; emit(FISICA_RESULT,0,0,FISICA_END); }
-            }
+            finish_command();
             break;
         default: break;
         }

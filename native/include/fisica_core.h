@@ -58,8 +58,10 @@ FISICA_API int32_t fisica_core_check_wrapper(const char *name, const char *sdk_v
     const char *wrapper_version, uint32_t *warnings);
 
 /* Packet: 645 bytes. Raw grid: 638 doubles (29x22), display: 841 (29x29).
- * metrics: [weight_kg, battery_percent]. Battery 99 retains the legacy placeholder;
- * battery is NOT a validated hardware reading in result schema 1. */
+ * metrics: [weight_kg, battery_percent]. Measurement packets carry no battery field, so
+ * battery is the legacy placeholder 99, NOT a hardware reading, in result schema 1.
+ * Read the real level with the GET_BATTERY_LEVEL query (session_command); its RESULT
+ * payload's data bytes are the percent. */
 FISICA_API int32_t fisica_core_decode_packet(const uint8_t *packet, uint32_t length,
     double *raw, uint32_t raw_capacity, double *display, uint32_t display_capacity,
     double *metrics, uint32_t metrics_capacity);
@@ -110,7 +112,9 @@ FISICA_API int32_t fisica_core_command(const char *name, double value,
  * independent. Inputs are copied. No clocks, threads, transports or callbacks.
  * now_ms: nondecreasing host monotonic milliseconds, <= INT64_MAX. Tick regularly
  * and drain events after every call. ACK deadline: 2000 ms. Never auto-retries.
- * State-changing timeout => FAULT: close/reopen transport before further commands.
+ * State-changing timeout or rejection => FAULT: close/reopen transport before further commands.
+ * A GET_* query (e.g. GET_BATTERY_LEVEL) that is rejected or unanswered only reports its status
+ * in RESULT; the session state is unchanged, as for the firmware probe.
  * Protocol has no request ID: stale same-header ACKs cannot be authenticated.
  * Event metadata: [kind,state,status,device_error,operation,header,type,length].
  * TX payload must be sent in order; report send/read failures via LOST.
