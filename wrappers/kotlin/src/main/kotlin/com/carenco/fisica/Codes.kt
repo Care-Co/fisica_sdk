@@ -14,6 +14,7 @@ object FisicaStatus {
     const val CANCELLED = 10
     const val TRANSPORT_LOST = 11
     const val INCOMPATIBLE_VERSION = 12
+    const val FEATURE_NOT_LICENSED = 13
 }
 object FisicaPacketKind {
     const val NONE = 0
@@ -24,6 +25,9 @@ object FisicaLimit {
     const val ANALYSIS_FRAMES = 19949
     const val FEED_BYTES = 65536
     const val TOKEN_BYTES = 4096
+    const val STATUS_FIELDS = 19
+    const val BASIC_FRAME_INTERVAL_MS = 1000
+    const val EVENT_BYTES = 16384
 }
 object FisicaSessionState {
     const val DISCONNECTED = 0
@@ -68,14 +72,30 @@ object FisicaEntitlementOutcome {
     const val REJECTED_FORMAT = 3
     const val REJECTED_KEY = 4
     const val REJECTED_SIGNATURE = 5
+    const val REJECTED_TARGET = 6
 }
-object FisicaBaseLicense {
-    const val GRANTED = 1
+object FisicaMode {
+    const val BASIC = 1
+    const val FULL = 2
 }
-object FisicaVerification {
+object FisicaModeReason {
     const val NONE = 0
-    const val FRESH = 1
-    const val REFRESH_DUE = 2
+    const val NO_KEY = 1
+    const val LEGACY_TOKEN = 2
+    const val NOT_ACTIVATED = 3
+    const val NO_TARGET = 4
+    const val OTHER_TARGET = 5
+    const val REVOKED = 6
+    const val CLOCK_ROLLBACK = 7
+    const val KEY_EXPIRED = 8
+    const val NOT_STARTED = 9
+    const val FULL_ENDED = 10
+}
+object FisicaFeature {
+    const val RAW_DATA = 1
+    const val EXPORT = 2
+    const val ADVANCED = 4
+    const val FULL_RATE = 8
 }
 object FisicaContract {
     const val UNVERIFIED = 0
@@ -89,26 +109,41 @@ object FisicaContractKind {
     const val BASIC = 1
     const val SPECIAL = 2
 }
+object FisicaTrack {
+    const val NONE = 0
+    const val TRIAL = 1
+    const val EXTENSION = 2
+    const val CONTRACT = 3
+}
+object FisicaBindType {
+    const val NONE = 0
+    const val APP = 1
+    const val PC = 2
+}
 object FisicaKeyEnvironment {
     const val NONE = 0
     const val PRODUCTION = 1
     const val TEST = 2
 }
 object FisicaEntitlementWarning {
-    const val UNVERIFIED = 1
-    const val REFRESH_DUE = 2
-    const val CONTRACT_ENDED = 4
-    const val CONTRACT_REVOKED = 8
-    const val CONTRACT_NOT_STARTED = 16
-    const val IMPORT_REJECTED = 32
-    const val TEST_KEY = 64
+    const val RENEW_DUE = 1
+    const val GRACE = 2
+    const val FULL_ENDING = 4
+    const val IMPORT_REJECTED = 8
+    const val TEST_KEY = 16
 }
 object FisicaEntitlementText {
     const val COMPANY = 1
     const val CONTRACT = 2
     const val GRANTS = 3
-    const val KEY_ID = 4
+    const val SIGNING_KEY = 4
     const val TOKEN = 5
+    const val KEY = 6
+    const val BIND = 7
+    const val TARGET = 8
+    const val FEATURES = 9
+    const val ACTIVATION_REQUEST = 10
+    const val ACTIVATION_CODE = 11
 }
 /** GATT characteristics used by the Scale. VERIFIED is false until confirmed on production firmware. */
 data class FisicaBleProfile(val write: String, val notify: String) {

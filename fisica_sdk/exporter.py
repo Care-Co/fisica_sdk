@@ -6,9 +6,9 @@ from .utils import log
 
 
 
-# Serialize SessionReport for JSON export
-def serialize_session_report(session: SessionReport) -> Dict[str, Any]:
-    return {
+# Serialize SessionReport for JSON export. frames=False: the summary only (basic mode).
+def serialize_session_report(session: SessionReport, frames: bool = True) -> Dict[str, Any]:
+    result = {
         "session_id": session.session_id,
         "name": session.name,
         "foot_length": {
@@ -37,6 +37,9 @@ def serialize_session_report(session: SessionReport) -> Dict[str, Any]:
             for frame in session.total_frame
         ]
     }
+    if not frames:
+        del result["total_frame"]
+    return result
 
 def serialize_session_frame(session: MeasurementSession) -> List[Dict[str, Any]]:
     return [

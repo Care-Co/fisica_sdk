@@ -16,6 +16,7 @@ class FisicaErrorCode(IntEnum):
     CANCELLED = 10
     TRANSPORT_LOST = 11
     INCOMPATIBLE_VERSION = 12
+    FEATURE_NOT_LICENSED = 13
     TRANSPORT_ERROR = 1001
 
 
@@ -37,6 +38,10 @@ class FisicaRuntimeError(FisicaError, RuntimeError):
     pass
 
 
+class FisicaLicenseError(FisicaRuntimeError):
+    """The feature needs full mode: an SDK key activated for this app or PC."""
+
+
 class FisicaTransportError(FisicaRuntimeError):
     def __init__(self, message):
         super().__init__(FisicaErrorCode.TRANSPORT_ERROR, message)
@@ -47,7 +52,7 @@ class FisicaFirmwareWarning(UserWarning):
 
 
 class FisicaEntitlementWarning(UserWarning):
-    """Entitlement status notice. Never a technical error and never blocks a feature."""
+    """License notice: basic mode, an ending trial or contract, or a key to renew. Never a technical error."""
 
 
 class FisicaCommandError(FisicaRuntimeError):

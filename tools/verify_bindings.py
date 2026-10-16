@@ -61,18 +61,27 @@ def flat_fixtures(output, extra=None):
     return path
 
 
+def license_vectors():
+    """Shared vectors plus keys activated for this host's PC (command-line test programs bind to the PC)."""
+    from entitlement_dev import host_pc_vectors
+    values = {key: value for key, value in json.loads((FIXTURES / 'entitlement.json').read_text()).items() if key != 'note'}
+    values.update(host_pc_vectors(values['now']))
+    return values
+
+
 def native(output):
     """Public C ABI contracts under UBSan (and ASan where its runtime works on the host)."""
     generated = output / 'generated'
     prepare_release(generated)
-    token = json.loads((FIXTURES / 'entitlement.json').read_text())['valid']
+    vectors = [f'{key}={value}' for key, value in license_vectors().items()]
     sources = sorted((ROOT / 'native/src').glob('*.cpp'))
+    frameworks = ['-framework', 'CoreFoundation'] if sys.platform == 'darwin' else []
     for sanitizer in os.environ.get('FISICA_SANITIZERS', 'undefined').split():
-        for name, arguments in (('native_contract', []), ('native_entitlement', [token])):
+        for name, arguments in (('native_contract', []), ('native_entitlement', vectors)):
             binary = output / f'{name}-{sanitizer.replace(",", "-")}'
             run([os.environ.get('CXX', 'c++'), '-std=c++17', '-O1', '-g', '-UNDEBUG', '-ffp-contract=off', f'-fsanitize={sanitizer}',
                  '-fno-sanitize-recover=all', '-DFISICA_CORE_STATIC', '-I', ROOT / 'native/include', '-I', generated,
-                 *sources, ROOT / 'tests' / f'{name}.cpp', '-o', binary])
+                 *sources, ROOT / 'tests' / f'{name}.cpp', *frameworks, '-o', binary])
             run([binary, *arguments], timeout=300)
 
 

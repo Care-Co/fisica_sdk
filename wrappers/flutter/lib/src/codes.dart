@@ -14,6 +14,7 @@ abstract final class FisicaStatus {
   static const cancelled = 10;
   static const transportLost = 11;
   static const incompatibleVersion = 12;
+  static const featureNotLicensed = 13;
 }
 abstract final class FisicaPacketKind {
   static const none = 0;
@@ -24,6 +25,9 @@ abstract final class FisicaLimit {
   static const analysisFrames = 19949;
   static const feedBytes = 65536;
   static const tokenBytes = 4096;
+  static const statusFields = 19;
+  static const basicFrameIntervalMs = 1000;
+  static const eventBytes = 16384;
 }
 abstract final class FisicaSessionState {
   static const disconnected = 0;
@@ -68,14 +72,30 @@ abstract final class FisicaEntitlementOutcome {
   static const rejectedFormat = 3;
   static const rejectedKey = 4;
   static const rejectedSignature = 5;
+  static const rejectedTarget = 6;
 }
-abstract final class FisicaBaseLicense {
-  static const granted = 1;
+abstract final class FisicaMode {
+  static const basic = 1;
+  static const full = 2;
 }
-abstract final class FisicaVerification {
+abstract final class FisicaModeReason {
   static const none = 0;
-  static const fresh = 1;
-  static const refreshDue = 2;
+  static const noKey = 1;
+  static const legacyToken = 2;
+  static const notActivated = 3;
+  static const noTarget = 4;
+  static const otherTarget = 5;
+  static const revoked = 6;
+  static const clockRollback = 7;
+  static const keyExpired = 8;
+  static const notStarted = 9;
+  static const fullEnded = 10;
+}
+abstract final class FisicaFeature {
+  static const rawData = 1;
+  static const export = 2;
+  static const advanced = 4;
+  static const fullRate = 8;
 }
 abstract final class FisicaContract {
   static const unverified = 0;
@@ -89,26 +109,41 @@ abstract final class FisicaContractKind {
   static const basic = 1;
   static const special = 2;
 }
+abstract final class FisicaTrack {
+  static const none = 0;
+  static const trial = 1;
+  static const extension = 2;
+  static const contract = 3;
+}
+abstract final class FisicaBindType {
+  static const none = 0;
+  static const app = 1;
+  static const pc = 2;
+}
 abstract final class FisicaKeyEnvironment {
   static const none = 0;
   static const production = 1;
   static const test = 2;
 }
 abstract final class FisicaEntitlementWarning {
-  static const unverified = 1;
-  static const refreshDue = 2;
-  static const contractEnded = 4;
-  static const contractRevoked = 8;
-  static const contractNotStarted = 16;
-  static const importRejected = 32;
-  static const testKey = 64;
+  static const renewDue = 1;
+  static const grace = 2;
+  static const fullEnding = 4;
+  static const importRejected = 8;
+  static const testKey = 16;
 }
 abstract final class FisicaEntitlementText {
   static const company = 1;
   static const contract = 2;
   static const grants = 3;
-  static const keyId = 4;
+  static const signingKey = 4;
   static const token = 5;
+  static const key = 6;
+  static const bind = 7;
+  static const target = 8;
+  static const features = 9;
+  static const activationRequest = 10;
+  static const activationCode = 11;
 }
 /// GATT characteristics used by the Scale. `verified` is false until confirmed on production firmware.
 class FisicaBleProfile {

@@ -19,14 +19,15 @@ def test_arm64_pe_is_not_mislabeled_as_x64():
     with pytest.raises(ValueError): validate_windows_dll(pe_dll(),0xaa64)
     with pytest.raises(ValueError): validate_windows_dll(pe_dll(machine=0xaa64))
 
-@pytest.mark.parametrize('name,version',[('python','2.3.0'),('flutter','0.4.0'),('swift','0.1.0'),('kotlin','0.1.0'),('dotnet','0.1.0')])
-def test_shared_native_wrapper_policy(name,version):
-    lib=NativeCore()._lib
+@pytest.mark.parametrize('name',['python','flutter','swift','kotlin','dotnet'])
+def test_shared_native_wrapper_policy(name):
+    core=NativeCore()
+    lib,version=core._lib,core.policy['wrappers'][name]['version']
     fn=lib.fisica_core_check_wrapper;fn.argtypes=[ct.c_char_p,ct.c_char_p,ct.c_char_p,ct.POINTER(ct.c_uint32)];fn.restype=ct.c_int32
     warnings=ct.c_uint32()
-    assert fn(name.encode(),b'2.3.0',version.encode(),ct.byref(warnings))==0 and warnings.value==0
-    assert fn(name.encode(),b'1.5.0',version.encode(),ct.byref(warnings))==0 and warnings.value==1
-    for sdk in [b'0.9.0',b'3.0.0',b'2.3.0-rc1',b'01.2.3',b'1.2',b'42949672960.0.0']:
+    assert fn(name.encode(),core.sdk_version.encode(),version.encode(),ct.byref(warnings))==0 and warnings.value==0
+    # ABI 2 cores accept no SDK before 3.0.0: the license model changed.
+    for sdk in [b'2.4.0',b'0.9.0',b'4.0.0',b'3.0.0-rc1',b'01.2.3',b'1.2',b'42949672960.0.0']:
         assert fn(name.encode(),sdk,version.encode(),ct.byref(warnings))==12
 
 

@@ -49,5 +49,5 @@ def test_synthetic_data_matches_all_sample_consumers():
     from fisica_sdk import NativeCore
     packet = bytes.fromhex(script['measurement_hex'])
     core = NativeCore()
-    assert core.decode_packet(packet).weight == script['expected_weight']
+    assert core.analyze_packets([packet] * script['frame_count'])[0] == script['expected_weight']  # basic mode
     assert script['frame_count'] == 12

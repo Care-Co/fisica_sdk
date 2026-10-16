@@ -170,7 +170,7 @@ def build_native(output_directory):
         command = [compiler, '-std=c++17', '-O2', '-DNDEBUG', '-DFISICA_CORE_BUILD',
                    '-shared', '-static', '-s', '-ffp-contract=off', '-Wl,--no-insert-timestamp']
         command += ['-I' + str(path) for path in includes]
-        command += [*sources, '-o', str(output)]
+        command += [*sources, '-o', str(output), '-ladvapi32']
     else:
         command = [compiler, '-std=c++17', '-O2', '-DNDEBUG', '-DFISICA_CORE_BUILD',
                    '-fvisibility=hidden', '-fvisibility-inlines-hidden', '-ffp-contract=off']
@@ -178,7 +178,7 @@ def build_native(output_directory):
         if sys.platform == 'darwin':
             command += (['-arch','arm64','-arch','x86_64'] if target.endswith('universal2') else ['-arch',platform.machine()])
             command += ['-dynamiclib', '-Wl,-install_name,@rpath/' + output.name]
-            command += ['-mmacosx-version-min=' + os.environ.get('MACOSX_DEPLOYMENT_TARGET', '11.0')]
+            command += ['-mmacosx-version-min=' + os.environ.get('MACOSX_DEPLOYMENT_TARGET', '11.0'), '-framework', 'CoreFoundation']
         else:
             command += ['-shared', '-fPIC', '-Wl,--exclude-libs,ALL']
         command += [*sources, '-o', str(output)]

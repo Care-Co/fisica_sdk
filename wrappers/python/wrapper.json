@@ -1,21 +1,21 @@
 {
   "name": "python",
-  "version": "2.4.0",
+  "version": "3.0.0",
   "core": {
-    "minimum": "1.4.0",
-    "maximum_exclusive": "2.0.0"
+    "minimum": "2.0.0",
+    "maximum_exclusive": "3.0.0"
   },
   "abi": {
-    "major": 1,
-    "minimum_minor": 4
+    "major": 2,
+    "minimum_minor": 0
   },
   "result_schema_versions": [
     1
   ],
   "support": {
-    "minimum": "1.0.0",
-    "deprecated_before": "2.0.0",
-    "maximum_exclusive": "3.0.0"
+    "minimum": "3.0.0",
+    "deprecated_before": "3.0.0",
+    "maximum_exclusive": "4.0.0"
   },
   "deprecated_apis": {
     "ATCommands.build_command": {

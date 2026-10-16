@@ -38,6 +38,9 @@ class FisicaSDK:
         - get_report(): Retrieve the most recent analysis report.
         - get_all_reports(): Retrieve all previous session reports stored in memory.
         - export_report(report: Optional[Union[SessionReport, list]], output: Optional[str]): Save the current or specified report(s) to a JSON file.
+        - configure_entitlement(token=..., file=..., endpoint=...): Use an SDK key for full mode.
+        - entitlement_status(): Full or basic mode, why, and the key's dates.
+        - activation_code() / release_key(): Offline activation code, and releasing the key on this app or PC.
         - reset_session(): Clear the current session's metadata and frame data.
         - reset_reports(): Clear all stored reports in memory.
         - render(frame: Optional[MeasurementFrame], grid_data: Optional[np.ndarray], mode: Optional[str], scale: Optional[float]): Render a visualization image from raw sensor data.
@@ -76,6 +79,7 @@ class FisicaSDK:
         self._loop_thread = None
         self._reports = []
         self._frames = []
+        self._native_analysis = None  # basic mode: the core's analysis of every packet
         self._counter = 0
         self._debug = debug
         self._last_error = None
@@ -92,32 +96,61 @@ class FisicaSDK:
     Fisica SDK: configure_entitlement
 
         Parameters:
-            token (str): Server-signed entitlement information.
-            file (str): Path of an entitlement file; works on a PC that was never online.
-            endpoint (str): Server URL for online confirmation. No network is used without it.
+            token (str): SDK key from the developer portal.
+            file (str): Path of a key file (an activation or renewal file from the portal works on a PC that is never online).
+            endpoint (str): Server URL for activation and renewal. No network is used without it.
             online (bool): Set False to keep a configured endpoint unused.
 
         Returns:
             dict: Same content as entitlement_status().
 
         Notes:
-            Entitlement information identifies the registered company and contract.
-            It never blocks connection, measurement, analysis or reports; missing,
-            outdated or rejected information only produces a status and a warning.
+            Without an SDK key activated for this app or PC the SDK runs in basic mode:
+            connection, measurement, settings, weight and foot size work; frames come at
+            most once a second without raw data, and report exports hold the summary only.
+            Online, a new key is activated here automatically and renewed before it expires.
         """
         from .entitlement import Entitlement
         previous, self._entitlement = self._entitlement, Entitlement(
             token=token, file=file, endpoint=endpoint, online=online, **options)
         if previous:
             previous.close()
+        self._apply_license()
         return self._entitlement.status()
 
     def entitlement_status(self):
-        """Base license, confirmation freshness and contract state as three separate values."""
+        """Full or basic mode, the reason for basic mode, open features and the key's dates."""
         if self._entitlement:
             return self._entitlement.status()
-        from .entitlement import UNVERIFIED_STATUS
-        return dict(UNVERIFIED_STATUS)
+        from .entitlement import NO_KEY_STATUS
+        return dict(NO_KEY_STATUS)
+
+    def activation_code(self):
+        """Code to enter in the developer portal to activate the loaded key for a device that is never online."""
+        return self._entitlement.activation_code() if self._entitlement else None
+
+    def release_key(self):
+        """Release the SDK key on this app or PC; returns the code to enter in the developer portal."""
+        if not self._entitlement:
+            raise RuntimeError('No SDK key is configured')
+        code = self._entitlement.release()
+        self._apply_license()
+        return code
+
+    def _apply_license(self):
+        receiver = self._receiver
+        if receiver:
+            try:
+                with receiver._condition:
+                    receiver.apply_license()
+            except Exception as error:
+                log.debug(f"License not applied to the session: {error}")
+
+    def _has_feature(self, name):
+        try:
+            return bool(self._entitlement and self._entitlement.has_feature(name))
+        except Exception:
+            return False
 
     def _check_entitlement(self):
         # Status notice only; nothing about the use is recorded. Problems here must never
@@ -129,9 +162,8 @@ class FisicaSDK:
                 self._unverified_notice = True
                 import warnings
                 from .errors import FisicaEntitlementWarning
-                from .entitlement import WARNINGS
-                warnings.warn('Fisica SDK entitlement: ' + WARNINGS[1][1] + ' Local SDK features keep working.',
-                              FisicaEntitlementWarning, stacklevel=3)
+                from .entitlement import REASON_MESSAGES
+                warnings.warn('Fisica SDK license: ' + REASON_MESSAGES['no_key'], FisicaEntitlementWarning, stacklevel=3)
         except Exception as error:
             log.debug(f"Entitlement notice skipped: {error}")
 
@@ -179,6 +211,7 @@ class FisicaSDK:
                 log.debug("Initializing async data receiving loop...")
                 self._start_time = time.time()
                 self._frames.clear()
+                self._native_analysis = None
                 self._receiver.start(duration)
                 self._working = True
             log.info("Measurement started.")
@@ -199,6 +232,9 @@ class FisicaSDK:
         try:
             if self._receiver:
                 self._receiver.stop()
+                # Basic mode hands out one frame a second; the core analyzed every packet.
+                if not self._receiver.full_rate:
+                    self._native_analysis = self._receiver.analyze()
             if self._session:
                 self._session.frames.extend(self._frames)
             log.info("Measurement stopped and session frozen.")
@@ -315,7 +351,8 @@ class FisicaSDK:
             if transport is None and (not hasattr(self, '_available_devices') or not self._available_devices):
                 raise RuntimeError("No devices scanned. Call scan_devices() first.")
 
-            receiver = Receiver(device, self._handle_frame, transport=transport, record_callback=self._record_frame)
+            receiver = Receiver(device, self._handle_frame, transport=transport, record_callback=self._record_frame,
+                                license=lambda: self._entitlement)
             receiver.on_stopped = self._schedule_stop
             receiver.on_error = self._handle_session_error
             receiver.conn()
@@ -559,7 +596,7 @@ class FisicaSDK:
         try:
             if not self._current_report:
                 raise
-            return [serialize_session_report(self._current_report)]
+            return [serialize_session_report(self._current_report, frames=self._has_feature('export'))]
         except Exception as e:
             log.error(
                 "\nFisica SDK\n"
@@ -579,7 +616,7 @@ class FisicaSDK:
            list: Serialized list of all analyzed SessionReport objects
 
         """
-        return [serialize_session_report(r) for r in self._reports]
+        return [serialize_session_report(r, frames=self._has_feature('export')) for r in self._reports]
 
     def set_zero(self):
         """
@@ -668,11 +705,17 @@ class FisicaSDK:
                     )
                     return None
                 else:
-                    report = [serialize_session_report(self._current_report)]
+                    report = [self._current_report]
             elif isinstance(report, SessionReport):
-                report = [serialize_session_report(report)]
-            elif isinstance(report, list) and report and isinstance(report[0], SessionReport):
-                report = [serialize_session_report(r) for r in report]
+                report = [report]
+            # Basic mode exports the summary (weight, foot size); frames need full mode.
+            frames = self._has_feature('export')
+            if not frames:
+                log.info("Basic mode: the exported report holds the summary without frames.")
+            if isinstance(report, list) and report and isinstance(report[0], SessionReport):
+                report = [serialize_session_report(r, frames=frames) for r in report]
+            elif isinstance(report, list) and not frames:
+                report = [{k: v for k, v in r.items() if k != 'total_frame'} if isinstance(r, dict) else r for r in report]
 
             output_path = resolve_output_path(output)
             return export_session_reports_to_json(report, output_path)
@@ -741,7 +784,8 @@ class FisicaSDK:
             log.warning(f"Analyzing the latest {len(analyzed)} of {len(frames)} frames "
                         f"(one analysis accepts at most {_ANALYSIS_FRAMES}).")
 
-        result = global_analyzer(analyzed)
+        result = self._native_analysis if self._native_analysis is not None else global_analyzer(analyzed)
+        self._native_analysis = None
 
         if not result:
             log.warning(

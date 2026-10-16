@@ -1,11 +1,11 @@
-"""Runtime entitlement for the Python wrapper: storage and network only.
+"""SDK key handling for the Python wrapper: storage and network only.
 
-Signature checks and every status decision are made by the native core. Nothing in
-this module enables or disables SDK features; failures here are reported as status
-and warnings and never interrupt connection, measurement or analysis.
+Signature checks, the app/PC the key is activated for and the full/basic decision are made by
+the native core, which also limits what a measurement session hands out. This module stores the
+key, activates it online, renews it and reports the status.
 
-The SDK does not track its own use: nothing here records or reports whether, when or
-how often it is used. The stored state is the signed token, kept for offline checks.
+The SDK does not track its own use: nothing here records or reports whether, when or how often
+it is used. The stored state is the signed key and the latest time seen, kept for offline checks.
 """
 import hashlib
 import json
@@ -14,6 +14,7 @@ from pathlib import Path
 import sys
 import threading
 import time
+import urllib.error
 import urllib.request
 import warnings
 
@@ -24,26 +25,42 @@ from .native import NativeEntitlement
 AUTO = object()
 # Names follow the shared C header (fisica_sdk/codes.py is generated from it).
 _names = lambda enum: {member.value: member.name.lower() for member in enum}
-VERIFICATION = _names(codes.FisicaVerification)
+MODE = _names(codes.FisicaMode)
+REASON = {**_names(codes.FisicaModeReason), 0: None}
 CONTRACT_STATE = _names(codes.FisicaContract)
 CONTRACT_KIND = {**_names(codes.FisicaContractKind), 0: None}
+TRACK = {**_names(codes.FisicaTrack), 0: None}
+BIND_TYPE = {**_names(codes.FisicaBindType), 0: None}
 IMPORT_OUTCOME = {**_names(codes.FisicaEntitlementOutcome), 0: None}
 KEY_ENVIRONMENT = {**_names(codes.FisicaKeyEnvironment), 0: None}
-_MESSAGES = {
-    'unverified': 'No verified company/contract information. Register and import the entitlement file for commercial use.',
-    'refresh_due': 'Entitlement information was last confirmed more than 30 days ago; connect to refresh it or import a new file. The base SDK license has not expired.',
-    'contract_ended': 'The separate contract recorded in the entitlement information has ended. The base SDK license is unaffected.',
-    'contract_revoked': 'The server reported the separate contract as revoked. The base SDK license is unaffected.',
-    'contract_not_started': 'The contract recorded in the entitlement information has not started yet.',
-    'import_rejected': 'The last entitlement token or file was rejected (format, unknown key or signature).',
-    'test_key': 'Entitlement information is signed with a TEST key; this is not production verification.',
+FEATURES = {member.value: member.name.lower() for member in codes.FisicaFeature}
+_BASIC = 'Basic mode keeps connection, measurement, weight and foot size; raw data and full-rate frames need full mode.'
+REASON_MESSAGES = {
+    'no_key': 'No SDK key. Create one in the developer portal and import it. ' + _BASIC,
+    'legacy_token': 'This is a contract confirmation, not an SDK key. Create an SDK key in the developer portal. ' + _BASIC,
+    'not_activated': 'The SDK key is not activated yet: connect to the internet, or enter the activation code in the developer portal and import the file it gives. ' + _BASIC,
+    'no_target': 'The SDK cannot read this app\'s ID or this PC\'s identity, so a key cannot be activated here. ' + _BASIC,
+    'other_target': 'This SDK key is activated for another app or PC. ' + _BASIC,
+    'revoked': 'The SDK key was released or its contract was revoked. ' + _BASIC,
+    'clock_rollback': 'This device\'s clock is earlier than a time the SDK has already seen; correct the clock. ' + _BASIC,
+    'key_expired': 'The SDK key expired: connect to renew it, or import a renewal file from the developer portal. ' + _BASIC,
+    'not_started': 'The contract of this SDK key has not started yet. ' + _BASIC,
+    'full_ended': 'The trial or contract of this SDK key has ended. ' + _BASIC,
 }
-WARNINGS = {member.value: (member.name.lower(), _MESSAGES[member.name.lower()]) for member in codes.FisicaEntitlementWarning}
-UNVERIFIED_STATUS = {
-    'base_license': 'granted', 'verification': 'none', 'contract_state': 'unverified', 'contract_kind': None,
-    'company': None, 'contract': None, 'grants': [], 'verified_at': None, 'refresh_by': None,
-    'contract_start': None, 'contract_end': None, 'revoked_at': None, 'last_import': None,
-    'key_environment': None, 'warnings': ['unverified'], 'last_sync_error': None,
+_WARNING_MESSAGES = {
+    'renew_due': 'The SDK key is due for renewal: connect to the internet or import a renewal file.',
+    'grace': 'The contract has ended; full mode continues during the grace period.',
+    'full_ending': 'Full mode ends within 7 days (trial or contract end).',
+    'import_rejected': 'The last SDK key or file was rejected (format, unknown signing key, signature or another app/PC).',
+    'test_key': 'The SDK key is signed with a TEST key; this is not a production license.',
+}
+WARNINGS = {member.value: (member.name.lower(), _WARNING_MESSAGES[member.name.lower()]) for member in codes.FisicaEntitlementWarning}
+_times = ('verified_at', 'refresh_by', 'key_until', 'full_until', 'contract_start', 'contract_end', 'revoked_at')
+NO_KEY_STATUS = {
+    'mode': 'basic', 'reason': 'no_key', 'features': [], 'contract_state': 'unverified', 'contract_kind': None,
+    'track': None, 'company': None, 'contract': None, 'key': None, 'grants': [], 'bind_type': None, 'bind': None,
+    **{name: None for name in _times}, 'last_import': None, 'key_environment': None, 'warnings': [],
+    'message': REASON_MESSAGES['no_key'], 'last_sync_error': None,
 }
 
 
@@ -56,13 +73,16 @@ def default_storage_directory():
 
 
 class Entitlement:
-    """One SDK instance's verified company/contract context.
+    """One SDK instance's license: its SDK key, the key's activation here, and renewal.
 
-    token/file: server-signed entitlement information (file works on a PC that has
-    never been online). endpoint: server base URL; without it no network is used.
-    online=False keeps a configured endpoint unused. storage: state file path,
-    None for memory only, or by default a per-company/contract file in the user's
-    application-data directory. Contexts are never shared between instances.
+    token/file: an SDK key from the developer portal, or a key file the portal made for this
+    device (activation or renewal file; works on a PC that is never online). endpoint: server
+    base URL; without it no network is used. online=False keeps a configured endpoint unused.
+    storage: state file path, None for memory only, or by default a per-company/contract file
+    in the user's application-data directory. Contexts are never shared between instances.
+
+    Online, an unactivated key is activated for this app or PC automatically, and a key is
+    renewed before it expires. Network failures never change the license.
     """
     def __init__(self, token=None, file=None, endpoint=None, online=True, storage=AUTO,
                  clock=time.time, timeout=5.0, on_status=None, core=None):
@@ -74,7 +94,7 @@ class Entitlement:
         self._storage = storage
         self._timeout = timeout
         self._on_status = on_status
-        self._warned = 0
+        self._noticed = (None, 0)
         self._sync_thread = None
         self._sync_lock = threading.Lock()  # One exchange with the server at a time.
         self._next_sync = 0.0
@@ -86,6 +106,11 @@ class Entitlement:
         else:
             self._notify()
 
+    @property
+    def native(self):
+        """The core license context, for NativeSession.license()."""
+        return self._native
+
     def _now(self):
         return int(self._clock())
 
@@ -94,13 +119,13 @@ class Entitlement:
             return None
         if self._storage is not AUTO:
             return Path(self._storage)
-        # Keyed by company + contract, the only attribution unit; not an installation or device id.
+        # Keyed by company + contract, the attribution unit; the key inside says which seat.
         name = hashlib.sha256((status['company'] + '\n' + status['contract']).encode()).hexdigest()[:16]
         return default_storage_directory() / ('entitlement-' + name + '.state')
 
-    def _save(self):
+    def _save(self, path=None):
         try:
-            path = self._path(self._native.status(self._now()))
+            path = path or self._path(self._native.status(self._now()))
             if path:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 temporary = path.with_name(path.name + '.tmp')
@@ -110,15 +135,16 @@ class Entitlement:
             self.last_sync_error = 'storage: ' + str(error)
 
     def import_token(self, token):
-        """Import a token or file content. Returns the outcome name; never raises on a bad token."""
+        """Import a key or key file content. Returns the outcome name; never raises on a bad key."""
         with self._lock:
             now = self._now()
             outcome = self._native.import_token(token, now)
             if outcome == 1:
+                self._next_sync = 0.0  # a new key may need activation now
                 try:
                     path = self._path(self._native.status(now))
                     if path and path.is_file():
-                        # A newer confirmation stored earlier wins over an older file.
+                        # The key activated or renewed earlier wins over the original key file.
                         self._native.restore_state(path.read_bytes())
                         self._native.import_token(token, now)
                 except (OSError, ValueError):
@@ -135,33 +161,39 @@ class Entitlement:
     def status(self):
         with self._lock:
             raw = self._native.status(self._now())
+            code = self._native.activation_code() if REASON[raw['reason']] == 'not_activated' else None
         bits = raw['warning_bits']
-        time_or_none = lambda value: value or None
-        return {
-            'base_license': 'granted',
-            'verification': VERIFICATION[raw['verification']],
+        reason = REASON[raw['reason']]
+        status = {
+            'mode': MODE[raw['mode']], 'reason': reason,
+            'features': [name for bit, name in FEATURES.items() if raw['features'] & bit],
             'contract_state': CONTRACT_STATE[raw['contract_state']],
-            'contract_kind': CONTRACT_KIND[raw['contract_kind']],
-            'company': raw['company'] or None, 'contract': raw['contract'] or None,
+            'contract_kind': CONTRACT_KIND[raw['contract_kind']], 'track': TRACK[raw['track']],
+            'company': raw['company'] or None, 'contract': raw['contract'] or None, 'key': raw['key'] or None,
             'grants': [grant for grant in raw['grants'].split(',') if grant],
-            'verified_at': time_or_none(raw['verified_at']), 'refresh_by': time_or_none(raw['refresh_by']),
-            'contract_start': time_or_none(raw['contract_start']), 'contract_end': time_or_none(raw['contract_end']),
-            'revoked_at': time_or_none(raw['revoked_at']),
+            'bind_type': BIND_TYPE[raw['bind_type']], 'bind': raw['bind'] or None,
+            'target_type': BIND_TYPE[raw['target_type']], 'target': raw['target'] or None,
+            **{name: raw[name] or None for name in _times},
             'last_import': IMPORT_OUTCOME[raw['last_import']],
             'key_environment': KEY_ENVIRONMENT[raw['key_environment']],
             'warnings': [name for bit, (name, _) in WARNINGS.items() if bits & bit],
             'warning_bits': bits,
+            'message': REASON_MESSAGES.get(reason),
+            'activation_code': code,
             'last_sync_error': self.last_sync_error,
         }
+        return status
 
     def _notify(self):
         status = self.status()
-        new = status['warning_bits'] & ~self._warned
-        self._warned = status['warning_bits']
+        reason, seen = self._noticed
+        new = status['warning_bits'] & ~seen
+        self._noticed = (status['reason'], status['warning_bits'])
+        if status['reason'] and status['reason'] != reason:
+            warnings.warn('Fisica SDK license: ' + status['message'], FisicaEntitlementWarning, stacklevel=2)
         for bit, (_, message) in WARNINGS.items():
             if new & bit:
-                warnings.warn('Fisica SDK entitlement: ' + message + ' Local SDK features keep working.',
-                              FisicaEntitlementWarning, stacklevel=2)
+                warnings.warn('Fisica SDK license: ' + message, FisicaEntitlementWarning, stacklevel=2)
         if self._on_status:
             try:
                 self._on_status(status)
@@ -169,9 +201,9 @@ class Entitlement:
                 pass
 
     def check_status(self):
-        """Re-evaluate warnings for the current time and refresh in the background when online.
+        """Re-evaluate the license for the current time and renew in the background when due.
 
-        Called from feature paths so a long-running app notices outdated information.
+        Called from feature paths so a long-running app notices an ending key or contract.
         It records nothing about the use and never blocks or raises.
         """
         try:
@@ -180,54 +212,120 @@ class Entitlement:
         except Exception as error:
             self.last_sync_error = 'check: ' + str(error)
 
+    def license_session(self, session, now_ms=None):
+        """Copy this license into a NativeSession (serialized with every other use of the context)."""
+        with self._lock:
+            session.license(self._native, self._now(), now_ms)
+
+    def full_rate(self):
+        """True while full mode hands out every frame."""
+        with self._lock:
+            return bool(self._native.status(self._now())['features'] & codes.FisicaFeature.FULL_RATE)
+
+    def has_feature(self, name):
+        """True while full mode opens the feature ('raw_data', 'export', 'advanced')."""
+        return name in self.status()['features']
+
+    def activation_code(self):
+        """FAC1 code for activating the loaded key in the developer portal, for a device that is never online."""
+        with self._lock:
+            return self._native.activation_code()
+
+    def release(self):
+        """Release the key activated here: forget it and return the FRC1 code to enter in the developer portal.
+
+        Online, the seat is also freed when the server next sees the key as released; offline, the
+        code is how the portal learns that this device no longer holds the key.
+        """
+        with self._lock:
+            path = self._path(self._native.status(self._now()))
+            code = self._native.release()
+            try:
+                if path:
+                    path.unlink(missing_ok=True)
+            except OSError as error:
+                self.last_sync_error = 'storage: ' + str(error)
+            self._notify()
+        return code
+
     def _post(self, path, token, body):
-        request = urllib.request.Request(self._endpoint + path, data=json.dumps(body).encode() if isinstance(body, dict) else body,
+        request = urllib.request.Request(self._endpoint + path, data=body.encode() if isinstance(body, str) else json.dumps(body).encode(),
                                          headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}, method='POST')
         with urllib.request.urlopen(request, timeout=self._timeout) as response:
             data = response.read()
             return json.loads(data) if data else None
 
-    def _sync(self):
-        """Ask the server for newer confirmation. A failure changes no entitlement state."""
-        with self._sync_lock:
-            return self._sync_locked()
+    def _due(self):
+        """What the server should do now: activate, renew, or nothing."""
+        with self._lock:
+            raw = self._native.status(self._now())
+            token = self._native.token()
+            request = self._native.activation_request()
+        reason = REASON[raw['reason']]
+        if not token or reason in ('no_key', 'legacy_token', 'other_target', 'no_target', 'revoked'):
+            return None, token, None
+        if reason == 'not_activated':
+            return ('/sdk/v1/entitlement/activate', token, request) if request else (None, token, None)
+        if raw['warning_bits'] & codes.FisicaEntitlementWarning.RENEW_DUE or reason in ('key_expired', 'full_ended', 'not_started'):
+            return '/sdk/v1/entitlement/refresh', token, {}
+        return None, token, None
 
-    def _sync_locked(self):
-        result = {'refreshed': False, 'error': None}
+    def _sync(self, force=False):
+        """Activate or renew with the server. A failure changes no license state."""
+        with self._sync_lock:
+            return self._sync_locked(force)
+
+    def _sync_locked(self, force):
+        result = {'refreshed': False, 'activated': False, 'error': None}
+        save = False
         try:
+            path, token, body = self._due()
+            if not path and force and token:
+                path, body = '/sdk/v1/entitlement/refresh', {}
+            if not path:
+                return result
+            try:
+                response = self._post(path, token, body)
+            except urllib.error.HTTPError as error:
+                # A refused activation (key in use elsewhere, released, trial already used) is reported.
+                raise RuntimeError(f"{error.code} {error.read().decode('utf-8', 'replace')[:200]}") from None
             with self._lock:
-                token = self._native.token()
-            if not token:
-                return result  # Nothing verified: nothing to refresh.
-            response = self._post('/sdk/v1/entitlement/refresh', token, {})
-            with self._lock:
-                result['refreshed'] = self._native.import_token(response['token'], self._now()) == 1
+                save = self._native.import_token(response['token'], self._now()) == 1
+                result['activated' if path.endswith('activate') else 'refreshed'] = save
+                if REASON[self._native.status(self._now())['reason']] == 'revoked':
+                    # The server reports this key released: the device lets go of it.
+                    stored = self._path(self._native.status(self._now()))
+                    if stored:
+                        stored.unlink(missing_ok=True)
+                    save = False
             self.last_sync_error = None
+            self._next_sync = time.monotonic() + 3600
         except Exception as error:
-            # A communication failure is not an expiry or a revocation.
+            # A communication failure is not an expiry, a release or a revocation.
             result['error'] = self.last_sync_error = 'network: ' + str(error)
         try:
             with self._lock:
-                self._save()
+                if save:
+                    self._save()
                 self._notify()
         except Exception:
             pass  # Closed while a background sync was finishing.
         return result
 
     def sync(self, wait=False, force=False):
-        """Online confirmation. Background by default; never raises."""
+        """Activate or renew online when due (force: refresh now). Background by default; never raises."""
         if not (self._online and self._endpoint):
             return None
         if wait:
             thread = self._sync_thread
             if thread and thread.is_alive():
                 thread.join()
-            return self._sync()
+            return self._sync(force)
         with self._lock:
             if (self._sync_thread and self._sync_thread.is_alive()) or (not force and time.monotonic() < self._next_sync):
                 return None
-            self._next_sync = time.monotonic() + 3600
-            self._sync_thread = threading.Thread(target=self._sync, name='fisica-entitlement-sync', daemon=True)
+            self._next_sync = time.monotonic() + 60  # until this attempt succeeds
+            self._sync_thread = threading.Thread(target=self._sync, args=(force,), name='fisica-entitlement-sync', daemon=True)
             self._sync_thread.start()
         return None
 

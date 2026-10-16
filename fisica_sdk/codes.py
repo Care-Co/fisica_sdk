@@ -16,6 +16,7 @@ class FisicaStatus(IntEnum):
     CANCELLED = 10
     TRANSPORT_LOST = 11
     INCOMPATIBLE_VERSION = 12
+    FEATURE_NOT_LICENSED = 13
 
 
 class FisicaPacketKind(IntEnum):
@@ -28,6 +29,9 @@ class FisicaLimit(IntEnum):
     ANALYSIS_FRAMES = 19949
     FEED_BYTES = 65536
     TOKEN_BYTES = 4096
+    STATUS_FIELDS = 19
+    BASIC_FRAME_INTERVAL_MS = 1000
+    EVENT_BYTES = 16384
 
 
 class FisicaSessionState(IntEnum):
@@ -78,16 +82,33 @@ class FisicaEntitlementOutcome(IntEnum):
     REJECTED_FORMAT = 3
     REJECTED_KEY = 4
     REJECTED_SIGNATURE = 5
+    REJECTED_TARGET = 6
 
 
-class FisicaBaseLicense(IntEnum):
-    GRANTED = 1
+class FisicaMode(IntEnum):
+    BASIC = 1
+    FULL = 2
 
 
-class FisicaVerification(IntEnum):
+class FisicaModeReason(IntEnum):
     NONE = 0
-    FRESH = 1
-    REFRESH_DUE = 2
+    NO_KEY = 1
+    LEGACY_TOKEN = 2
+    NOT_ACTIVATED = 3
+    NO_TARGET = 4
+    OTHER_TARGET = 5
+    REVOKED = 6
+    CLOCK_ROLLBACK = 7
+    KEY_EXPIRED = 8
+    NOT_STARTED = 9
+    FULL_ENDED = 10
+
+
+class FisicaFeature(IntFlag):
+    RAW_DATA = 1
+    EXPORT = 2
+    ADVANCED = 4
+    FULL_RATE = 8
 
 
 class FisicaContract(IntEnum):
@@ -104,6 +125,19 @@ class FisicaContractKind(IntEnum):
     SPECIAL = 2
 
 
+class FisicaTrack(IntEnum):
+    NONE = 0
+    TRIAL = 1
+    EXTENSION = 2
+    CONTRACT = 3
+
+
+class FisicaBindType(IntEnum):
+    NONE = 0
+    APP = 1
+    PC = 2
+
+
 class FisicaKeyEnvironment(IntEnum):
     NONE = 0
     PRODUCTION = 1
@@ -111,21 +145,25 @@ class FisicaKeyEnvironment(IntEnum):
 
 
 class FisicaEntitlementWarning(IntFlag):
-    UNVERIFIED = 1
-    REFRESH_DUE = 2
-    CONTRACT_ENDED = 4
-    CONTRACT_REVOKED = 8
-    CONTRACT_NOT_STARTED = 16
-    IMPORT_REJECTED = 32
-    TEST_KEY = 64
+    RENEW_DUE = 1
+    GRACE = 2
+    FULL_ENDING = 4
+    IMPORT_REJECTED = 8
+    TEST_KEY = 16
 
 
 class FisicaEntitlementText(IntEnum):
     COMPANY = 1
     CONTRACT = 2
     GRANTS = 3
-    KEY_ID = 4
+    SIGNING_KEY = 4
     TOKEN = 5
+    KEY = 6
+    BIND = 7
+    TARGET = 8
+    FEATURES = 9
+    ACTIVATION_REQUEST = 10
+    ACTIVATION_CODE = 11
 
 
 # GATT characteristics used by the Scale. BLE_PROFILE_VERIFIED stays False until confirmed on production firmware.

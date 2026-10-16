@@ -20,13 +20,13 @@ def test_shared_command_and_response_vectors():
 
 
 @pytest.mark.parametrize('chunk_size', [1, 7, 244, 644, 645, 1300])
-def test_recorded_footer_layout_and_variable_response_in_fragmented_stream(chunk_size):
+def test_recorded_footer_layout_and_variable_response_in_fragmented_stream(chunk_size, full_license):
     fixtures = json.loads((ROOT / 'legacy-processing.json').read_text())
     packet = bytes.fromhex(next(f['packet_hex'] for f in fixtures if f.get('id') == 'synthetic-recorded-layout'))
     response = bytes.fromhex(json.loads((ROOT / 'protocol.json').read_text())['responses'][0]['hex'])
     stream = response + packet + packet + response
     frames, responses = Queue(), Queue()
-    parser, buffer = DataParser(frames, responses), bytearray()
+    parser, buffer = DataParser(frames, responses, full_license), bytearray()
     for start in range(0, len(stream), chunk_size):
         buffer.extend(stream[start:start+chunk_size])
         parser.process_all_data_by_terminator(buffer)

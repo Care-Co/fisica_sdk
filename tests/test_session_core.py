@@ -228,10 +228,11 @@ def test_failed_initial_start_does_not_resume_after_link_loss():
         assert not any(e['kind']==1 for e in events)
 
 
-def test_measurement_only_after_start_ack_and_response_payload_preserved():
+def test_measurement_only_after_start_ack_and_response_payload_preserved(full_license):
     vector=json.loads((VECTORS.parent/'legacy-processing.json').read_text())
     packet=bytes.fromhex(next(v['packet_hex'] for v in vector if v.get('id')=='synthetic-recorded-layout'))
     with NativeSession() as session:
+        session.license(full_license,now_ms=0)
         ready(session)
         session.feed(packet,now_ms=1)
         assert drain(session)==[]
@@ -241,7 +242,7 @@ def test_measurement_only_after_start_ack_and_response_payload_preserved():
         session.feed(bytes.fromhex('245153010000fff0')+packet*12,now_ms=4)
         events=drain(session)
         frames=[e for e in events if e['kind']==4]
-        assert len(frames)==12 and all(e['payload']==packet for e in frames)
+        assert len(frames)==12 and all(e['packet']==packet and e['weight']==70.5 for e in frames)
 
 
 @pytest.mark.parametrize('name',['SET_DEVICE_USB','SET_DEVICE_BLE','SET_DEVICE_STOP',
@@ -287,7 +288,7 @@ def test_stop_cannot_override_release_and_duplicate_pending_requests_are_busy():
         assert events[-1]['operation']==4 and events[-1]['status']==0
 
 
-def test_ble_probe_tool_drives_the_core_sequence_and_records_ack_and_frames():
+def test_ble_probe_tool_drives_the_core_sequence_and_records_ack_and_frames(full_license):
     """The device-verification tool itself is exercised here with a scripted link."""
     import asyncio
     from fisica_sdk.native import get_core
@@ -309,7 +310,7 @@ def test_ble_probe_tool_drives_the_core_sequence_and_records_ack_and_frames():
             sent.append(bytes(data))
             if bytes(data) in replies:
                 incoming.put_nowait(replies[bytes(data)])
-        return await drive(write, incoming, 0.1), sent
+        return await drive(write, incoming, 0.1, license=full_license), sent
 
     accepted, sent = asyncio.run(scenario((1, 0, 0)))
     assert accepted['firmware'] == '2.0.1' and accepted['continuous_start_accepted'] and accepted['frames'] == 4
