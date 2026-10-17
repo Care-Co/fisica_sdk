@@ -427,7 +427,8 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 ### `get_all_reports()`
 
 **Description**:  
-완료된 모든 세션의 분석 레포트를 가져옵니다.
+완료된 세션의 분석 레포트를 가져옵니다. 메모리에는 최근 100개만 남고, 그보다 오래된 레포트는 사라집니다.
+오래 보관하려면 `export_report()`로 파일에 저장하세요.
 
 **Parameters**:  
 없음
@@ -451,7 +452,7 @@ report에 인자가 없는 경우, 가장 최근에 `analyze()`된 SessionReport
 
 **Parameters**:
 
-- `report` (SessionReport, optional): `get_all_reports()` 혹은 `get_all_reports()`를 통해 얻은 데이터. 제공되지 않는 경우 가장 최근의 SessionReport를 기준으로 출력됨.
+- `report` (SessionReport, optional): `get_all_reports()`로 얻은 데이터. 제공되지 않는 경우 가장 최근의 SessionReport를 기준으로 출력됨.
 - `output` (str): 내보낼 파일 경로나 디렉토리입니다.
 
 **Returns**:  
