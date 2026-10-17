@@ -76,16 +76,16 @@ app's or PC's target, the key's dates (`keyUntil`, `fullUntil`, `refreshBy`, con
   Scale does not confirm.
 - On `onLinkLost`, reopen the same Scale with `connect`; the core resumes a measurement
   it still wants.
-- `report()` analyzes the measurement in the core and returns unrounded values: the collected
-  frames (29x29 display grid and per-frame weight) when every frame arrived (full mode since
-  `start`), otherwise every packet the core received since `start`.
+- `report()` analyzes the measurement in the core and returns unrounded values from every
+  packet the core received since `start`, in every mode, and still after `close`.
 - `start` clears the frames of the previous measurement once the core accepts it, so
   measuring several people in a row needs no `clearFrames()`. A reconnect keeps them.
   Only the latest `maxFrames` (at most `FisicaLimit.analysisFrames`, the most one
   analysis accepts; larger values are clamped) are kept; `droppedFrames` counts the rest.
-- `connect(_:)` always names the link (`.ble` or `.usb`). A transport that declares its
-  own `link` (`BLETransport` is `.ble`) rejects a different one with `invalidArgument`
-  before anything is sent.
+- `connect(_:)` takes `.ble` or `.usb`. Without it the transport's own `link` is used
+  (`BLETransport` is `.ble`); a transport that does not declare one (`MockTransport` unless
+  set) must be given it. A missing link, or one other than the transport's, fails with
+  `invalidArgument` before anything is sent.
 - Codes are generated enums: `FisicaStatus`, `FisicaSessionState`, `FisicaSessionEvent`, ...
 
 Transports: `BLETransport` (CoreBluetooth), `MockTransport` (scripted, no hardware), or
