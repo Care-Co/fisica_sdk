@@ -366,6 +366,25 @@ final class ClientTests: XCTestCase {
         waitFor("close") { done in client.close { _ in done() } }
         XCTAssertFalse(transport.isOpen)
     }
+    func testSecondCloseWhilePendingIsBusyAndCloseAfterCloseDoesNothing() throws {
+        let core = try FisicaCore(), transport = try scale(core), release = try core.command("SET_DEVICE_STOP")
+        transport.exchanges[release] = []  // the Scale never confirms the release
+        let client = try FisicaClient(core: core, transport: transport)
+        waitFor("connect") { done in client.connect(.usb) { result in self.ok(result); done() } }
+        waitFor("start") { done in client.start { result in self.ok(result); done() } }
+        waitFor("stop") { done in client.stop { result in self.ok(result); done() } }
+        let first = expectation(description: "first close")
+        var firstError: Error?
+        client.close { result in firstError = result.flatMap { self.failure($0) }; first.fulfill() }
+        waitFor("second close") { done in client.close { result in
+            XCTAssertEqual((result.flatMap { self.failure($0) } as? FisicaError)?.code, Int32(FisicaStatus.busy.rawValue)); done() } }
+        XCTAssertTrue(transport.isOpen)  // the busy close left the first alone
+        wait(for: [first], timeout: 5)
+        XCTAssertTrue(firstError is FisicaCommandError, "\(String(describing: firstError))")  // unconfirmed, still released
+        XCTAssertFalse(transport.isOpen); XCTAssertEqual(try client.report()?.weight, 70.5)
+        waitFor("close after close") { done in client.close { result in XCTAssertNil(result); done() } }
+        XCTAssertEqual(transport.sent.filter { $0 == release }.count, 1)
+    }
     func testLinkLossAsksHostToReconnect() throws {
         let core = try FisicaCore(), transport = try scale(core)
         let client = try FisicaClient(core: core, transport: transport)

@@ -173,6 +173,40 @@ def test_frames_are_bounded_by_the_analysis_limit(monkeypatch):
         wait_within(sdk)
 
 
+def test_only_the_latest_100_reports_are_kept(monkeypatch):
+    import fisica_sdk.fisica_sdk as module
+    core = NativeCore()
+    transport = measuring_transport(core, frames=3)
+    sdk = FisicaSDK()
+    connect(sdk, transport)
+    try:
+        sdk.set_metadata(id='person-0')
+        sdk.start_measurement()
+        sdk.stop_measurement()
+        wait_within(sdk)
+        frames = list(sdk._session.frames)
+        assert frames and sdk.analyze().weight == 70.5
+    finally:
+        sdk.disconnect()
+        wait_within(sdk)
+    # The other people reuse the measured frames, so the test needs no further measurements.
+    monkeypatch.setattr(module, 'global_analyzer', lambda frames: (70.5, 9.0, 24.0, 9.0, 24.0))
+    for person in range(1, 105):
+        sdk.set_metadata(id=f'person-{person}')
+        sdk._session.frames.extend(frames)
+        assert sdk.analyze() is not None
+    reports = sdk.get_all_reports()
+    assert type(reports) is list and len(reports) == 100
+    assert [r['session_id'] for r in reports] == [f'person-{person}' for person in range(5, 105)]  # oldest dropped
+    assert sdk.get_report()[0]['session_id'] == 'person-104'
+    sdk.reset_reports()
+    assert sdk.get_all_reports() == []
+    sdk.set_metadata(id='after-reset')
+    sdk._session.frames.extend(frames)
+    sdk.analyze()
+    assert [r['session_id'] for r in sdk.get_all_reports()] == ['after-reset']
+
+
 def test_disconnect_during_basic_mode_measurement_uses_the_core_analysis(monkeypatch):
     import fisica_sdk.fisica_sdk as module
     monkeypatch.setattr(module, 'global_analyzer', lambda frames: pytest.fail('analyzed the 1-fps frames'))

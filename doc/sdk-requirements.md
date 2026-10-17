@@ -83,7 +83,7 @@ Windows 작업의 범위가 아니며, 향후 대상 하드웨어 제약에 따�
 
 ## 라이선스·사용권·SDK 키
 
-[LICENSE](../LICENSE) 2.0 초안(2026-10-17 문안)과 [라이선스 개편안](licensing-plan.md)이 기준이다.
+[LICENSE](../LICENSE) 2.0 검토용 초안 2(2026-10-17)와 [라이선스 개편안](licensing-plan.md)이 기준이다.
 
 기본 SDK 사용권 = 기본 모드:
 

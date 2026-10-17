@@ -76,6 +76,9 @@ Core owns all command ordering, ACK deadlines, duration and recovery decisions.
   `transport:` to replace the transport; the old one is closed): the core resumes a
   measurement it still wants, with its original deadline, and the frames are kept.
   `close()` after a loss frees resources without an error.
+- A second `close()` while one is pending fails with `FisicaStateError`
+  (`FisicaStatus.busy`); it no longer returns the pending close's future. Once closed,
+  `close()` completes at once and does nothing, even when the first close failed.
 - `start()` clears the frames of the previous measurement once the core accepts it, so
   measuring several people in a row needs no `clearFrames()`. Only the latest
   `maxFrames` (at most `FisicaLimit.analysisFrames`, the most one analysis accepts) are

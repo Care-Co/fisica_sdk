@@ -236,19 +236,22 @@ public final class FisicaClient {
 
     private func request(_ action: FisicaSessionAction, value: Int64, waitFor: FisicaSessionOperation,
                          prepare: (() -> Void)? = nil, accepted: (() -> Void)? = nil, completion: @escaping Completion) {
-        queue.async {
-            let key = self.operation(waitFor)
-            guard !self.closed, self.waiters[key] == nil else {
-                completion(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Another operation is pending"))); return
-            }
-            self.waiters[key] = completion
-            prepare?()
-            do {
-                try self.session.action(action.rawValue, value: value, nowMs: self.now)
-                accepted?()
-                for event in try self.session.drain() { self.deliver(event) }
-            } catch { self.waiters.removeValue(forKey: key)?(.failure(error)) }
+        queue.async { self.begin(action, value: value, waitFor: waitFor, prepare: prepare, accepted: accepted, completion: completion) }
+    }
+    /// On `queue`: wait for `waitFor` after the core call; busy while that operation is pending.
+    private func begin(_ action: FisicaSessionAction, value: Int64, waitFor: FisicaSessionOperation,
+                       prepare: (() -> Void)? = nil, accepted: (() -> Void)? = nil, completion: @escaping Completion) {
+        let key = operation(waitFor)
+        guard !closed, waiters[key] == nil else {
+            completion(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Another operation is pending"))); return
         }
+        waiters[key] = completion
+        prepare?()
+        do {
+            try session.action(action.rawValue, value: value, nowMs: now)
+            accepted?()
+            for event in try session.drain() { deliver(event) }
+        } catch { waiters.removeValue(forKey: key)?(.failure(error)) }
     }
     /// Start measuring; `durationMs` nil measures until `stop`. Completes when the Scale confirmed the start.
     /// The current license is applied first. Frames of the previous measurement are cleared once
@@ -285,12 +288,17 @@ public final class FisicaClient {
     }
 
     /// Stop if needed, release the Scale's measurement mode, then close the transport.
-    /// Resources are released even when the Scale does not confirm.
+    /// Resources are released even when the Scale does not confirm. A second close while one
+    /// is pending fails with `busy` and leaves the first alone; once closed, close completes
+    /// at once with nil and does nothing.
     public func close(completion: ((Result<SessionEvent, Error>?) -> Void)? = nil) {
         queue.async {
             guard !self.closed else { completion?(nil); return }
+            guard self.waiters[self.operation(.close)] == nil else {
+                completion?(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Close is already pending"))); return
+            }
             guard self.linkReady else { self.teardown(); completion?(nil); return }
-            self.request(.disconnect, value: 0, waitFor: .close) { result in self.teardown(); completion?(result) }
+            self.begin(.disconnect, value: 0, waitFor: .close) { result in self.teardown(); completion?(result) }
         }
     }
     private func teardown() {

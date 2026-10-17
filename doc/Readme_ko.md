@@ -427,7 +427,8 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 ### `get_all_reports()`
 
 **Description**:  
-완료된 모든 세션의 분석 레포트를 가져옵니다.
+완료된 세션의 분석 레포트를 가져옵니다. 메모리에는 최근 100개만 남고, 그보다 오래된 레포트는 사라집니다.
+오래 보관하려면 `export_report()`로 파일에 저장하세요.
 
 **Parameters**:  
 없음
@@ -451,7 +452,7 @@ report에 인자가 없는 경우, 가장 최근에 `analyze()`된 SessionReport
 
 **Parameters**:
 
-- `report` (SessionReport, optional): `get_all_reports()` 혹은 `get_all_reports()`를 통해 얻은 데이터. 제공되지 않는 경우 가장 최근의 SessionReport를 기준으로 출력됨.
+- `report` (SessionReport, optional): `get_all_reports()`로 얻은 데이터. 제공되지 않는 경우 가장 최근의 SessionReport를 기준으로 출력됨.
 - `output` (str): 내보낼 파일 경로나 디렉토리입니다.
 
 **Returns**:  
@@ -652,7 +653,9 @@ if devices:
 ## 📄 License
 
 래퍼와 비공개 코어에는 [Fisica Scale SDK License](../LICENSE)를 적용합니다.
-현재 LICENSE는 2026-10-17 정책(기본·전체 모드, SDK 키)에 맞춰 다시 쓴 Version 2.0 검토용 초안이며 법무 검토 전입니다
+현재 LICENSE는 2026-10-17 정책(기본·전체 모드, SDK 키)에 맞춘 Version 2.0입니다. 한국어 원문과 영어 번역이 함께 있고
+한국어 원문이 우선하며, 대한민국 법을 따릅니다. SDK가 의료기기가 아님과 책임 한도(직전 12개월 지급액)를 적었습니다.
+법무 검토를 마칠 때까지 검토용 초안으로 표시합니다
 ([검토 자료](license-review.md), [정책 이력](policy-history.md), [Version 1.0](LICENSE-1.0.txt)). 기존 계약, 이미 제공한 배포본,
 과거 MIT 등으로 제공한 버전의 권리는 자동으로 바뀌지 않습니다.
 

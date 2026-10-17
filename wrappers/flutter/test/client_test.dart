@@ -9,6 +9,7 @@ class MockBytes implements FisicaTransport {
   final input = StreamController<Uint8List>.broadcast();
   final lost = StreamController<void>.broadcast();
   bool closed = false;
+  int closes = 0;
   final sent = <Uint8List>[];
   @override
   Stream<Uint8List> get received => input.stream;
@@ -27,6 +28,7 @@ class MockBytes implements FisicaTransport {
 
   @override
   Future<void> close() async {
+    closes++;
     closed = true;
     await input.close();
     await lost.close();
@@ -59,6 +61,17 @@ Uint8List fixturePacket() {
 }
 
 Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 60));
+
+/// Never answers [silent] (for example the release, SET_DEVICE_STOP).
+class SilentBytes extends MockBytes {
+  final Uint8List silent;
+  SilentBytes(this.silent);
+  @override
+  Future<void> send(Uint8List bytes) async {
+    if (bytes.toString() != silent.toString()) return super.send(bytes);
+    sent.add(bytes);
+  }
+}
 
 /// Answers GET_BATTERY_LEVEL with [battery] percent, or refuses it (NACK) when null.
 class BatteryBytes extends MockBytes {
@@ -438,14 +451,45 @@ void main() {
     await client.stop();
     await client.close();
   });
+  final busy = throwsA(
+    isA<FisicaStateError>().having((e) => e.code, 'code', FisicaStatus.busy),
+  );
   test('close during start cancels pending future and disposes once', () async {
-    final client = FisicaClient(core, MockBytes());
+    final transport = MockBytes();
+    final client = FisicaClient(core, transport);
     await client.connect(link: FisicaLink.usb);
     final start = client.start();
     final canceled = expectLater(start, throwsA(isA<FisicaCommandError>()));
     final close = client.close();
-    expect(identical(close, client.close()), isTrue);
+    await expectLater(client.close(), busy);
     await canceled;
     await close;
+    await client.close(); // closed: completes at once and does nothing
+    expect(transport.closes, 1);
+  });
+  test('a second close while one is pending is busy; once closed, close does nothing', () async {
+    final release = core.command('SET_DEVICE_STOP');
+    final transport = SilentBytes(release); // the Scale never confirms the release
+    final client = FisicaClient(core, transport);
+    await client.connect(link: FisicaLink.usb);
+    await client.start();
+    for (var i = 0; i < 12; i++) {
+      transport.input.add(fixturePacket());
+    }
+    await settle();
+    await client.stop();
+    final first = client.close();
+    await expectLater(client.close(), busy);
+    expect(transport.closed, isFalse); // the busy close left the first alone
+    // Unconfirmed: the first close fails, and still releases everything.
+    await expectLater(first, throwsA(isA<FisicaCommandError>()));
+    expect(transport.closes, 1);
+    expect(client.report()!.weight, 70.5);
+    await client.close();
+    expect(transport.closes, 1);
+    expect(
+      transport.sent.where((s) => s.toString() == release.toString()),
+      hasLength(1),
+    );
   });
 }
