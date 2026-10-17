@@ -122,9 +122,13 @@ def prepare_release(directory):
                   wrapper['support']['deprecated_before']]
         header += '{' + ','.join(json.dumps(f) for f in fields) + ',' + str(wrapper['abi']['major']) + ',' + str(wrapper['abi']['minimum_minor']) + ',' + ('true' if metadata['result_schema_version'] in wrapper['result_schema_versions'] else 'false') + '},\n'
     header += '};\n'
+    keys = entitlement_keys()
+    # Validation builds (test keys trusted) also accept the host's clock as is, so tests can set the time.
+    # Customer builds read the system clock themselves (fisica_entitlement.cpp, fisica_session.cpp).
+    header += '#define FISICA_VALIDATION_BUILD ' + ('1' if any(k['environment'] == 'test' for k in keys) else '0') + '\n'
     header += 'struct FisicaEntitlementKey { const char *kid; unsigned environment; unsigned char public_key[32]; };\n'
     header += 'static const FisicaEntitlementKey fisica_entitlement_keys[] = {\n'
-    for key in entitlement_keys():
+    for key in keys:
         data = ','.join('0x' + key['public_key'][i:i+2] for i in range(0, 64, 2))
         header += '{' + json.dumps(key['kid']) + ',' + ('1' if key['environment'] == 'production' else '2') + ',{' + data + '}},\n'
     header += '{nullptr,0,{0}},\n};\n'
