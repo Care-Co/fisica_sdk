@@ -177,3 +177,24 @@ Kotlin compiler runtime은 FISICA_GRADLE_LIB로 설정한다. 소비 앱은 priv
 [Android Bluetooth permissions](https://developer.android.com/develop/connectivity/bluetooth/bt-permissions),
 [Apple Bluetooth usage description](https://developer.apple.com/documentation/BundleResources/Information-Property-List/NSBluetoothAlwaysUsageDescription),
 [.NET ABI interoperability](https://learn.microsoft.com/dotnet/standard/native-interop/abi-support).
+
+## CI (자체 호스팅 러너)
+
+두 워크플로(`platform-builds.yml`, `apple.yml`)는 요청할 때만 수동으로 실행하고(workflow_dispatch),
+GitHub 호스팅 러너를 쓰지 않는다. 포털(developer-portal)의 빌드·배포도 자체 호스팅 러너만 쓴다.
+
+| 작업 | 러너 라벨 | 러너 | 준비 |
+|---|---|---|---|
+| `linux`, `android` | `self-hosted, carenco` | mac-host-runner1~3 (Linux X64, colima) | 없음. 매번 새 `ubuntu:24.04` 컨테이너에서 apt로 도구를 깔고, Flutter·Android SDK·NDK 26.3·Gradle 8.14·pip·pub 캐시는 Docker 볼륨 `fisica-sdk-ci-cache`에 둔다 |
+| `apple` | `self-hosted, macOS` | Company-Mac (ARM64) | Xcode(iOS SDK 포함). 첫 단계에서 찾고 없으면 실패한다. 다른 직원이 올린 러너라 동의 전에는 실행하지 않는다 |
+
+Windows CI(x64 휠 빌드와 Python 3.9~3.14 설치 확인, ARM64 교차 빌드)는 자체 호스팅 Windows 러너가 없어
+2026-10-17에 뺐다. 러너가 생기면 `git show a44754b:.github/workflows/windows-wheel.yml`과
+`platform-builds.yml`의 `windows-arm64` 작업을 되살리고 `runs-on`을 `[self-hosted, Windows, X64, carenco]`로 바꾼다.
+러너에 필요한 것:
+
+- Windows 10/11 또는 Server 2022, x64. Care-Co 조직에 러너로 등록하고 라벨 `carenco`를 붙인다. 서비스로 실행.
+- Visual Studio 2022 Build Tools: "C++를 사용한 데스크톱 개발", MSVC v143 x64/x86 도구, MSVC v143 ARM64 도구,
+  Windows 11 SDK (10.0.22621).
+- .NET 8 SDK (`dotnet`이 PATH에 있어야 한다)와 Git for Windows.
+- Python은 `actions/setup-python`이 러너 도구 캐시에 받는다.

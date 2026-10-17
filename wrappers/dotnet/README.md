@@ -102,7 +102,7 @@ state is the signed key and the latest time seen. See `doc/licensing-plan.md`.
 One core binary is loaded per process. The low-level `FisicaSession` remains available.
 
 Verified: shared vectors, client in basic and full mode, license states (including
-online activation, renewal and storage against the mock server, and a released key) and serial open-failure handling on macOS and on
-the Windows CI runner; `BleTransport` compiles on both and its failure paths run on
-the Windows runner, which has no Bluetooth device. Not verified: a real COM port or BLE
+online activation, renewal and storage against the mock server, and a released key) and serial open-failure handling on macOS and,
+until 2026-10-17, on the GitHub Windows runner; `BleTransport` compiles on both and its failure paths ran on
+that runner, which has no Bluetooth device. Windows CI is paused until a self-hosted Windows runner exists. Not verified: a real COM port or BLE
 connection with a Scale, real Windows drivers, and Windows ARM64 execution.
