@@ -73,7 +73,8 @@ public sealed record SessionReport(double Weight,double LeftWidth,double LeftLen
 /// throws is reported through Error; the client carries on. Tasks complete asynchronously; await resumes on the
 /// awaiting context as usual.
 /// Without an Entitlement holding an SDK key activated for this app or PC the client runs in basic mode: connection,
-/// measurement, settings, weight and foot size work, frames arrive at most once a second without Raw and Packet.</summary>
+/// measurement, settings, weight and foot size work, frames arrive at most once a second without Raw and Packet.
+/// The client's timer does not keep it alive: a client dropped without CloseAsync can still be collected.</summary>
 public sealed class FisicaClient : IAsyncDisposable {
     public FisicaCore Core { get; } public IFisicaTransport Transport { get; }
     /// <summary>The license applied to the session before every start, every 30 seconds and whenever it changes.</summary>
@@ -193,7 +194,7 @@ public sealed class FisicaClient : IAsyncDisposable {
     void OnReady() => Post(() => {
         if (closed || linkReady) return;
         linkReady=true; readyDeadline?.Cancel();
-        ticker ??= new Timer(_ => Post(Pulse),null,20,20);
+        ticker ??= Tick(this);
         Step(() => session.Action((uint)FisicaSessionAction.Connected,(long)link,clock.ElapsedMilliseconds));
     });
     void OnBytes(byte[] bytes) => Post(() => {
@@ -215,6 +216,13 @@ public sealed class FisicaClient : IAsyncDisposable {
         Step(() => session.Action((uint)FisicaSessionAction.Lost,sendFailure ? 1 : 0,clock.ElapsedMilliseconds));
     }
 
+    /// <summary>Ticks every 20 ms. The timer holds the client weakly: a client dropped without CloseAsync is
+    /// collected (its session's native memory with it), and the timer then disposes itself.</summary>
+    static Timer Tick(FisicaClient client) {
+        var target=new WeakReference<FisicaClient>(client); Timer? timer=null;
+        timer=new Timer(_ => { if (target.TryGetTarget(out var alive)) alive.Post(alive.Pulse); else timer?.Dispose(); },null,20,20);
+        return timer;
+    }
     void Pulse() {
         Step(() => session.Tick(clock.ElapsedMilliseconds));
         // Picks up renewals and activation, and notices the end of full mode.

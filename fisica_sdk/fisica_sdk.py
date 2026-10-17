@@ -18,6 +18,7 @@ from .utils import enable_console_logging, log, resolve_output_path
 _ANALYSIS_FRAMES = int(FisicaLimit.ANALYSIS_FRAMES)
 _NOT_ANALYZED = object()  # no core analysis since the last start (None is the core's "no stable result")
 _IDLE_WORKER_SECONDS = 5
+_MAX_REPORTS = 100  # reports kept in memory; older ones are dropped
 
 
 def _frames():
@@ -44,7 +45,7 @@ class FisicaSDK:
         - analyze(): Analyze collected session frames and generate a session report.
         - get_session_frames(): Retrieve serialized raw frames from the current session.
         - get_report(): Retrieve the most recent analysis report.
-        - get_all_reports(): Retrieve all previous session reports stored in memory.
+        - get_all_reports(): Retrieve the previous session reports stored in memory (the latest 100).
         - export_report(report: Optional[Union[SessionReport, list]], output: Optional[str]): Save the current or specified report(s) to a JSON file.
         - configure_entitlement(token=..., file=..., endpoint=...): Use an SDK key for full mode.
         - sync_entitlement(wait=True, force=False): Activate or renew the SDK key with the server now.
@@ -84,7 +85,7 @@ class FisicaSDK:
         self._receiver = None
         self._last_device_info = None  # kept after disconnect so a later analyze() keeps the battery reading
         self._session = None
-        self._reports = []
+        self._reports = deque(maxlen=_MAX_REPORTS)  # the latest analyze() reports, oldest first
         self._frames = _frames()  # the running measurement's frames
         self._analysis = _NOT_ANALYZED  # the core's analysis of every packet of the last measurement
         self._working = False  # a measurement is running
@@ -707,9 +708,11 @@ class FisicaSDK:
     Fisica SDK: get_all_reports
 
         Returns:
-           list: Serialized list of all analyzed SessionReport objects
+           list: Serialized list of the analyzed SessionReport objects kept in memory, oldest first
 
         Notes:
+           Only the latest 100 reports are kept: each `analyze()` beyond that drops the oldest one.
+           Export the reports you need with `export_report()` before they are dropped.
            Reports stay in memory until `reset_reports()`.
         """
         return [serialize_session_report(r, frames=self._has_feature('export')) for r in self._reports]

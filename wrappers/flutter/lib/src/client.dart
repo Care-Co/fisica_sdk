@@ -39,7 +39,7 @@ class FisicaClient {
   bool _closed = false, _linked = false, _connecting = false;
   // Bumped whenever a link starts or ends so late callbacks of an earlier link are ignored.
   int _generation = 0;
-  Future<void>? _closing;
+  bool _closing = false;
 
   /// The SDK key's license, applied to the session before every start, every
   /// 30 seconds and whenever it changes. Without it, or without a key
@@ -402,9 +402,24 @@ class FisicaClient {
 
   /// Stop if needed, release the Scale's measurement mode and close the
   /// transport. Without a link (after a loss) it only frees resources.
-  Future<void> close() => _closing ??= _close();
-  Future<void> _close() async {
+  /// Resources are released even when the Scale does not confirm. A second
+  /// close while one is pending fails with [FisicaStateError]
+  /// ([FisicaStatus.busy]); once closed, close completes at once and does
+  /// nothing.
+  Future<void> close() async {
+    if (_closing) {
+      throw FisicaStateError(FisicaStatus.busy, 'Close is already pending');
+    }
     if (_closed) return;
+    _closing = true;
+    try {
+      await _close();
+    } finally {
+      _closing = false;
+    }
+  }
+
+  Future<void> _close() async {
     try {
       if (_linked) await _checked(_action(FisicaSessionAction.disconnect, 0));
     } finally {
