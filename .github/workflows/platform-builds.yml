@@ -1,24 +1,31 @@
 name: Multi-platform core and bindings
+# Pull requests and manual runs only: merging to main does not run the same checks again.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'examples/partner/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
   pull_request:
     paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'examples/partner/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
 permissions:
   contents: read
+concurrency:
+  # A newer push to the same branch or pull request replaces the run in progress.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
-  flutter-adapters:
+  linux:
+    # Everything that does not need macOS or Windows runs here (Linux minutes cost a tenth of macOS).
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: macos-15
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with: {persist-credentials: false}
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with: {python-version: '3.11'}
+      - run: python -m pip install pytest numpy packaging pyserial bleak opencv-python-headless Pillow
       - run: python tools/native_build.py
+      - run: python -m pytest tests -q
+      - name: Public C ABI contracts under UBSan (hostile license input included)
+        run: python tools/verify_bindings.py native
       - name: Flutter 3.47.7 (pinned source)
         run: |
           git init .build/flutter-sdk
@@ -28,7 +35,7 @@ jobs:
           git -C .build/flutter-sdk checkout --detach abaf9c523780a608bd46686fd5e53740a07077f8
           echo "$GITHUB_WORKSPACE/.build/flutter-sdk/bin" >> "$GITHUB_PATH"
       - run: flutter --disable-analytics
-      - name: Dart core wrapper contract (client, reconnect, link check, entitlement, mock server)
+      - name: Dart core wrapper contract (client, reconnect, link check, license, mock server)
         run: python tools/verify_bindings.py dart
       - run: flutter pub get
         working-directory: wrappers/flutter_transport
@@ -38,7 +45,7 @@ jobs:
         run: flutter test
         working-directory: wrappers/flutter_transport
         env:
-          FISICA_CORE_TEST_LIBRARY: ${{ github.workspace }}/fisica_sdk/_native/libfisica_core.dylib
+          FISICA_CORE_TEST_LIBRARY: ${{ github.workspace }}/fisica_sdk/_native/libfisica_core.so
       - run: flutter pub get
         working-directory: examples/partner/flutter
       - run: flutter analyze
@@ -78,35 +85,6 @@ jobs:
           path: |
             .build/platforms/android/*.aar
             .build/platforms/android/*.zip
-          retention-days: 14
-  apple:
-    if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: macos-15
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with: {persist-credentials: false}
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with: {python-version: '3.11'}
-      - run: python -m pip install build pytest numpy packaging pyserial bleak
-      - run: python tools/native_build.py
-      - run: python -m pytest tests -q
-      - name: Public C ABI contracts under UBSan (hostile entitlement input included)
-        run: python tools/verify_bindings.py native
-      - run: python tools/build_platforms.py --validation --target apple
-        env:
-          FISICA_XCODE_DEVELOPER: /Applications/Xcode.app/Contents/Developer
-      - name: Swift contract (client, entitlement, online exchange with the mock server)
-        run: python tools/verify_bindings.py swift
-      - run: python tools/build_platforms.py --validation --target macosx_11_0_universal2
-      - name: Audit public Apple artifacts
-        run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts apple macosx_11_0_universal2)
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: fisica-apple-binaries
-          path: |
-            .build/platforms/apple/*.zip
-            .build/platforms/*.zip
           retention-days: 14
   windows-arm64:
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)

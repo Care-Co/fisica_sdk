@@ -1,24 +1,8 @@
 name: Windows binary wheels
 
+# Pull requests and manual runs only: merging to main does not run the same checks again.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'fisica_sdk/**'
-      - 'native/**'
-      - 'tools/**'
-      - 'tests/**'
-      - 'wrappers/**/wrapper.json'
-      - 'wrappers/dotnet/**'
-      - 'wrappers/flutter/lib/src/version.dart'
-      - 'wrappers/flutter/pubspec.yaml'
-      - 'sdk-release.json'
-      - 'setup.py'
-      - 'LICENSE'
-      - 'MANIFEST.in'
-      - 'pyproject.toml'
-      - '.github/workflows/windows-wheel.yml'
   pull_request:
     paths:
       - 'fisica_sdk/**'
@@ -38,6 +22,11 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  # A newer push to the same branch or pull request replaces the run in progress.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -90,7 +79,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.9', '3.11', '3.13', '3.14']
+        # Pull requests check the oldest and newest supported Python (the build job already installs on 3.11);
+        # a manual run checks every supported version.
+        python: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["3.9", "3.11", "3.13", "3.14"]') || fromJSON('["3.9", "3.14"]') }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -109,7 +100,7 @@ jobs:
           if ($wheel.Count -ne 1) { throw 'Expected exactly one Windows x64 wheel' }
           python tools/verify_wheel.py $wheel.FullName
       - name: Verify the visualization extra
-        if: matrix.python == '3.11'
+        if: matrix.python == '3.14'
         run: |
           $wheel = Get-ChildItem artifacts -Recurse -Filter '*-win_amd64.whl'
           python tools/verify_wheel.py $wheel.FullName --extras visualization
