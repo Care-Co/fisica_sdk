@@ -119,8 +119,10 @@ Policy (2026-10-17): the base SDK license comes with genuine hardware, has no da
 and is basic mode, for any use including commercial, without registration. Full mode needs
 an SDK key of a trial, a non-commercial extension or a commercial contract, activated for the
 app or PC. Separate agreements are for exceptions such as OEM supply, rebranding or SDK resale.
-The [LICENSE](LICENSE) is Version 2.0, rewritten on 2026-10-17 to this policy and marked as a
-draft for review until legal review is complete ([review notes](doc/license-review.md),
+The [LICENSE](LICENSE) is Version 2.0, written to this policy in Korean with an English
+translation (the Korean text prevails) and governed by Korean law. It states that the SDK is not
+a medical device and caps liability at what was paid for the SDK in the previous 12 months. It
+stays marked as a draft for review until legal review is complete ([review notes](doc/license-review.md),
 [policy history](doc/policy-history.md), [Version 1.0](doc/LICENSE-1.0.txt)). It does not change
 existing agreements, packages already delivered, or rights granted under earlier licenses such as MIT.
 Wrappers may be modified; applications may redistribute wrappers and the unmodified

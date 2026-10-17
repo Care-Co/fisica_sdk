@@ -36,6 +36,8 @@ def validate_windows_dll(data, expected_machine=0x8664):
         raise ValueError('Windows core is an executable, not a DLL')
 
 
+# The LICENSE opens with the Korean original's title; the English title is accepted as well.
+LICENSE_HEADINGS = ('Fisica Scale SDK 라이선스\n'.encode(), b'Fisica Scale SDK License\n')
 ANDROID_PAGE_SIZE = 16384
 ANDROID_PAGE_FLAGS = '-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384'
 
@@ -239,7 +241,7 @@ def audit_archive(path, validation=False):
                 raise ValueError('Windows native bundle is missing the core DLL')
             validate_windows_dll(archive.read('fisica_core.dll'),0xaa64 if path.stem.endswith('win_arm64') else 0x8664)
         licenses = [name for name in names if name == 'LICENSE' or name.endswith('/licenses/LICENSE')]
-        if len(licenses) != 1 or not archive.read(licenses[0]).startswith(b'Fisica Scale SDK License\n'):
+        if len(licenses) != 1 or not archive.read(licenses[0]).startswith(LICENSE_HEADINGS):
             raise ValueError('Archive is missing the Fisica Scale SDK License')
         if path.suffix == '.whl':
             metadata = [name for name in names if name.endswith('.dist-info/METADATA')]
