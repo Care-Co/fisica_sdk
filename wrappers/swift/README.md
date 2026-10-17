@@ -73,7 +73,8 @@ app's or PC's target, the key's dates (`keyUntil`, `fullUntil`, `refreshBy`, con
   use. A transport that never becomes ready fails after `timeout` (default 15 s).
 - A rejected or unconfirmed command fails with `FisicaCommandError` (`code` is the SDK
   status, `deviceCode` the Scale's own code). `close` releases resources even when the
-  Scale does not confirm.
+  Scale does not confirm. A second `close` while one is pending fails with `busy` and
+  leaves the first alone; once closed, `close` completes at once with nil.
 - On `onLinkLost`, reopen the same Scale with `connect`; the core resumes a measurement
   it still wants.
 - `report()` analyzes the measurement in the core and returns unrounded values from every
