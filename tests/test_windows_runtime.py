@@ -84,7 +84,8 @@ def test_ble_startup_timeout_cleans_up_without_replacing_host_event_loop(monkeyp
     monkeypatch.setattr(port_scanner, 'BLE_START_TIMEOUT', 0.02)
     async def app():
         loop = asyncio.get_running_loop()
-        assert port_scanner.find_bluetooth_com_ports(timeout=0.01) == []
+        with pytest.raises(FisicaTransportError, match='did not finish'):  # not "no Scale nearby"
+            port_scanner.find_bluetooth_com_ports(timeout=0.01)
         assert asyncio.get_running_loop() is loop
     asyncio.run(app())
     assert stopped == [True]
@@ -141,7 +142,7 @@ def test_stop_cleans_up_even_when_device_write_fails():
     with pytest.raises(FisicaError) as error:
         receiver.discon()
     assert error.value.code == 6
-    assert not receiver._transport.connected and receiver._stop_event.is_set()
+    assert not receiver._transport.connected
 
 
 def test_pending_recovery_cannot_be_reactivated_by_a_new_start():

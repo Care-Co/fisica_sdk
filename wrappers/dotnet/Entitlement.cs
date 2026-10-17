@@ -52,22 +52,10 @@ internal sealed class EntitlementHandle : SafeHandleZeroOrMinusOneIsInvalid {
 public sealed class FisicaEntitlement : IDisposable {
     /// <summary>Store state per company and contract under the user's local application data.</summary>
     public const string AutoStorage="*";
-    const string BasicMode=" Basic mode keeps connection, measurement, weight and foot size; raw data and full-rate frames need full mode.";
-    static readonly Dictionary<FisicaModeReason,string> reasons=new() {
-        [FisicaModeReason.NoKey]="No SDK key. Create one in the developer portal and import it."+BasicMode,
-        [FisicaModeReason.LegacyToken]="This is a contract confirmation, not an SDK key. Create an SDK key in the developer portal."+BasicMode,
-        [FisicaModeReason.NotActivated]="The SDK key is not activated yet: connect to the internet, or enter the activation code in the developer portal and import the file it gives."+BasicMode,
-        [FisicaModeReason.NoTarget]="The SDK cannot read this app's ID or this PC's identity, so a key cannot be activated here."+BasicMode,
-        [FisicaModeReason.OtherTarget]="This SDK key is activated for another app or PC."+BasicMode,
-        [FisicaModeReason.Revoked]="The SDK key was released or its contract was revoked."+BasicMode,
-        [FisicaModeReason.ClockRollback]="This device's clock is earlier than a time the SDK has already seen; correct the clock."+BasicMode,
-        [FisicaModeReason.KeyExpired]="The SDK key expired: connect to renew it, or import a renewal file from the developer portal."+BasicMode,
-        [FisicaModeReason.NotStarted]="The contract of this SDK key has not started yet."+BasicMode,
-        [FisicaModeReason.FullEnded]="The trial or contract of this SDK key has ended."+BasicMode,
-    };
-    internal static string? Explain(FisicaModeReason reason) => reasons.GetValueOrDefault(reason);
+    // Messages shared by every wrapper (wrappers/license-messages.json, generated into Codes.cs).
+    internal static string? Explain(FisicaModeReason reason) => FisicaLicenseMessages.Reason(reason);
     const string Activate="/sdk/v1/entitlement/activate", Refresh="/sdk/v1/entitlement/refresh",
-        Pairing="/sdk/v1/pairing", PairingToken="/sdk/v1/pairing/token";
+        ReleasePath="/sdk/v1/entitlement/release", Pairing="/sdk/v1/pairing", PairingToken="/sdk/v1/pairing/token";
     static readonly HttpClient http=new() { Timeout=TimeSpan.FromSeconds(5) };
     readonly EntitlementHandle handle=new(); readonly object gate=new(); readonly Func<ulong> clock; readonly FisicaCore owner;
     readonly string? endpoint, storage; readonly bool online;
@@ -168,7 +156,10 @@ public sealed class FisicaEntitlement : IDisposable {
             Directory.CreateDirectory(Path.GetDirectoryName(file)!);
             var data=new byte[262144];
             FisicaCore.Check(Native.fisica_core_entitlement_export(handle,data,(uint)data.Length,out uint length));
-            File.WriteAllBytes(file+".tmp",data[..(int)length]); File.Move(file+".tmp",file,true);
+            // A temporary file of its own: other processes and wrappers on this PC may save the same seat.
+            var temporary=$"{file}.{Guid.NewGuid():N}.tmp";
+            try { File.WriteAllBytes(temporary,data[..(int)length]); File.Move(temporary,file,true); }
+            catch { try { File.Delete(temporary); } catch (Exception) { } throw; }
         } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { LastSyncError="storage: "+error.Message; }
     }
     void Forget(string? file) {
@@ -201,17 +192,33 @@ public sealed class FisicaEntitlement : IDisposable {
     /// null without an unactivated key.</summary>
     public string? ActivationCode() { lock(gate) { Open(); return OptionalText(FisicaEntitlementText.ActivationCode); } }
     /// <summary>Release the key activated here: the core forgets it, the stored key is deleted, and the FRC1 code to
-    /// enter in the developer portal is returned. FisicaException (InvalidState) without a key activated here.</summary>
+    /// enter in the developer portal is returned. Online, the server is also told in the background, which frees the
+    /// seat at once (ReleaseAsync waits for that). FisicaException (InvalidState) without a key activated here.</summary>
     public string Release() {
-        string code;
+        var (code,token)=ReleaseHere();
+        if (token!=null) _=Task.Run(() => TellReleased(token));
+        return code;
+    }
+    /// <summary>Release, and online tell the server with the key itself so the seat is free at once. Returns the
+    /// FRC1 code and whether the server confirmed; without that confirmation enter the code in the developer portal.</summary>
+    public async Task<(string Code,bool ReleasedOnline)> ReleaseAsync() {
+        var (code,token)=ReleaseHere();
+        return (code,token!=null && await TellReleased(token).ConfigureAwait(false));
+    }
+    (string Code,string? Token) ReleaseHere() {
+        string code, token;
         lock(gate) {
-            Open(); var file=StateFile(); var data=new byte[1024];
+            Open(); var file=StateFile(); token=Text(FisicaEntitlementText.Token); var data=new byte[1024];
             FisicaCore.Check(Native.fisica_core_entitlement_release(handle,data,(uint)data.Length,out uint length));
             code=Encoding.ASCII.GetString(data,0,(int)length);
             Forget(file);
         }
         Notify();
-        return code;
+        return (code,online && endpoint!=null && token.Length>0 ? token : null);
+    }
+    async Task<bool> TellReleased(string token) {
+        try { await Post(ReleasePath,token,"{}"u8.ToArray()).ConfigureAwait(false); return true; }
+        catch (Exception failure) { LastSyncError="network: "+failure.Message; return false; }
     }
     void Notify() {
         EntitlementStatus status; FisicaEntitlementWarning fresh; bool changed;
@@ -254,13 +261,15 @@ public sealed class FisicaEntitlement : IDisposable {
     /// an endpoint or a readable app ID or PC, and HttpRequestException when pairing cannot start.</summary>
     public async Task<PairingResult> PairAsync(Action<PairingCode> onCode,CancellationToken cancel=default) {
         if (endpoint==null) throw new InvalidOperationException("Pairing needs the developer portal endpoint");
+        // onCode runs where PairAsync was called (a UI thread, for example), not on a network thread.
+        var context=SynchronizationContext.Current;
         string request;
         lock(gate) { Open(); request=OptionalText(FisicaEntitlementText.ActivationRequest) ?? throw new InvalidOperationException(Explain(FisicaModeReason.NoTarget)); }
         using var device=JsonDocument.Parse(await Post(Pairing,null,Encoding.UTF8.GetBytes(request)).ConfigureAwait(false));
         var root=device.RootElement;
         var code=new PairingCode(root.GetProperty("user_code").GetString()!,root.GetProperty("verification_uri").GetString()!,
             root.GetProperty("verification_uri_complete").GetString()!,root.GetProperty("expires_in").GetInt32());
-        onCode(code);
+        if (context!=null) context.Post(_ => onCode(code),null); else onCode(code);
         var body=JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string,string> { ["device_code"]=root.GetProperty("device_code").GetString()! });
         double interval=root.TryGetProperty("interval",out var given) ? Math.Max(0,given.GetDouble()) : 5;
         // A key approved just before the code expires can still be received for a short while.
@@ -290,17 +299,16 @@ public sealed class FisicaEntitlement : IDisposable {
             if (DateTimeOffset.UtcNow>=deadline) return PairingResult.Expired;
         }
     }
-    // What the server should do now: activate an unactivated key, renew one that is due, or nothing.
+    // What the server should do now, as the core decides it: activate, renew, or nothing.
     (string? Path,string Token,byte[] Body) Due(bool force) {
         lock(gate) {
             if (handle.IsClosed) return (null,"",[]);
-            var values=Values(); var reason=(FisicaModeReason)values[1]; var token=Text(FisicaEntitlementText.Token);
+            var token=Text(FisicaEntitlementText.Token);
             if (token.Length==0) return (null,"",[]);
-            if (reason==FisicaModeReason.NotActivated && OptionalText(FisicaEntitlementText.ActivationRequest) is {} request)
+            FisicaCore.Check(EntitlementNative.fisica_core_entitlement_next_exchange(handle,clock(),out uint next));
+            if ((FisicaExchange)next==FisicaExchange.Activate && OptionalText(FisicaEntitlementText.ActivationRequest) is {} request)
                 return (Activate,token,Encoding.UTF8.GetBytes(request));  // the core's request for this target, verbatim
-            bool due=reason is FisicaModeReason.KeyExpired or FisicaModeReason.FullEnded or FisicaModeReason.NotStarted ||
-                reason is FisicaModeReason.None && ((FisicaEntitlementWarning)values[17]).HasFlag(FisicaEntitlementWarning.RenewDue);
-            return (due || force ? Refresh : null,token,"{}"u8.ToArray());
+            return ((FisicaExchange)next==FisicaExchange.Refresh || force ? Refresh : null,token,"{}"u8.ToArray());
         }
     }
     /// <summary>Activate or renew with the server now when due (force: renew now). A failure changes no license state:
@@ -313,7 +321,15 @@ public sealed class FisicaEntitlement : IDisposable {
         try {
             var (path,token,body)=Due(force);
             if (path==null) return new(false,false,null);
-            using var reply=JsonDocument.Parse(await Post(path,token,body).ConfigureAwait(false));
+            var (status,answer)=await Send(path,token,body).ConfigureAwait(false);
+            if (status is < 200 or > 299) {
+                // A refused activation (key in use elsewhere, released, trial already used) does not change
+                // within a minute: ask again in an hour. Other failures retry after a minute (Sync).
+                if (status is >= 400 and < 500 and not 429) Interlocked.Exchange(ref nextSync,Environment.TickCount64+3_600_000);
+                var text=Encoding.UTF8.GetString(answer);
+                throw new HttpRequestException($"{status} {text[..Math.Min(200,text.Length)]}");
+            }
+            using var reply=JsonDocument.Parse(answer);
             var data=Encoding.UTF8.GetBytes(reply.RootElement.GetProperty("token").GetString() ?? throw new InvalidDataException("No key in the response"));
             lock(gate) {
                 if (handle.IsClosed) return new(false,false,null);
@@ -348,4 +364,10 @@ public sealed class FisicaEntitlement : IDisposable {
         FisicaCore.Check(Native.fisica_core_entitlement_export(handle,data,(uint)data.Length,out uint length)); return data[..(int)length];
     } }
     public void RestoreState(byte[] state) { lock(gate) { Open(); FisicaCore.Check(Native.fisica_core_entitlement_restore(handle,state,(uint)state.Length)); } Notify(); }
+}
+
+/// <summary>Entitlement functions bound here; the rest are in Native (Core.cs).</summary>
+internal static class EntitlementNative {
+    [System.Runtime.InteropServices.DllImport("fisica_core",CallingConvention=System.Runtime.InteropServices.CallingConvention.Cdecl)]
+    internal static extern int fisica_core_entitlement_next_exchange(EntitlementHandle handle,ulong now,out uint exchange);
 }

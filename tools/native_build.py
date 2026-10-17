@@ -44,10 +44,14 @@ def release_metadata(validate_flutter=True):
 
 
 # Which keys the core trusts. 'release': production keys only, for customer packages.
-# Anything else, including unset: production and test keys, for development, tests and
-# --validation QA builds. The release tools set it (see require_release_keys); the
-# variable also reaches the wheel build that setup.py runs in a separate process.
+# Anything else: production and test keys, for development, tests and --validation QA builds.
+# Unset means the developer build (this script without flags, used by the tests) trusts the
+# test key too, while every customer build path defaults to 'release': setup.py (python -m
+# build --wheel), --metadata-only for native/CMakeLists.txt and the release tools (see
+# require_release_keys). The variable also reaches the wheel build setup.py runs in another process.
 KEY_MODE = 'FISICA_ENTITLEMENT_KEYS'
+# Release metadata for native/CMakeLists.txt; the developer build writes .build/native-generated.
+RELEASE_GENERATED = ROOT / '.build' / 'release-generated'
 
 
 def entitlement_keys(include_test=None):
@@ -122,9 +126,13 @@ def prepare_release(directory):
                   wrapper['support']['deprecated_before']]
         header += '{' + ','.join(json.dumps(f) for f in fields) + ',' + str(wrapper['abi']['major']) + ',' + str(wrapper['abi']['minimum_minor']) + ',' + ('true' if metadata['result_schema_version'] in wrapper['result_schema_versions'] else 'false') + '},\n'
     header += '};\n'
+    keys = entitlement_keys()
+    # Validation builds (test keys trusted) also accept the host's clock as is, so tests can set the time.
+    # Customer builds read the system clock themselves (fisica_entitlement.cpp, fisica_session.cpp).
+    header += '#define FISICA_VALIDATION_BUILD ' + ('1' if any(k['environment'] == 'test' for k in keys) else '0') + '\n'
     header += 'struct FisicaEntitlementKey { const char *kid; unsigned environment; unsigned char public_key[32]; };\n'
     header += 'static const FisicaEntitlementKey fisica_entitlement_keys[] = {\n'
-    for key in entitlement_keys():
+    for key in keys:
         data = ','.join('0x' + key['public_key'][i:i+2] for i in range(0, 64, 2))
         header += '{' + json.dumps(key['kid']) + ',' + ('1' if key['environment'] == 'production' else '2') + ',{' + data + '}},\n'
     header += '{nullptr,0,{0}},\n};\n'
@@ -193,15 +201,23 @@ def build_native(output_directory):
 
 if __name__ == '__main__':
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--output', default=str(ROOT / 'fisica_sdk' / '_native'))
+    parser = argparse.ArgumentParser(description='Developer build of the core (it also trusts the repository test key), '
+                                                 'or the release metadata native/CMakeLists.txt compiles in.')
+    parser.add_argument('--output', type=Path, help='default: fisica_sdk/_native, or with --metadata-only '
+                                                    + RELEASE_GENERATED.relative_to(ROOT).as_posix())
     parser.add_argument('--bundle', action='store_true', help='Include only public header and wrapper manifests')
-    parser.add_argument('--metadata-only', action='store_true')
+    parser.add_argument('--metadata-only', action='store_true',
+                        help='write fisica_release.h and release.json for CMake: production keys only unless --validation')
+    parser.add_argument('--validation', action='store_true',
+                        help='with --metadata-only: also trust the test key, for QA builds (CMake needs -DFISICA_VALIDATION=ON)')
     args = parser.parse_args()
+    if args.validation and not args.metadata_only:
+        parser.error('--validation applies to --metadata-only; the developer build always trusts the test key')
     if args.metadata_only:
-        prepare_release(args.output)
+        require_release_keys(args.validation)
+        prepare_release(args.output or RELEASE_GENERATED)
     else:
-        build_native(args.output)
+        output = args.output or ROOT / 'fisica_sdk' / '_native'
+        build_native(output)
         if args.bundle:
-            output = Path(args.output)
-            shutil.copyfile(ROOT / 'native' / 'include' / 'fisica_core.h', output / 'fisica_core.h')
+            shutil.copyfile(ROOT / 'native' / 'include' / 'fisica_core.h', Path(output) / 'fisica_core.h')

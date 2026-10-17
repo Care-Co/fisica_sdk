@@ -250,6 +250,11 @@ enum FisicaEntitlementText {
     FISICA_ENTITLEMENT_ACTIVATION_REQUEST = 10, FISICA_ENTITLEMENT_ACTIVATION_CODE = 11,
     FISICA_ENTITLEMENT_STATE_NAME = 12
 };
+/* What the host should ask the developer portal now. ACTIVATE: POST
+ * /sdk/v1/entitlement/activate with ACTIVATION_REQUEST. REFRESH: POST
+ * /sdk/v1/entitlement/refresh with an empty body (renewal due, key or grant ended, or a
+ * clock set back: a newly signed key corrects the latest time seen). NONE otherwise. */
+enum FisicaExchange { FISICA_EXCHANGE_NONE = 0, FISICA_EXCHANGE_ACTIVATE = 1, FISICA_EXCHANGE_REFRESH = 2 };
 FISICA_API int32_t fisica_core_entitlement_create(FisicaEntitlement **context);
 FISICA_API void fisica_core_entitlement_destroy(FisicaEntitlement *context);
 /* Token: "FSE1.<base64url payload>.<base64url Ed25519 signature>", at most 4096 bytes.
@@ -266,6 +271,9 @@ FISICA_API int32_t fisica_core_entitlement_status(FisicaEntitlement *context,
     uint64_t now_s, uint64_t *status, uint32_t capacity);
 FISICA_API int32_t fisica_core_entitlement_text(FisicaEntitlement *context, uint32_t field,
     uint8_t *output, uint32_t capacity, uint32_t *length);
+/* *exchange: a FisicaExchange for the current key at now_s. */
+FISICA_API int32_t fisica_core_entitlement_next_exchange(FisicaEntitlement *context,
+    uint64_t now_s, uint32_t *exchange);
 /* Release the current activated key on this target: the core forgets the key and returns
  * the FRC1 release code to enter in the developer portal. Nothing changes when the
  * output is too small. FISICA_INVALID_STATE without a key activated for this target. */

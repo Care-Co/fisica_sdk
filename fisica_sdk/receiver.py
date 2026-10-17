@@ -17,9 +17,7 @@ from .errors import FisicaFirmwareWarning, FisicaTransportError, FisicaCommandEr
 
 class Receiver:
     def __init__(self, device, callback, transport=None, record_callback=None, license=None):
-        self._notice_recovery = True
-        self.loop_alive = self.heartbeat = False
-        self.check_thread = self._thread = self._handler = self._uart = None
+        self.check_thread = self._thread = self._recovery_thread = self._handler = self._uart = None
         self._device = dict(device)
         self._device_id = device.get('id')
         self._target_device = dict(device)
@@ -29,9 +27,11 @@ class Receiver:
                             'battery': None, 'battery_valid': False}
         self._callback = callback
         self._record_callback = record_callback
+        # on_stopped(measurement) and on_error(error, measurement) run on the callback thread;
+        # measurement is the start() number the event belongs to (None: the whole link).
         self.on_stopped = self.on_error = None
+        self.measurement = 0
         self._check_stop_event = threading.Event()
-        self._stop_event = threading.Event()
         self._shutdown = threading.Event()
         self._api_lock = threading.Lock()
         self._condition = threading.Condition(threading.RLock())
@@ -46,7 +46,9 @@ class Receiver:
         # Callable returning the SDK's Entitlement (or None: basic mode); applied to the session.
         self._license = license or (lambda: None)
         self._license_applied = 0.0
-        self.full_rate = False
+        self.license_error = None
+        self._analysis = None  # the session's analysis, kept once the session is closed
+        self._closed = False
 
     def _request(self, operation, call):
         with self._api_lock:
@@ -80,14 +82,15 @@ class Receiver:
             raise FisicaArgumentError(1, 'Measurement duration must be nonnegative finite seconds')
         value = -1 if duration is None or duration == 0 else int(duration * 1000)
         self._refresh_battery()  # so this measurement's report carries a current reading
-        self._stop_event.clear()
-        with self._condition:
-            self.apply_license()
-        self._request(2, lambda: self._session.action(2, value))
+        self.refresh_license()
+
+        def begin():
+            self.measurement += 1
+            self._session.action(2, value)
+        self._request(2, begin)
         log.info('Measurement start acknowledged.')
 
     def stop(self):
-        self._stop_event.set()
         self._request(3, lambda: self._session.action(3))
         log.debug('Measurement stop acknowledged.')
 
@@ -98,13 +101,13 @@ class Receiver:
                 if kind == 'frame':
                     self._callback(data)
                 elif kind == 'stop' and self.on_stopped:
-                    self.on_stopped()
+                    self.on_stopped(data)
                 elif kind == 'error' and self.on_error:
-                    self.on_error(data)
+                    self.on_error(*data)
             except Empty:
                 continue
             except Exception:
-                log.error('Measurement callback failed')
+                log.exception('Measurement callback failed')
 
     def _drain_events(self):
         for event in self._session.events():
@@ -124,8 +127,10 @@ class Receiver:
                 if operation == 1:
                     self._update_firmware(event)
                 if operation in (2,3) and operation not in self._waiters and 4 not in self._waiters:
-                    self._notifications.put(('error', FisicaCommandError(event)) if event['status'] else
-                                            ('stop', None) if operation == 3 else ('started', None))
+                    if event['status']:
+                        self._notifications.put(('error', (FisicaCommandError(event), self.measurement)))
+                    elif operation == 3:
+                        self._notifications.put(('stop', self.measurement))
             elif kind == 4:
                 frame = frame_from_event(event)
                 if self._record_callback:
@@ -134,61 +139,72 @@ class Receiver:
             elif kind == 6:
                 self._reconnect = True
 
-    def apply_license(self):
-        """Copy the current license into the session (call with the condition held)."""
-        entitlement = self._license()
-        if entitlement is None:
+    def refresh_license(self):
+        """Copy the SDK's current license into the session now."""
+        with self._condition:
+            if not self._closed:
+                self._apply_license()
+
+    def _apply_license(self):
+        # Condition held. A license that cannot be applied means basic mode, never the end of the session.
+        try:
+            entitlement = self._license()
+            if entitlement is None:
+                self._session.license(None)
+            else:
+                entitlement.license_session(self._session)
+            self.license_error = None
+        except Exception as error:
+            if self.license_error is None:
+                log.exception('License could not be applied; the measurement continues in basic mode')
+            self.license_error = error
             self._session.license(None)
-        else:
-            entitlement.license_session(self._session)
-        self.full_rate = bool(entitlement and entitlement.full_rate())
-        self._license_applied = time.monotonic()
+        finally:
+            self._license_applied = time.monotonic()
 
     def analyze(self):
-        """Weight and foot size from every packet of the last measurement, in any mode."""
+        """Weight and foot size from every packet of the last measurement, in any mode (also after disconnect)."""
         with self._condition:
-            return self._session.analyze()
+            if not self._closed:
+                self._analysis = self._session.analyze()
+            return self._analysis
 
     def _pump_loop(self):
-        self.heartbeat = True
         try:
             while not self._shutdown.wait(0.01):
                 with self._condition:
                     self._session.tick()
                     if time.monotonic() - self._license_applied > 30:
-                        self.apply_license()  # picks up renewals, activation and the end of full mode
-                    if self._handler:
-                        self.loop_alive = bool(self._handler._listening and self._handler.listen_thread and
-                                               self._handler.listen_thread.is_alive())
-                        if not self.loop_alive and not self._reconnect:
+                        self._apply_license()  # picks up renewals, activation and the end of full mode
+                    handler = self._handler
+                    if handler and not handler.is_alive():
+                        if not self._reconnect:
                             self._session.action(5)
-                        if self.loop_alive:
-                            for _ in range(64):
-                                try:
-                                    data = self._handler.raw_queue.get_nowait()
-                                except Empty:
-                                    break
+                    elif handler:
+                        for _ in range(64):
+                            try:
+                                data = handler.raw_queue.get_nowait()
+                            except Empty:
+                                break
+                            if self._shutdown.is_set():
+                                break
+                            for offset in range(0, len(data), 65536):
+                                self._session.feed(data[offset:offset+65536])
+                                self._drain_events()
                                 if self._shutdown.is_set():
                                     break
-                                for offset in range(0, len(data), 65536):
-                                    self._session.feed(data[offset:offset+65536])
-                                    self._drain_events()
-                                    if self._shutdown.is_set():
-                                        break
                     self._drain_events()
-                if self._reconnect and not self._check_stop_event.is_set() and time.monotonic() >= self._next_reconnect:
-                    self._next_reconnect = time.monotonic() + 1
-                    try:
-                        self._recover_connection()
-                    except Exception as error:
-                        log.debug(f'Waiting for the selected Scale to reconnect: {error}')
+                recovering = self._recovery_thread is not None and self._recovery_thread.is_alive()
+                if (self._reconnect and not recovering and not self._check_stop_event.is_set()
+                        and time.monotonic() >= self._next_reconnect):
+                    # A reconnect scan takes seconds; the pump keeps serving the core meanwhile.
+                    self._recovery_thread = threading.Thread(target=self._recover, name='fisica-recovery', daemon=True)
+                    self._recovery_thread.start()
         except Exception as error:
             with self._condition:
                 self._worker_error = error
                 self._condition.notify_all()
-            self._notifications.put(('error', error))
-        finally:
-            self.heartbeat = False
+            self._notifications.put(('error', (error, None)))
 
     def _find_original_device(self, devices):
         matches = []
@@ -203,49 +219,70 @@ class Receiver:
                 matches.append(device)
         return matches[0] if len(matches) == 1 else None
 
+    def _recover(self):
+        try:
+            self._recover_connection()
+        except Exception as error:
+            log.debug(f'Waiting for the selected Scale to reconnect: {error}')
+        finally:
+            self._next_reconnect = time.monotonic() + 1
+
     def _recover_connection(self):
-        self._close_transport()
+        with self._condition:
+            handler, uart, self._handler, self._uart = self._handler, self._uart, None, None
+        self._close(handler, uart)
         device = self._target_device if self._transport else self._find_original_device(
             scan(transport=self._target_device.get('type')))
         if not device or self._check_stop_event.is_set():
             return
-        self._device = dict(device)
-        self._device_id = device.get('id')
-        self._open_transport()
+        handler, uart = self._open_transport(device)
         with self._condition:
             if self._check_stop_event.is_set():
-                self._close_transport()
+                self._close(handler, uart)
                 return
+            self._device = dict(device)
+            self._device_id = device.get('id')
+            self._handler, self._uart = handler, uart
             self._session.action(1, 2 if self._device['type'] == 'Serial' else 1)
             self._reconnect = False
             self._drain_events()  # core decides whether to resume after firmware probe
+        log.info('Scale link restored.')
 
-    def _open_transport(self):
-        if self._transport is not None:
-            if self._device.get('type') != 'Serial':
-                raise ValueError('Injected byte transports currently use the Serial/USB command profile')
-            self._uart = self._transport
-            self._uart.connect()
-            self._handler = SerialHandler(self._uart)
-        elif self._device.get('type') == 'Serial':
-            self._uart = SerialUART(self._device_id, baudrate=115200)
-            self._uart.connect()
-            self._handler = SerialHandler(self._uart)
-        elif self._device.get('type') == 'Bluetooth':
-            from .bluetooth_handler import BluetoothHandler
-            self._handler = BluetoothHandler(self._device_id)
-            if not self._handler.connect():
-                raise FisicaTransportError('Bluetooth connection failed')
-        else:
-            raise ValueError('Device type must be Serial or Bluetooth')
-        self._handler.start_listening()
-        if not self._handler._listening:
-            raise FisicaTransportError('Cannot start device receive loop')
+    def _open_transport(self, device):
+        """Open the link to device and start receiving: (handler, uart). On failure it closes what it opened."""
+        handler = uart = None
+        try:
+            if self._transport is not None:
+                if device.get('type') != 'Serial':
+                    raise ValueError('Injected byte transports currently use the Serial/USB command profile')
+                uart = self._transport
+                uart.connect()
+                handler = SerialHandler(uart)
+            elif device.get('type') == 'Serial':
+                uart = SerialUART(device.get('id'), baudrate=115200)
+                uart.connect()
+                handler = SerialHandler(uart)
+            elif device.get('type') == 'Bluetooth':
+                from .bluetooth_handler import BluetoothHandler
+                handler = BluetoothHandler(device.get('id'))
+                handler.connect()
+            else:
+                raise ValueError('Device type must be Serial or Bluetooth')
+            handler.start_listening()
+            if not handler.is_alive():
+                raise FisicaTransportError('Cannot start device receive loop')
+            return handler, uart
+        except Exception:
+            try:
+                self._close(handler, uart)
+            except Exception:
+                log.debug('Link cleanup after a failed open also failed', exc_info=True)
+            raise
 
     def conn(self):
-        self._open_transport()
-        self.check_thread = threading.Thread(target=self._pump_loop, daemon=True)
-        self._thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._handler, self._uart = self._open_transport(self._device)
+        self.check_thread = threading.Thread(target=self._pump_loop, name='fisica-pump', daemon=True)
+        self._thread = threading.Thread(target=self._read_loop, name='fisica-callbacks', daemon=True)
         # Register before starting the pump so the result cannot be missed.
         with self._condition:
             self._waiters.add(1)
@@ -285,22 +322,21 @@ class Receiver:
             warnings.warn(f'Scale firmware {version} is unverified; use continues at the partner\'s responsibility.',
                           FisicaFirmwareWarning, stacklevel=3)
 
-    def _close_transport(self):
+    @staticmethod
+    def _close(handler, uart):
         try:
-            if self._handler:
-                try:
-                    if hasattr(self._handler, 'close'):
-                        self._handler.close()
-                    else:
-                        self._handler.stop_listening()
-                finally:
-                    self._handler = None
+            if handler:
+                if hasattr(handler, 'close'):
+                    handler.close()
+                else:
+                    handler.stop_listening()
         finally:
-            if self._uart:
-                try:
-                    self._uart.close()
-                finally:
-                    self._uart = None
+            if uart:
+                uart.close()
+
+    def _close_transport(self):
+        handler, uart, self._handler, self._uart = self._handler, self._uart, None, None
+        self._close(handler, uart)
 
     def discon(self):
         self._check_stop_event.set()
@@ -309,14 +345,20 @@ class Receiver:
                 self._request(4, lambda: self._session.action(4))
         finally:
             self._shutdown.set()
-            for thread in (self.check_thread, self._thread):
+            for thread in (self.check_thread, self._thread, self._recovery_thread):
                 if thread and thread.is_alive() and thread is not threading.current_thread():
                     thread.join(timeout=3)
             try:
-                self._close_transport()
+                with self._condition:
+                    self._close_transport()
             finally:
-                self._session.close()
-                self.loop_alive = False
+                with self._condition:
+                    try:
+                        self._analysis = self._session.analyze()  # kept for an analysis after disconnect
+                    except Exception:
+                        log.debug('No analysis kept at disconnect', exc_info=True)
+                    self._closed = True
+                    self._session.close()
         log.debug('Scale disconnected.')
 
     def battery(self):

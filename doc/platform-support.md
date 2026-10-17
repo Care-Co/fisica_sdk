@@ -2,7 +2,7 @@
 
 2026-10-17 구현 기준: SDK/Python 3.0.0, core 2.0.0, C ABI 2.0(라이선스: 기본·전체 모드),
 Dart/Flutter core 0.6.0, Flutter transport 0.1.0, Swift/Kotlin/C# 각각 0.3.0. 펌웨어 변경 없음.
-아래 표의 테스트 수 등 일부 검증 기록은 2026-10-13 시점 값이다.
+아래 "검증과 한계"의 로컬 결과는 2026-10-14 실행 기록이다(이후 확인한 항목은 날짜를 적었다).
 코어 소스는 비공개이며 모든 플랫폼이 같은 C++17 코어를 C ABI로 사용한다.
 회사가 달라도 플랫폼·아키텍처·코어 버전이 같으면 바이너리가 같다([라이선스와 SDK 키](entitlement.md)).
 
@@ -10,9 +10,13 @@ Dart/Flutter core 0.6.0, Flutter transport 0.1.0, Swift/Kotlin/C# 각각 0.3.0. 
 
 | 플랫폼 | 배포물 | 언어 | 연결 범위 |
 |---|---|---|---|
-| Windows x64 | Python wheel, DLL+C header, NuGet, Flutter DLL | Python, C#, Dart, C/C++ | Python/C#/Flutter BLE·USB, C/C++는 앱 Transport 구현 |
-| Windows ARM64 | 별도 ARM64 wheel/DLL, NuGet, Flutter DLL | Python, C#, Dart, C/C++ | 동일 계약, 실제 ARM64 드라이버/연결 검증 필요 |
-| macOS 11+ Intel·Apple Silicon (Flutter 12+) | universal2 wheel/dylib, SwiftPM/XCFramework, NuGet, Flutter | Python, Swift, C#, Dart, C/C++ | 기존 Python BLE/USB, Swift CoreBluetooth 어댑터 |
+| Windows x64 | Python wheel, DLL+C header(core ZIP), C# 소스 ZIP, Flutter DLL | Python, C#, Dart, C/C++ | Python/C#/Flutter BLE·USB, C/C++는 앱 Transport 구현 |
+| Windows ARM64 | 별도 ARM64 wheel/DLL, C# 소스 ZIP, Flutter DLL | Python, C#, Dart, C/C++ | 동일 계약, 실제 ARM64 드라이버/연결 검증 필요 |
+| macOS 11+ Intel·Apple Silicon (Flutter 12+) | universal2 wheel/dylib, SwiftPM/XCFramework, C# 소스 ZIP, Flutter | Python, Swift, C#, Dart, C/C++ | 기존 Python BLE/USB, Swift CoreBluetooth 어댑터 |
+
+C#은 당분간 래퍼 소스 ZIP(`fisica-dotnet-<버전>.zip`)과 플랫폼별 core ZIP으로 제공하고, 앱이 래퍼 프로젝트를
+참조한다([타사 앱 적용 가이드](partner-quickstart.md)). 코어가 들어 있는 NuGet 패키지는 Windows에서 빌드·검증할
+러너가 생긴 뒤 만든다.
 | Android API 23+ | arm64-v8a/armeabi-v7a/x86_64 AAR, Flutter .so (16KB 페이지 정렬) | Kotlin/Java, Dart, C/C++ | Kotlin GATT 및 Flutter BLE 어댑터, 앱 권한/기기 선택 필요 |
 | iOS 13+ (Flutter 15+) | arm64 기기, arm64/x86_64 simulator XCFramework | Swift, Dart, C/C++ | Swift CoreBluetooth 및 Flutter BLE 어댑터, 앱 권한/기기 선택 필요 |
 
@@ -93,8 +97,9 @@ Windows에서 VID로 Scale 포트를 찾는 기능은 아직 없다.
 
 C# `BleTransport`는 Windows WinRT BLE를 쓴다. 앱이 `net8.0-windows10.0.19041.0` 이상을 대상으로 할 때만
 포함된다. 스캔, 주소·프로필 선택, 연결, UUID 미발견 오류, 준비 timeout, 실제 협상된 MTU 기준 분할 송신,
-연결 유실 보고를 제공하고 모든 실패를 예외 대신 이벤트로 알린다. macOS에서는 컴파일만 확인했고
-GitHub Windows runner에서는 Bluetooth 장치 없이 실패 경로만 실행했다. 실제 Scale과의 연결은 검증하지 않았다.
+연결 유실 보고를 제공하고 모든 실패를 예외 대신 이벤트로 알린다. macOS·Linux에서는 컴파일만 확인했고
+2026-10-17까지 GitHub Windows runner에서 Bluetooth 장치 없이 실패 경로만 실행했다(지금은 Windows CI 중단).
+실제 Scale과의 연결은 검증하지 않았다.
 
 Flutter는 플랫폼 바이너리와 FFI, 고수준 클라이언트 및 별도 `fisica_flutter` BLE/desktop USB
 어댑터를 제공한다. 앱은 어댑터 대신 OS 권한 요청과 기기 선택을 구현한다. 최소 앱과 준비 스크립트는
@@ -107,25 +112,30 @@ BLE 측정 경로: 프로토콜 문서는 연속 측정(0x51)이 USB 전용이�
 
 ## 검증과 한계
 
-2026-10-14 실행 결과 (모바일 보강 후 다시 실행):
+로컬은 2026-10-14 실행 결과(모바일 보강 후 다시 실행)다. "CI" 열은 지금 그 검사를 실행하는 작업이다.
+CI는 요청할 때만 수동으로 돌리며, 자체 호스팅 러너로 옮긴 뒤(2026-10-17) 아직 실행하지 않았다.
+그 전 GitHub 호스팅 러너(`windows-2022`, `macos-15`)에서의 결과는 기록으로만 적는다.
 
-| 항목 | 결과 | 종류 |
+| 항목 | 결과 | 확인한 곳 |
 |---|---|---|
-| Python 테스트 | 182 passed | 로컬 macOS, Mock. Windows CI에서도 실행 |
-| 네이티브 C ABI 계약 | UBSan 통과. 토큰 1글자 변조 3144건·무작위 입력 모두 거절 | 로컬 macOS, GitHub macOS CI(UBSan) |
-| Swift `swift test` | 10 passed (공통 벡터 2, 클라이언트·연결 종류·프레임 규칙·확인 정보 7, 온라인 갱신·저장 1) | 로컬 macOS XCTest, GitHub macOS CI |
-| Kotlin/JNI | 공통 벡터, 클라이언트·연결 종류 검증·프레임 규칙·확인 정보·온라인 갱신·저장·MTU 분할 규칙 통과 | 로컬 JVM. `BleTransport`는 android-35로 컴파일만. CI Android job 추가 |
-| Android 빌드 | 3개 ABI의 core/JNI `.so` 전부 LOAD 정렬 0x4000, RELRO 끝 16KB 경계, AAR 감사 통과. Java·Kotlin 샘플이 새 AAR로 컴파일 | 로컬 NDK r26. CI Android job. APK 빌드·zipalign·16KB 기기 실행은 안 함 |
-| C# | 공통 벡터, 클라이언트·연결 종류 검증·프레임 규칙·Serial 오류 처리·확인 정보·온라인 갱신·저장 통과. Windows BLE는 컴파일 + 장치 없는 실패 경로 | 로컬 macOS .NET 8, GitHub Windows CI |
-| Dart | analyze 문제 없음, 22 tests passed (재연결·transport 교체·유실 후 close·연결 종류·프레임 규칙·온라인 갱신 포함) | 로컬 macOS Dart 3.11. CI flutter job에 추가 |
-| Flutter 어댑터 | analyze 문제 없음, 15 tests passed (같은 어댑터 재연결, 연결 중 재연결, 실패 후 재시도, 실제 코어로 유실 후 측정 재개) | 로컬 Flutter 3.41, GitHub macOS CI |
+| Python 테스트 | 전체 통과(테스트 수는 `python -m pytest tests -q` 출력) | 로컬 macOS, Mock. CI `linux` |
+| 네이티브 C ABI 계약 | UBSan 통과. 토큰 1글자 변조 3144건·무작위 입력 모두 거절 | 로컬 macOS. CI `linux`(UBSan) |
+| Swift `swift test` | 10 passed (공통 벡터 2, 클라이언트·연결 종류·프레임 규칙·확인 정보 7, 온라인 갱신·저장 1) | 로컬 macOS XCTest. CI `apple` |
+| Kotlin/JNI | 공통 벡터, 클라이언트·연결 종류 검증·프레임 규칙·확인 정보·온라인 갱신·저장·MTU 분할 규칙 통과 | 로컬 JVM. `BleTransport`는 android-35로 컴파일만. CI `android` |
+| Android 빌드 | 3개 ABI의 core/JNI `.so` 전부 LOAD 정렬 0x4000, RELRO 끝 16KB 경계, AAR 감사 통과. Java·Kotlin 샘플이 새 AAR로 컴파일 | 로컬 NDK r26. CI `android`. APK 빌드·zipalign·16KB 기기 실행은 안 함 |
+| C# | 공통 벡터, 클라이언트·연결 종류 검증·프레임 규칙·Serial 오류 처리·확인 정보·온라인 갱신·저장 통과. Windows BLE는 컴파일 + 장치 없는 실패 경로 | 로컬 macOS .NET 8. CI `linux`(Ubuntu .NET 8: net8.0 실행, Windows 대상은 컴파일만). 실패 경로 실행은 2026-10-17까지 GitHub Windows CI |
+| Dart | analyze 문제 없음, 22 tests passed (재연결·transport 교체·유실 후 close·연결 종류·프레임 규칙·온라인 갱신 포함) | 로컬 macOS Dart 3.11. CI `linux` |
+| Flutter 어댑터 | analyze 문제 없음, 15 tests passed (같은 어댑터 재연결, 연결 중 재연결, 실패 후 재시도, 실제 코어로 유실 후 측정 재개) | 로컬 Flutter 3.41.9. CI `linux`(Flutter 3.47.7) |
 | 온라인 갱신 | 네 언어와 Python이 같은 Mock 서버에서 확인 정보를 갱신. 빈 갱신 요청 외에는 아무것도 보내지 않음을 서버 쪽에서 확인 | 로컬, CI. 실제 서버 아님 |
-| Windows x64 MSVC | 코어 빌드, 전체 테스트, 휠 감사, Python 3.9/3.11/3.13/3.14 설치 검증 | GitHub Actions `windows-2022` |
-| Windows ARM64 MSVC | 코어·휠 교차 빌드와 감사 | GitHub Actions. ARM64 실행은 안 함 |
-| Apple | 코어 빌드, 테스트, XCFramework, universal2 | GitHub Actions `macos-15` |
+| 휠과 샘플 | 설치한 휠에서 release(운영 키만)는 테스트 서명 키를 거절, `--validation`은 같은 키로 전체 모드. Python·C·C++ 샘플과 C# 샘플(소스 ZIP + core ZIP)이 Mock으로 70.5kg | 로컬 macOS(2026-10-17). CI `linux`(Linux 휠·코어는 검사용이며 배포하지 않음) |
+| Windows x64 MSVC | 코어 빌드, 전체 테스트, 휠 감사, Python 3.9/3.11/3.13/3.14 설치 검증 | 2026-10-17까지 GitHub `windows-2022`. 지금은 실행하는 곳 없음(Windows 러너 대기) |
+| Windows ARM64 MSVC | 코어·휠 교차 빌드와 감사 | 2026-10-17까지 GitHub Actions. ARM64 실행은 안 함. 지금은 실행하는 곳 없음 |
+| Apple | 코어 빌드, 테스트, XCFramework, universal2 | 로컬 macOS. CI `apple`(자체 호스팅 Mac). 2026-10-17까지 GitHub `macos-15` |
 
 재현: `python tools/verify_bindings.py native swift kotlin dotnet dart`,
-`python tools/build_platforms.py --validation --target android`.
+`python tools/build_platforms.py --validation --target android`,
+`python tools/build_release.py --output .build/releases`와
+`python tools/verify_wheel.py .build/releases/3.0.0/fisica-3.0.0-py3-none-PLATFORM.whl`.
 
 검증하지 않은 것:
 
@@ -135,22 +145,35 @@ BLE 측정 경로: 프로토콜 문서는 연속 측정(0x51)이 USB 전용이�
 - Android·iOS 기기 실행, 권한 흐름, iOS 앱 링크·서명.
 - 실제 Windows의 USB 드라이버·COM 포트·BLE, C# `SerialTransport`·`BleTransport`의 실제 기기 입출력.
 - Windows ARM64 실행.
-- 확인 정보 서버(미구현)와의 실제 통신, 운영 서명 키.
+- 운영 개발자 포털(https://developer.fisicahealthcare.com, 운영 중)과의 활성화·갱신·페어링 통신과 운영 서명 키로
+  발급한 SDK 키: 위 표의 온라인 검증은 모두 Mock 서버다.
 
 고객에게는 core 소스·빌드 도구·debug 자료를 주지 않는다. Kotlin JNI .cpp는 공개 marshaling 래퍼여서
 소스 ZIP에 허용했고 core .cpp와 구분한다.
 
 ## 빌드
 
+고객용 빌드(플래그 없음)는 운영 서명 키만 신뢰한다. QA용은 모든 명령에 `--validation`을 붙인다(테스트 서명 키도 신뢰).
+
 ```
 python tools/sync_flutter_metadata.py
 python tools/sync_binding_metadata.py
-python tools/build_platforms.py --validation --target apple
-python tools/build_platforms.py --validation --target android --ndk /trusted/android-ndk
-python tools/build_platforms.py --validation --target macosx_11_0_universal2
-FISICA_BUILD_PLATFORM=win_arm64 CXX=/trusted/arm64-compiler python tools/build_release.py --validation
-python tools/package_platforms.py --validation
+python tools/build_platforms.py --target apple
+python tools/build_platforms.py --target android --ndk /trusted/android-ndk
+python tools/build_platforms.py --target macosx_11_0_universal2
+CXX=/trusted/arm64-cross-compiler python tools/build_platforms.py --target win_arm64   # Windows MSVC shell: CXX 없이
+CXX=/trusted/x64-cross-compiler python tools/build_platforms.py --target win_amd64
+python tools/package_platforms.py
 ```
+
+`build_platforms.py`는 한 번에 한 대상을 `.build/platforms/`에 빌드하고, 시작할 때 그 대상의 출력을 비운다.
+`package_platforms.py`는 다섯 대상의 출력이 모두 있어야 하며, 쓰기 전에 입력을 모두 확인한다: 빠진 입력은
+한꺼번에 알리고, 각 입력의 `release.json`이 지금 체크아웃의 코어 빌드(코어·ABI 버전과 정책)와 다르거나
+`--validation` 없이 테스트 키를 신뢰하면 멈춘다. 그다음 `.build/multiplatform-releases/<sdk-version>/`을 비우고
+정해진 패키지만 쓴다: 플랫폼별 core ZIP, Swift ZIP(XCFramework 포함), AAR과 Kotlin 소스 ZIP, C# 소스 ZIP,
+Flutter 플랫폼 ZIP과 transport ZIP, 샘플 ZIP, 해시 목록 `platform-manifest.json`. 모든 패키지는
+`tools/release_packages.py`의 한 함수가 만들고, 샘플 ZIP을 뺀 모든 패키지에 라이선스와 코어의 `release.json`이
+들어간다. 공개 소스는 `git ls-files`가 추적하는 파일만 넣는다(로컬 도구 설정·lock 파일·`.DS_Store`·이전 빌드 결과 제외).
 
 Android 라이브러리는 `-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384`로 링크한다(NDK r27 이하에
 필요, r28+는 기본값). 공식 기준 두 가지를 빌드와 `tools/audit_artifacts.py`가 AAR·Flutter ZIP 안의 모든
@@ -166,11 +189,12 @@ Android NDK 경로는 `--ndk` 또는 FISICA_ANDROID_NDK로 준다.
 
 Apple SDK 경로는 FISICA_XCODE_DEVELOPER, Android SDK는 ANDROID_SDK_ROOT,
 Kotlin compiler runtime은 FISICA_GRADLE_LIB로 설정한다. 소비 앱은 private 코어를
-컴파일하지 않는다. 플래그 없이 빌드하면 고객용으로 운영 서명 키만 신뢰한다. `--validation`은 테스트 서명 키도 신뢰하는 QA용 빌드다.
-`package_platforms.py`를 플래그 없이 실행하면 `--validation`으로 만든 코어가 섞였을 때 멈춘다.
+컴파일하지 않는다. `tools/audit_artifacts.py`는 패키지마다 필요한 바이너리(Swift ZIP의 XCFramework, AAR과 Flutter
+ZIP의 ABI별 `.so`, Flutter의 Windows DLL)와 `release.json`이 없으면 실패하고, `--validation` 없이는 테스트 키를
+신뢰하는 아카이브를 거절한다(`release.json`의 키 목록과 바이너리에 컴파일된 키 표를 모두 본다).
 
 바이너리에 회사별 정보가 없으므로 Maven, SwiftPM, NuGet, pub 같은 레지스트리에 같은 패키지를 올리는 방식도
-가능하다. 실제 등록·퍼블리시는 하지 않았다.
+가능하다. 실제 등록·퍼블리시는 하지 않았고, C# NuGet 패키지는 아직 만들지 않는다(위 C# 참고).
 
 배포/권한 기준: [Apple binary Swift packages](https://developer.apple.com/documentation/xcode/distributing-binary-frameworks-as-swift-packages),
 [Android NDK prebuilt libraries](https://developer.android.com/ndk/guides/cmake),
@@ -185,13 +209,25 @@ GitHub 호스팅 러너를 쓰지 않는다. 포털(developer-portal)의 빌드�
 
 | 작업 | 러너 라벨 | 러너 | 준비 |
 |---|---|---|---|
-| `linux`, `android` | `self-hosted, carenco` | mac-host-runner1~3 (Linux X64, colima) | 없음. 매번 새 `ubuntu:24.04` 컨테이너에서 apt로 도구를 깔고, Flutter·Android SDK·NDK 26.3·Gradle 8.14·pip·pub 캐시는 Docker 볼륨 `fisica-sdk-ci-cache`에 둔다 |
+| `linux`, `android` | `self-hosted, carenco` | mac-host-runner1~3 (Linux X64, colima) | 없음. 매번 새 `ubuntu:24.04` 컨테이너에서 apt로 도구(.NET 8 SDK `dotnet-sdk-8.0`, CMake 포함)를 깔고, Flutter·Android SDK·NDK 26.3·Gradle 8.14·pip·pub 캐시는 Docker 볼륨 `fisica-sdk-ci-cache`에 둔다 |
 | `apple` | `self-hosted, macOS` | Company-Mac (ARM64) | Xcode(iOS SDK 포함). 첫 단계에서 찾고 없으면 실패한다. 다른 직원이 올린 러너라 동의 전에는 실행하지 않는다 |
+
+- `linux`: 개발 빌드와 pytest, C ABI 계약(UBSan), C# 계약(net8.0), Linux 휠·core ZIP을 release와 `--validation`으로
+  빌드해 설치 검증(release는 테스트 서명 키 거절, validation은 전체 모드), 설치한 release 휠로 Python 샘플,
+  release core ZIP으로 C/C++ 샘플(CMake), Dart 계약, Flutter transport·샘플. 컨테이너의 빈 `/etc/machine-id`는
+  매 실행 임의 값으로 채운다(PC에 묶인 테스트 키가 필요하다).
+- `android`: `--validation` AAR·Kotlin ZIP 빌드와 감사, Kotlin 계약. Android command-line tools(SHA-1, Google이
+  `repository2-3.xml`에 공개하는 값)와 Gradle 8.14(SHA-256)는 고정한 체크섬으로 받을 때와 캐시에서 쓸 때마다 확인하고
+  매번 컨테이너에 새로 푼다.
+- `apple`: `--validation` XCFramework·Swift ZIP·universal2 core ZIP 빌드와 감사, Swift 계약.
+- 올리는 아티팩트는 QA 빌드라 이름이 `-validation`으로 끝난다(`fisica-android-validation`,
+  `fisica-apple-binaries-validation`). 고객에게 주지 않는다.
 
 Windows CI(x64 휠 빌드와 Python 3.9~3.14 설치 확인, ARM64 교차 빌드)는 자체 호스팅 Windows 러너가 없어
 2026-10-17에 뺐다. 러너가 생기면 `git show a44754b:.github/workflows/windows-wheel.yml`과
 `platform-builds.yml`의 `windows-arm64` 작업을 되살리고 `runs-on`을 `[self-hosted, Windows, X64, carenco]`로 바꾼다.
-러너에 필요한 것:
+그 워크플로는 `build_release.py --validation`으로 빌드하므로 `verify_wheel.py`에 `--validation`을 붙이고,
+아티팩트 이름에 `-validation`을 붙인다(`fisica-windows-x64-validation` 등). 러너에 필요한 것:
 
 - Windows 10/11 또는 Server 2022, x64. Care-Co 조직에 러너로 등록하고 라벨 `carenco`를 붙인다. 서비스로 실행.
 - Visual Studio 2022 Build Tools: "C++를 사용한 데스크톱 개발", MSVC v143 x64/x86 도구, MSVC v143 ARM64 도구,

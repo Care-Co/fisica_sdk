@@ -1,67 +1,22 @@
 import logging
-logger = logging.getLogger(__name__)
-import sys, os, datetime
+import os, datetime
 
-_levelToName = {
-    logging.CRITICAL: 'CRITICAL',
-    logging.ERROR: 'ERROR',
-    logging.WARNING: 'WARNING',
-    logging.INFO: 'INFO',
-    logging.DEBUG: 'DEBUG',
-    logging.NOTSET: 'NOTSET',
-}
+# The library is quiet by default: records go to the application's logging configuration.
+log = logging.getLogger("fisica_sdk")
+log.addHandler(logging.NullHandler())
+_console = None
 
-class ColorFormatter(logging.Formatter):
-    COLOR_MAP = {
-        'DEBUG': "\033[37m",     # Light gray
-        'INFO': "\033[36m",      # Cyan
-        'WARNING': "\033[33m",   # Yellow
-        'ERROR': "\033[31m",     # Red
-        'CRITICAL': "\033[1;31m" # Bold red
-    }
-    RESET = "\033[0m"
 
-    def format(self, record):
-        message = super().format(record)
-        color = self.COLOR_MAP.get(record.levelname, "")
-        return f"{color}{message}{self.RESET}"
-
-handler = logging.StreamHandler(sys.stdout)
-formatter = ColorFormatter("[%(asctime)s] [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
-handler.setFormatter(formatter)
-
-package_logger = logging.getLogger("fisica_sdk")
-package_logger.setLevel(logging.INFO)
-package_logger.propagate = False
-if not package_logger.handlers:
-    package_logger.addHandler(handler)
-
-class LogWrapper:
-    def __init__(self, logger):
-        self.logger = logger
-
-    def debug(self, *args):
-        self.logger.debug(" ".join(str(arg) for arg in args))
-
-    def info(self, *args):
-        self.logger.info(" ".join(str(arg) for arg in args))
-
-    def warning(self, *args):
-        self.logger.warning(" ".join(str(arg) for arg in args))
-
-    def error(self, *args):
-        self.logger.error(" ".join(str(arg) for arg in args))
-
-    def critical(self, *args):
-        self.logger.critical(" ".join(str(arg) for arg in args))
-
-    @property
-    def level(self):
-        return self.logger.level
-
-    @level.setter
-    def level(self, value):
-        self.logger.setLevel(value)
+def enable_console_logging(level=logging.DEBUG):
+    """Print this library's records at level and above on stderr (FisicaSDK(debug=...)); other loggers are untouched."""
+    global _console
+    if _console is None:
+        _console = logging.StreamHandler()
+        _console.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
+        log.addHandler(_console)
+    _console.setLevel(level)
+    if log.level == logging.NOTSET or log.level > level:
+        log.setLevel(level)
 
 
 def resolve_output_path(output: str) -> str:
@@ -82,6 +37,3 @@ def resolve_output_path(output: str) -> str:
         return output
 
     return output
-
-log = LogWrapper(logging.getLogger(__name__))
-

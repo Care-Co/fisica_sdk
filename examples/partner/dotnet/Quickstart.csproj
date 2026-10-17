@@ -4,6 +4,17 @@
     <TargetFrameworks>net8.0;net8.0-windows10.0.19041.0</TargetFrameworks>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <!-- The extracted SDK: dotnet/ from fisica-dotnet-*.zip, core/ from the core ZIP of this platform. -->
+    <FisicaSdk Condition="'$(FisicaSdk)' == ''">$(MSBuildThisFileDirectory)../sdk/</FisicaSdk>
   </PropertyGroup>
-  <ItemGroup><PackageReference Include="CareCo.Fisica.Scale" Version="0.3.0" /></ItemGroup>
+  <!-- The C# wrapper comes as source for now: build it with the app and copy the core next to it. -->
+  <ItemGroup Condition="Exists('$(FisicaSdk)dotnet/Fisica.Scale.csproj')">
+    <ProjectReference Include="$(FisicaSdk)dotnet/Fisica.Scale.csproj" />
+    <None Include="$(FisicaSdk)core/fisica_core.dll" Link="fisica_core.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(FisicaSdk)core/fisica_core.dll')" />
+    <None Include="$(FisicaSdk)core/libfisica_core.dylib" Link="libfisica_core.dylib" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(FisicaSdk)core/libfisica_core.dylib')" />
+  </ItemGroup>
+  <!-- The NuGet package (cores included) replaces both once it is published. -->
+  <ItemGroup Condition="!Exists('$(FisicaSdk)dotnet/Fisica.Scale.csproj')">
+    <PackageReference Include="CareCo.Fisica.Scale" Version="0.3.0" />
+  </ItemGroup>
 </Project>

@@ -1,44 +1,10 @@
 part of '../fisica_core.dart';
 
-const _basicMode =
-    'Basic mode keeps connection, measurement, weight and foot size; '
-    'raw data and full-rate frames need full mode.';
-const _reasonMessages = <int, String>{
-  FisicaModeReason.noKey:
-      'No SDK key. Create one in the developer portal and import it. $_basicMode',
-  FisicaModeReason.legacyToken:
-      'This is a contract confirmation, not an SDK key. Create an SDK key in the developer portal. $_basicMode',
-  FisicaModeReason.notActivated:
-      'The SDK key is not activated yet: connect to the internet, or enter the activation code in the developer portal and import the file it gives. $_basicMode',
-  FisicaModeReason.noTarget:
-      "The SDK cannot read this app's ID or this PC's identity, so a key cannot be activated here. $_basicMode",
-  FisicaModeReason.otherTarget:
-      'This SDK key is activated for another app or PC. $_basicMode',
-  FisicaModeReason.revoked:
-      'The SDK key was released or its contract was revoked. $_basicMode',
-  FisicaModeReason.clockRollback:
-      "This device's clock is earlier than a time the SDK has already seen; correct the clock. $_basicMode",
-  FisicaModeReason.keyExpired:
-      'The SDK key expired: connect to renew it, or import a renewal file from the developer portal. $_basicMode',
-  FisicaModeReason.notStarted:
-      'The contract of this SDK key has not started yet. $_basicMode',
-  FisicaModeReason.fullEnded:
-      'The trial or contract of this SDK key has ended. $_basicMode',
-};
-const _warningMessages = <int, String>{
-  FisicaEntitlementWarning.renewDue:
-      'The SDK key is due for renewal: connect to the internet or import a renewal file.',
-  FisicaEntitlementWarning.grace:
-      'The contract has ended; full mode continues during the grace period.',
-  FisicaEntitlementWarning.fullEnding:
-      'Full mode ends within 7 days (trial or contract end).',
-  FisicaEntitlementWarning.importRejected:
-      'The last SDK key or file was rejected (format, unknown signing key, signature or another app/PC).',
-  FisicaEntitlementWarning.testKey:
-      'The SDK key is signed with a TEST key; this is not a production license.',
-};
+// Messages shared by every wrapper (wrappers/license-messages.json) are generated into
+// codes.dart: fisicaReasonMessages and fisicaWarningMessages.
 const _activatePath = '/sdk/v1/entitlement/activate';
 const _refreshPath = '/sdk/v1/entitlement/refresh';
+const _releasePath = '/sdk/v1/entitlement/release';
 const _pairingPath = '/sdk/v1/pairing';
 const _pairingTokenPath = '/sdk/v1/pairing/token';
 
@@ -130,11 +96,11 @@ class EntitlementStatus {
   bool hasFeature(int feature) => features & feature == feature;
 
   /// What basic mode means here and what to do; null in full mode.
-  String? get message => _reasonMessages[reason];
+  String? get message => fisicaReasonMessages[reason];
 
   /// Notices for the raised [warnings] bits.
   List<String> get warningMessages => [
-    for (final entry in _warningMessages.entries)
+    for (final entry in fisicaWarningMessages.entries)
       if (warnings & entry.key != 0) entry.value,
   ];
 }
@@ -178,7 +144,7 @@ typedef _EntitlementBytesDart =
 /// automatically and a key is renewed before it ends. Network failures never
 /// change the license. The SDK does not track its own use: the stored state is
 /// the signed key and the latest time seen.
-class FisicaEntitlement {
+class FisicaEntitlement implements Finalizable {
   final FisicaCore core;
   final int Function() _clock;
   final String? _endpoint;
@@ -197,6 +163,8 @@ class FisicaEntitlement {
   Future<void> _exchange = Future.value();
   final _monotonic = Stopwatch()..start();
   int _nextSyncMs = 0;
+  // Destroys the core context if the app drops this object without close().
+  late final NativeFinalizer _finalizer;
 
   /// Called with newly raised [FisicaEntitlementWarning] bits so the app can
   /// show or log them.
@@ -222,6 +190,9 @@ class FisicaEntitlement {
        _endpoint = endpoint?.replaceAll(RegExp(r'/+$'), ''),
        _storageDirectory = storageDirectory {
     _handle = _create();
+    _finalizer = NativeFinalizer(
+      core._library.lookup<NativeFinalizerFunction>('fisica_core_entitlement_destroy'),
+    )..attach(this, _handle, detach: this);
     if (_loadStored()) {
       _notify();
       _autoSync();
@@ -306,6 +277,7 @@ class FisicaEntitlement {
 
   void close() {
     if (_handle == nullptr) return;
+    _finalizer.detach(this);
     _destroy(_handle);
     _handle = nullptr;
     unawaited(_changes.close());
@@ -392,8 +364,17 @@ class FisicaEntitlement {
       final file = _stateFile();
       if (file == null) return;
       file.parent.createSync(recursive: true);
-      final temporary = File('${file.path}.tmp')..writeAsBytesSync(exportState());
-      temporary.renameSync(file.path);
+      // A temporary file of its own: other processes and wrappers on this PC
+      // may save the same seat.
+      final temporary = File(
+        '${file.path}.$pid.${DateTime.now().microsecondsSinceEpoch}.tmp',
+      );
+      try {
+        temporary.writeAsBytesSync(exportState(), flush: true);
+        temporary.renameSync(file.path);
+      } finally {
+        if (temporary.existsSync()) temporary.deleteSync();
+      }
     } on Object catch (error) {
       lastSyncError = 'storage: $error';
     }
@@ -502,15 +483,40 @@ class FisicaEntitlement {
 
   /// Release the key activated here: the core forgets it, the stored state is
   /// deleted, and the FRC1 code to enter in the developer portal is returned.
-  /// Online, the seat is also freed when the server next sees the key as
-  /// released; offline, the code tells the portal this device let it go.
-  /// Throws [FisicaStateError] without a key activated for this app or PC.
+  /// Online, the server is also told in the background, which frees the seat
+  /// at once ([releaseOnline] waits for that). Throws [FisicaStateError]
+  /// without a key activated for this app or PC.
   String release() {
+    final (code, token) = _releaseHere();
+    if (token != null) unawaited(_tellReleased(token));
+    return code;
+  }
+
+  /// [release], then online tell the server with the key itself and wait.
+  /// Without `releasedOnline`, enter the code at the key in the developer
+  /// portal.
+  Future<({String code, bool releasedOnline})> releaseOnline() async {
+    final (code, token) = _releaseHere();
+    return (code: code, releasedOnline: token != null && await _tellReleased(token));
+  }
+
+  (String, String?) _releaseHere() {
     final file = _stateFile();
+    final token = _text(FisicaEntitlementText.token);
     final code = ascii.decode(_read('fisica_core_entitlement_release', 1024));
     _delete(file);
     _notify();
-    return code;
+    return (code, online && _endpoint != null && token.isNotEmpty ? token : null);
+  }
+
+  Future<bool> _tellReleased(String token) async {
+    try {
+      await _post(_releasePath, token, '{}');
+      return true;
+    } on Object catch (problem) {
+      lastSyncError = 'network: $problem';
+      return false;
+    }
   }
 
   void _notify() {
@@ -553,34 +559,34 @@ class FisicaEntitlement {
     }
   }
 
-  /// What the server should do now: activate, renew, or nothing.
+  /// What the server should do now, as the core decides it: activate,
+  /// renew, or nothing.
   ({String path, String token, String body})? _due(bool force) {
-    final values = _values();
     final token = _text(FisicaEntitlementText.token);
-    final reason = values[1];
     if (token.isEmpty) return null;
-    const blocked = [
-      FisicaModeReason.noKey,
-      FisicaModeReason.legacyToken,
-      FisicaModeReason.otherTarget,
-      FisicaModeReason.noTarget,
-      FisicaModeReason.revoked,
-    ];
-    if (!blocked.contains(reason)) {
-      if (reason == FisicaModeReason.notActivated) {
-        // The core's activation request names this app or PC; sent verbatim.
-        final request = _optionalText(FisicaEntitlementText.activationRequest);
-        if (request != null) {
-          return (path: _activatePath, token: token, body: request);
-        }
-      } else if (values[17] & FisicaEntitlementWarning.renewDue != 0 ||
-          reason == FisicaModeReason.keyExpired ||
-          reason == FisicaModeReason.fullEnded ||
-          reason == FisicaModeReason.notStarted) {
-        return (path: _refreshPath, token: token, body: '{}');
+    final output = calloc<Uint32>();
+    final int next;
+    try {
+      core._check(
+        core._library.lookupFunction<
+          Int32 Function(Pointer<Void>, Uint64, Pointer<Uint32>),
+          int Function(Pointer<Void>, int, Pointer<Uint32>)
+        >('fisica_core_entitlement_next_exchange')(_open, _now(), output),
+      );
+      next = output.value;
+    } finally {
+      calloc.free(output);
+    }
+    if (next == FisicaExchange.activate) {
+      // The core's activation request names this app or PC; sent verbatim.
+      final request = _optionalText(FisicaEntitlementText.activationRequest);
+      if (request != null) {
+        return (path: _activatePath, token: token, body: request);
       }
     }
-    return force ? (path: _refreshPath, token: token, body: '{}') : null;
+    return next == FisicaExchange.refresh || force
+        ? (path: _refreshPath, token: token, body: '{}')
+        : null;
   }
 
   Future<({int status, String text})> _send(
@@ -646,7 +652,7 @@ class FisicaEntitlement {
     }
     final request = _optionalText(FisicaEntitlementText.activationRequest);
     if (request == null) {
-      throw FisicaStateError(6, _reasonMessages[FisicaModeReason.noTarget]!);
+      throw FisicaStateError(6, fisicaReasonMessages[FisicaModeReason.noTarget]!);
     }
     final device = await _post(_pairingPath, null, request);
     final code = PairingCode(
@@ -702,7 +708,18 @@ class FisicaEntitlement {
     try {
       final due = _handle == nullptr ? null : _due(force);
       if (due == null) return (activated: false, refreshed: false, error: null);
-      final response = await _post(due.path, due.token, due.body);
+      final (:status, :text) = await _send(due.path, due.token, due.body);
+      if (status < 200 || status >= 300) {
+        // A refused activation (key in use elsewhere, released, trial used)
+        // does not change within a minute: ask again in an hour.
+        if (status >= 400 && status < 500 && status != 429) {
+          _nextSyncMs = _monotonic.elapsedMilliseconds + 3600 * 1000;
+        }
+        throw HttpException(
+          '$status ${text.length > 200 ? text.substring(0, 200) : text}',
+        );
+      }
+      final response = jsonDecode(text) as Map<String, dynamic>;
       if (_handle == nullptr) {
         return (activated: false, refreshed: false, error: null);
       }

@@ -5,7 +5,8 @@ Full installation instructions are in `INSTALL.md` in the sample ZIP, or
 [partner-quickstart.md](../../doc/partner-quickstart.md) in the SDK repository.
 
 - Python: `python/main.py` (USB/BLE or `--mock scale-mock.json`; `--key` or `--pair` for full mode).
-- C#: `dotnet/Quickstart.csproj` (USB/BLE or `mock scale-mock.json`; `--key` or `--pair`).
+- C#: `dotnet/Quickstart.csproj` (USB/BLE or `mock scale-mock.json`; `--key` or `--pair`). It builds the
+  C# wrapper source ZIP extracted to `sdk/dotnet/` and copies the core from `sdk/core/` (a core ZIP).
 - Swift: `swift/ScaleApp.swift`, a complete SwiftUI App source for Xcode.
 - Kotlin/Java: `android/` has two minimal Android applications.
 - Flutter: `flutter/prepare.py` creates standard host projects with permissions;

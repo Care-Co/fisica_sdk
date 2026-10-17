@@ -51,3 +51,18 @@ def test_synthetic_data_matches_all_sample_consumers():
     core = NativeCore()
     assert core.analyze_packets([packet] * script['frame_count'])[0] == script['expected_weight']  # basic mode
     assert script['frame_count'] == 12
+
+
+def test_samples_use_the_current_wrapper_versions():
+    """The samples name the packages of this release: AAR file name and C# package version."""
+    import re
+    version = {name: json.loads((ROOT / 'wrappers' / name / 'wrapper.json').read_text())['version'] for name in ('kotlin', 'dotnet')}
+    samples = ROOT / 'examples/partner'
+    for app in ('app-kotlin', 'app-java'):
+        gradle = (samples / 'android' / app / 'build.gradle').read_text()
+        assert re.findall(r'fisica-scale-([^"/]+)\.aar', gradle) == [version['kotlin']], app
+    project = (samples / 'dotnet/Quickstart.csproj').read_text()
+    assert re.findall(r'Include="CareCo\.Fisica\.Scale" Version="([^"]+)"', project) == [version['dotnet']]
+    assert re.findall(r'<Version>([^<]+)</Version>', (ROOT / 'wrappers/dotnet/Fisica.Scale.csproj').read_text()) == [version['dotnet']]
+    # Until the NuGet package exists the sample builds the wrapper source from the C# ZIP.
+    assert 'Include="$(FisicaSdk)dotnet/Fisica.Scale.csproj"' in project

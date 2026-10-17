@@ -1,7 +1,8 @@
 # 타사 앱 적용 검증
 
 2026-10-14, `sdk-runtime-entitlement`에서 최소 앱·설치 문서와 Flutter transport를
-추가한 작업의 결과다. 서버·펌웨어·코어 측정/프로토콜 소스는 변경하지 않았다.
+추가한 작업의 결과다(당시 SDK 2.4.0, Flutter core 0.5.0). 아래 표는 그때의 기록이고, 패키지와 재현 절차는
+현재 버전(SDK 3.0.0) 기준이다. 서버·펌웨어·코어 측정/프로토콜 소스는 변경하지 않았다.
 기본 사용에 계약 토큰이나 인증 서버가 필요하지 않은 기존 동작을 유지했다.
 
 ## 실행한 검증
@@ -10,7 +11,7 @@
 |---|---|---|
 | Python 전체 테스트 | 179 passed, 12 warnings | 기존 계약·프로토콜·분석 + 공개 샘플 배포 감사 |
 | Python 샘플 | 설치 wheel에서 합성 70.5kg·12프레임 | 별도 venv, 저장소 코어 소스를 import 경로에 넣지 않음 |
-| C# 샘플 | NuGet 복원, 두 TFM 빌드, Mock 70.5kg·12프레임 | macOS .NET 8. Windows BLE는 컴파일만 |
+| C# 샘플 | NuGet 복원, 두 TFM 빌드, Mock 70.5kg·12프레임 | macOS .NET 8. Windows BLE는 컴파일만. 2026-10-17부터 NuGet 대신 C# 소스 ZIP + core ZIP으로 두 TFM 빌드·Mock 실행(기본 모드 70.5kg) 확인 |
 | SwiftUI 샘플 | Swift 모듈 빌드와 앱 소스 typecheck 통과 | macOS Swift 6.4. Xcode 프로젝트의 설치/서명/기기 BLE는 별도 |
 | Kotlin/Java 샘플 | 제공 AAR classes.jar·Kotlin stdlib·android-35로 두 앱 소스 컴파일 통과 | APK 전체 빌드/기기 실행은 별도 |
 | C/C++ 샘플 | 공개 core ZIP으로 CMake 빌드·실행, 두 예제 70.5kg·12프레임 | macOS, 합성 응답. private core를 샘플에서 빌드하지 않음 |
@@ -26,15 +27,21 @@ assertion과 테스트 종료는 정상 통과했다. 사용자가 눈으로 UI�
 
 ## 패키지와 재현
 
-로컬 QA 패키지: `.build/partner-packages/2.4.0/`.
+`tools/package_platforms.py`가 `--output/<sdk-version>/`(기본 `.build/multiplatform-releases/3.0.0/`)을 비우고
+다음을 만든다. 버전은 `sdk-release.json`과 `wrappers/*/wrapper.json`에서 온다.
 
-- `fisica-flutter-0.5.0-platforms.zip`: 공개 Dart core 래퍼 + OS별 컴파일된 Fisica 코어.
+- `fisica-flutter-0.6.0-platforms.zip`: 공개 Dart core 래퍼 + OS별 컴파일된 Fisica 코어.
 - `fisica-flutter-transports-0.1.0.zip`: Flutter BLE/desktop USB 어댑터와 외부 라이선스 고지.
-- `fisica-partner-samples-2.4.0.zip`: 명시적 공개 샘플만 포함. `INSTALL.md`에 설치·실행 절차.
+- `fisica-partner-samples-3.0.0.zip`: 명시적 공개 샘플만 포함. `INSTALL.md`에 설치·실행 절차.
+- `fisica-swift-0.3.0.zip`, `fisica-scale-0.3.0.aar`, `fisica-kotlin-0.3.0.zip`, `fisica-dotnet-0.3.0.zip`,
+  `fisica-core-2.0.0-<platform>.zip`, 그리고 해시 목록 `platform-manifest.json`.
+
+입력은 `tools/build_platforms.py`로 다섯 대상(`apple`, `android`, `macosx_11_0_universal2`, `win_arm64`,
+`win_amd64`)을 모두 빌드한 `.build/platforms/`다. QA 패키지는 모든 명령에 `--validation`을 붙인다.
 
 ```sh
-python tools/package_platforms.py --validation --input .build/platforms-2.4.0 --output .build/partner-packages
-python tools/audit_artifacts.py .build/partner-packages/2.4.0/*.zip .build/partner-packages/2.4.0/*.aar
+python tools/package_platforms.py --validation
+python tools/audit_artifacts.py --validation .build/multiplatform-releases/3.0.0/*.zip .build/multiplatform-releases/3.0.0/*.aar
 python -m pytest tests -q
 cd wrappers/flutter_transport
 flutter pub get

@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <string>
 #include <vector>
@@ -205,6 +206,11 @@ int32_t fisica_core_decode_packet(FisicaEntitlement *license,uint64_t now_s,cons
 }
 int32_t fisica_core_next_packet(const uint8_t *buffer,uint32_t length,uint32_t *consumed,uint32_t *kind,
     uint8_t *packet,uint32_t capacity,uint32_t *packet_length) {
+    return fisica::next_packet(buffer,length,consumed,kind,packet,capacity,packet_length,nullptr);
+}
+}  // extern "C"
+int32_t fisica::next_packet(const uint8_t *buffer,uint32_t length,uint32_t *consumed,uint32_t *kind,
+    uint8_t *packet,uint32_t capacity,uint32_t *packet_length,const uint8_t *expected) {
     if ((!buffer && length) || !consumed || !kind || !packet || !packet_length) return FISICA_INVALID_ARGUMENT;
     *consumed=0; *kind=FISICA_PACKET_NONE; *packet_length=0;
     uint32_t start=length, size=0, selected_kind=0;
@@ -219,9 +225,12 @@ int32_t fisica_core_next_packet(const uint8_t *buffer,uint32_t length,uint32_t *
     if (length>=8) {
         for (uint32_t i=0;i<=length-8 && i<start;++i) {
             // Until a complete frame is available, bytes inside a fragmented
-            // pressure grid must not be interpreted as a command response.
-            if (!size && i>0) break;
+            // pressure grid must not be interpreted as a command response. With no frames
+            // streaming (the session passes the pending command's header and type), the answer
+            // to that command is found after leading noise too.
+            if (!size && i>0 && !expected) break;
             if (buffer[i]!=0x24) continue;
+            if (!size && i>0 && (buffer[i+1]!=expected[0] || buffer[i+2]!=expected[1])) continue;
             uint32_t response_size=8;
             if (variable_response(buffer[i+1],buffer[i+2])) {
                 response_size=0;
@@ -245,6 +254,7 @@ int32_t fisica_core_next_packet(const uint8_t *buffer,uint32_t length,uint32_t *
     std::memcpy(packet,buffer+start,size);
     *consumed=start+size; *kind=selected_kind; return FISICA_OK;
 }
+extern "C" {
 int32_t fisica_core_decode_response(const uint8_t *packet,uint32_t length,int32_t *response,uint32_t capacity) {
     if (!response || !response_packet(packet,length))
         return FISICA_INVALID_ARGUMENT;
@@ -262,16 +272,39 @@ int32_t fisica_core_response_payload(const uint8_t *packet,uint32_t length,uint8
 int32_t fisica_core_analyze_packets(const uint8_t *packets,uint32_t count,double *result,uint32_t capacity) {
     if (!packets || !result || !count || count>max_cells/cells_display) return FISICA_INVALID_ARGUMENT;
     if (capacity<5) return FISICA_BUFFER_TOO_SMALL;
+    return fisica::analyze_packets(count,[&](uint32_t i) { return packets+uint64_t(i)*packet_size; },result,capacity);
+}
+}  // extern "C"
+// The analysis uses one run of stable frames (fisica_core_analyze). Weights and empty frames
+// come first, one packet at a time; only that run and the frame before it are decoded into
+// grids, which gives the same result as decoding every packet without holding them all.
+int32_t fisica::analyze_packets(uint32_t count,const std::function<const uint8_t*(uint32_t)>& packet,
+    double *result,uint32_t capacity) {
     return protect([&]() -> int32_t {
-        std::vector<double> matrices(uint64_t(count)*cells_display), weights(count);
-        std::array<double,cells_raw> raw{}; std::array<double,2> metrics{};
+        std::vector<double> weights(count); std::vector<uint32_t> active, stable;
+        std::array<double,cells_raw> raw{}; std::array<double,cells_display> display{}; std::array<double,2> metrics{};
         for (uint32_t i=0;i<count;++i) {
-            fisica::decode_measurement(packets+uint64_t(i)*packet_size,raw.data(),matrices.data()+uint64_t(i)*cells_display,metrics.data());
+            fisica::decode_measurement(packet(i),raw.data(),display.data(),metrics.data());
             weights[i]=metrics[0];
+            if (std::any_of(display.begin(),display.end(),[](double cell) { return cell!=0; })) active.push_back(i);
         }
-        return fisica_core_analyze(matrices.data(),weights.data(),count,rows_raw,cols_display,result,capacity);
+        size_t first=0;  // the frame before the run: the analysis compares each frame with it
+        for (size_t i=1;i<active.size();++i) {
+            if (std::abs(weights[active[i]]-weights[active[i-1]])<=0.5) { if (stable.empty()) first=i-1; stable.push_back(active[i]); }
+            else stable.clear();
+            if (stable.size()>=10) break;
+        }
+        if (stable.empty()) return FISICA_NO_RESULT;
+        stable.insert(stable.begin(),active[first]);
+        std::vector<double> matrices(stable.size()*cells_display), chosen(stable.size());
+        for (size_t i=0;i<stable.size();++i) {
+            fisica::decode_measurement(packet(stable[i]),raw.data(),matrices.data()+i*cells_display,metrics.data());
+            chosen[i]=metrics[0];
+        }
+        return fisica_core_analyze(matrices.data(),chosen.data(),uint32_t(stable.size()),rows_raw,cols_display,result,capacity);
     });
 }
+extern "C" {
 int32_t fisica_core_dimensions(const double *xy,uint32_t count,double cw,double ch,double *result,uint32_t capacity) {
     if (!result || (!xy && count) || count>max_cells || !std::isfinite(cw) || !std::isfinite(ch) || cw<=0 || ch<=0)
         return FISICA_INVALID_ARGUMENT;

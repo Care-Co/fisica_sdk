@@ -48,13 +48,10 @@ def test_generated_language_codes_match_the_public_header():
     assert all(FisicaErrorCode[member.name] == member.value for member in codes.FisicaStatus)
 
 
-def test_default_ble_profile_covers_the_python_transport_characteristics():
+def test_python_transport_uses_the_generated_ble_profiles():
+    """No UUID or device name is written into the Python transport; both come from codes.py."""
     import re
-    from fisica_sdk import codes
     ROOT = Path(__file__).resolve().parents[1]
-    source = (ROOT / 'fisica_sdk' / 'bluetooth_handler.py').read_text(encoding='utf-8')
-    block = source[source.index('known_uuids = ['):source.index(']', source.index('known_uuids = ['))]
-    known = set(re.findall(r'"([0-9a-f-]{36})"', block))
-    generated = {value for profile in codes.BLE_PROFILES.values() for value in profile.values()}
-    assert known and known == generated
-    assert codes.BLE_NAME_CONTAINS.lower() in (ROOT / 'fisica_sdk' / 'port_scanner.py').read_text(encoding='utf-8').lower()
+    for name, generated in (('bluetooth_handler.py', 'codes.BLE_PROFILES'), ('port_scanner.py', 'codes.BLE_NAME_CONTAINS')):
+        source = (ROOT / 'fisica_sdk' / name).read_text(encoding='utf-8')
+        assert generated in source and not re.search(r'[0-9a-f]{8}-[0-9a-f]{4}-', source), name

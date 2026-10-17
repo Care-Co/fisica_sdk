@@ -5,7 +5,9 @@
 The initial Windows target is Windows 10/11 x64 with x64 CPython 3.9 or newer.
 The Python wheel is `fisica-<python-wrapper-version>-py3-none-win_amd64.whl`.
 `fisica_sdk/_native/fisica_core.dll` exports the existing C ABI; it does not link
-against a particular CPython ABI. Windows ARM64 and 32-bit Python wheels are not
+against a particular CPython ABI. A separate Windows ARM64 wheel (`win_arm64`, built
+with an ARM64 compiler or cross compiler) is supplied as well, but it has not been run on
+ARM64 hardware ([support matrix](platform-support.md)). 32-bit Python wheels are not
 provided. This work does not change server APIs, firmware or the wire protocol.
 
 Customer artifacts contain public Python adapters plus a compiled DLL. They never
@@ -18,7 +20,7 @@ header and release metadata. Keep the source repository private.
 ## Customer installation
 
 ```powershell
-py -3.11 -m pip install .\fisica-2.2.0-py3-none-win_amd64.whl
+py -3.11 -m pip install .\fisica-3.0.0-py3-none-win_amd64.whl
 py -3.11 -c "from fisica_sdk import NativeCore; print(NativeCore().version_info())"
 ```
 
@@ -42,8 +44,14 @@ python -m pip install --upgrade build pytest numpy packaging pyserial bleak
 python tools/native_build.py
 python -m pytest -q
 python tools/build_release.py --output release
-python tools/verify_wheel.py .\release\2.2.0\fisica-2.2.0-py3-none-win_amd64.whl
+python tools/verify_wheel.py .\release\3.0.0\fisica-3.0.0-py3-none-win_amd64.whl
 ```
+
+`build_release.py` empties `release\3.0.0\` first, so build each platform into its own
+`--output`. Its wheel and core ZIP trust the production portal key only, and `verify_wheel.py`
+checks that an installed release wheel rejects a test-signed key. For QA with test-signed
+keys build with `--validation` and verify with `python tools/verify_wheel.py --validation ...`,
+which checks full mode instead.
 
 The native build uses `/MT` to link the C++ runtime statically, `/fp:strict` to
 retain the legacy numeric behavior, an x64 linker target and non-debug release
@@ -60,7 +68,9 @@ the release audit. This check is not a code-signing or malware certification.
 
 Removed on 2026-10-17 until a self-hosted Windows runner exists (CI uses only self-hosted
 runners; see `doc/platform-support.md`, CI). The workflow below is kept in git history
-(`git show a44754b:.github/workflows/windows-wheel.yml`).
+(`git show a44754b:.github/workflows/windows-wheel.yml`). It builds with `--validation`, so a
+restored copy must call `tools/verify_wheel.py --validation` and name its artifacts with a
+`-validation` suffix.
 
 `.github/workflows/windows-wheel.yml` provided manual and internal PR builds on
 `windows-2022`. It initializes an x64 MSVC environment, builds the core, runs the
@@ -88,8 +98,9 @@ FISICA_BUILD_PLATFORM=win_amd64 CXX=/trusted/toolchain/bin/x86_64-w64-mingw32-cl
 
 The LLVM MinGW cross build uses a static C++ runtime, no debug output and the same
 floating-point contraction policy as the macOS implementation. Run the resulting
-wheel on Windows before production distribution. The MSVC CI build remains the
-Windows-native release validation path; a cross-build is not an MSVC test.
+wheel on Windows before production distribution. An MSVC build on Windows is the
+Windows-native release validation path (CI paused until a Windows runner exists); a
+cross-build is not an MSVC test.
 
 `FISICA_PREBUILT_CORE=/trusted/path/fisica_core.dll` can package an already-built
 DLL with `FISICA_BUILD_PLATFORM=win_amd64`. Only that validated DLL and public
@@ -162,11 +173,11 @@ since 3.0.0; applications show the rendered images themselves.
 
 ## Verification status
 
-This release passed 96 Python tests, 9 Dart shared-vector tests and Dart analysis,
-static-library and UBSan C ABI contracts, clean macOS wheel/GUI,
-Windows x64 cross-build/PE/export/license/source-exclusion checks. Windows CPython
-3.11.9 under Wine with NumPy 1.26.4 exercises the offline Mock connection, firmware
-warning, measurement start/stop, raw frames, native analysis/report and deprecation.
+The current test suite (`python -m pytest tests -q`), the Dart contract and analysis, the
+static-library and UBSan C ABI contracts and the macOS wheel checks pass locally. Earlier
+releases also passed Windows x64 cross-build/PE/export/license/source-exclusion checks, and
+Windows CPython 3.11.9 under Wine with NumPy 1.26.4 exercised the offline Mock connection,
+firmware warning, measurement start/stop, raw frames, native analysis/report and deprecation.
 Wine is run with external networking disabled; loopback IPC remains permitted for
 Windows asyncio. It is not a Windows-native MSVC or Bluetooth/driver validation.
 
@@ -179,6 +190,8 @@ planned production version `2.0.1`, or Windows/BLE hardware behavior. Calibratio
 firmware were not changed. Protocol documents contain a 644-byte description and a
 single-measurement command revision; those remain hardware-validation items.
 
-The Windows-native MSVC CI and multi-Python matrix are configured but have not run.
+The Windows-native MSVC CI (core build, tests, wheel audit, installation on Python 3.9, 3.11,
+3.13 and 3.14, ARM64 cross-build) ran on GitHub-hosted `windows-2022` runners until
+2026-10-17 and is paused until a self-hosted Windows runner exists; nothing runs it now.
 Real Windows USB/BLE, live BLE measurement, Windows ARM and Android/iOS remain unverified.
 The full checklist and implementation gaps are in [SDK requirements](sdk-requirements.md).

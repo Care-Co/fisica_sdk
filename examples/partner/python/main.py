@@ -24,11 +24,12 @@ def main():
     parser.add_argument('--endpoint', help='Developer portal URL, to activate and renew the key online '
                                            '(stored and paired keys: https://developer.fisicahealthcare.com by default)')
     args = parser.parse_args()
-    sdk = FisicaSDK()
+    sdk = FisicaSDK()  # quiet: this sample prints what you need; FisicaSDK(debug=True) shows the SDK's log
     if args.key:
         sdk.configure_entitlement(file=args.key, endpoint=args.endpoint)
-        if args.endpoint:
-            sdk._entitlement.sync(wait=True)  # activate a new key before measuring
+        synced = sdk.sync_entitlement(wait=True)  # activate a new key before measuring (needs --endpoint)
+        if synced and synced['error']:
+            print(f"Activation failed, continuing with the key as it is: {synced['error']}")
     elif args.endpoint:
         sdk.configure_entitlement(endpoint=args.endpoint)  # the key stored for this PC, renewed with this server
     # Without --key the SDK uses the key stored for this PC: paired with --pair or
@@ -38,7 +39,9 @@ def main():
     status = sdk.entitlement_status()
     print(f"License: {status['mode']} mode" + (f" ({status['reason']})" if status['reason'] else ''))
     if args.list:
-        print(json.dumps(sdk.scan_devices(), indent=2, default=str))
+        devices = sdk.scan_devices()
+        print(json.dumps(devices, indent=2, default=str) if devices else
+              'No Scale found; check that it is powered on (and that Bluetooth is on for wireless Scales)')
         return
     if sum(bool(value) for value in (args.usb, args.ble, args.mock)) != 1:
         parser.error('Choose exactly one of --usb, --ble or --mock')
@@ -59,7 +62,10 @@ def main():
             parser.error('Device not found; run --list and use the exact reported ID')
     try:
         sdk.connect(device, transport=transport)
+        info = sdk.get_device_info()
+        print(f"Connected to {device['id']} (firmware {info['firmware_version'] or 'unknown'})")
         sdk.on_data(lambda frame: print('Measurement frame received'))
+        print('Measuring for 5 seconds...')
         sdk.start_measurement(duration=5)
         sdk.wait()
         report = sdk.analyze()

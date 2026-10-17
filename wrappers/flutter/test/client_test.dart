@@ -144,7 +144,7 @@ void main() {
   });
   test('duration completes from core event', () async {
     final client = FisicaClient(core, MockBytes());
-    await client.connect();
+    await client.connect(link: FisicaLink.usb);
     final stopped = client.events.firstWhere(
       (e) => e.kind == 3 && e.operation == 3,
     );
@@ -337,6 +337,66 @@ void main() {
     await client.stop();
     await client.close();
   });
+  test('a transport without a declared link must be given one', () async {
+    final transport = MockBytes();
+    final client = FisicaClient(core, transport);
+    await expectLater(
+      client.connect(),
+      throwsA(
+        isA<FisicaArgumentError>().having(
+          (e) => e.code,
+          'code',
+          FisicaStatus.invalidArgument,
+        ),
+      ),
+    );
+    expect(transport.sent, isEmpty);
+    await client.connect(link: FisicaLink.ble);
+    await client.start();
+    expect(
+      transport.sent.any(
+        (bytes) =>
+            bytes.toString() == core.command('SET_DEVICE_BLE').toString(),
+      ),
+      isTrue,
+    );
+    await client.stop();
+    await client.close();
+  });
+  test('report after close comes from the core analysis, in basic mode too', () async {
+    final client = await measure(null);
+    client.clearFrames();
+    await client.close();
+    expect(client.frames, isEmpty);
+    expect(client.report()!.weight, 70.5);
+    expect(client.report()!.frames, isEmpty);
+  });
+  test('only the same operation is busy; the core orders the rest', () async {
+    final client = FisicaClient(core, MockBytes());
+    await client.connect(link: FisicaLink.usb);
+    final start = client.start();
+    expect(
+      () => client.start(),
+      throwsA(
+        isA<FisicaStateError>().having((e) => e.code, 'code', FisicaStatus.busy),
+      ),
+    );
+    // A stop while the start waits for its ACK is the core's to order: it
+    // cancels the start and stops.
+    final stop = client.stop();
+    await expectLater(
+      start,
+      throwsA(
+        isA<FisicaCommandError>().having(
+          (e) => e.code,
+          'code',
+          FisicaStatus.cancelled,
+        ),
+      ),
+    );
+    expect((await stop).state, FisicaSessionState.idle);
+    await client.close();
+  });
   test('deprecated profile is still accepted as the link', () async {
     final transport = MockBytes();
     final client = FisicaClient(core, transport);
@@ -380,7 +440,7 @@ void main() {
   });
   test('close during start cancels pending future and disposes once', () async {
     final client = FisicaClient(core, MockBytes());
-    await client.connect();
+    await client.connect(link: FisicaLink.usb);
     final start = client.start();
     final canceled = expectLater(start, throwsA(isA<FisicaCommandError>()));
     final close = client.close();

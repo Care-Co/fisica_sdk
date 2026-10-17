@@ -17,6 +17,10 @@ typedef _StringNative = Pointer<Utf8> Function();
 typedef _StringDart = Pointer<Utf8> Function();
 typedef _AbiNative = Uint32 Function();
 typedef _AbiDart = int Function();
+typedef _CheckWrapperNative =
+    Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Uint32>);
+typedef _CheckWrapperDart =
+    int Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Uint32>);
 typedef _ErrorNative = Pointer<Utf8> Function(Int32);
 typedef _ErrorDart = Pointer<Utf8> Function(int);
 typedef _ResponseNative =
@@ -171,6 +175,10 @@ class NativePacket {
 
 /// FFI wrapper usable from Flutter native apps. OS BLE/USB transport belongs to
 /// the host adapter. An explicitly packaged, trusted library must be supplied.
+///
+/// The core decides whether it supports this SDK and wrapper release
+/// (`fisica_core_check_wrapper`, the same policy for every wrapper); an
+/// unsupported combination throws [FisicaStateError] before any other call.
 class FisicaCore {
   final DynamicLibrary _library;
   late final String coreVersion;
@@ -178,14 +186,33 @@ class FisicaCore {
   late final Map<String, dynamic> policy;
   late final Map<String, dynamic> wrapper;
   final String sdkVersion = release.sdkVersion;
+  late final _SessionApi _sessions = _SessionApi(_library);
 
   FisicaCore(this._library, {DeprecationHandler? onDeprecation}) {
-    coreVersion = _library
-        .lookupFunction<_StringNative, _StringDart>('fisica_core_version')()
-        .toDartString();
     abiVersion = _library.lookupFunction<_AbiNative, _AbiDart>(
       'fisica_core_abi_version',
     )();
+    if (abiVersion >> 16 != 2) {
+      throw FisicaStateError(
+        FisicaStatus.incompatibleVersion,
+        'Require C ABI 2.x',
+      );
+    }
+    wrapper = jsonDecode(release.wrapperManifestJson) as Map<String, dynamic>;
+    final warnings = _checkWrapper(
+      wrapper['name'] as String,
+      sdkVersion,
+      wrapper['version'] as String,
+    );
+    final warn =
+        onDeprecation ?? (message) => stderr.writeln('Fisica: $message');
+    if (warnings & 1 != 0) warn('SDK $sdkVersion is deprecated');
+    if (warnings & 2 != 0) {
+      warn('Flutter wrapper ${wrapper['version']} is deprecated');
+    }
+    coreVersion = _library
+        .lookupFunction<_StringNative, _StringDart>('fisica_core_version')()
+        .toDartString();
     policy =
         jsonDecode(
               _library
@@ -195,16 +222,28 @@ class FisicaCore {
                   .toDartString(),
             )
             as Map<String, dynamic>;
-    wrapper = jsonDecode(release.wrapperManifestJson) as Map<String, dynamic>;
-    verifyCompatibility(
-      policy: policy,
-      wrapper: wrapper,
-      sdkVersion: sdkVersion,
-      coreVersion: coreVersion,
-      abiVersion: abiVersion,
-      onDeprecation:
-          onDeprecation ?? (message) => stderr.writeln('Fisica: $message'),
-    );
+  }
+
+  /// The core's verdict on a wrapper release: deprecation warning bits
+  /// (1 SDK, 2 wrapper), or [FisicaStateError] when it is not supported.
+  int _checkWrapper(String name, String sdk, String version) {
+    final check = _library
+        .lookupFunction<_CheckWrapperNative, _CheckWrapperDart>(
+          'fisica_core_check_wrapper',
+        );
+    final nativeName = name.toNativeUtf8(allocator: calloc);
+    final nativeSdk = sdk.toNativeUtf8(allocator: calloc);
+    final nativeVersion = version.toNativeUtf8(allocator: calloc);
+    final warnings = calloc<Uint32>();
+    try {
+      _check(check(nativeName, nativeSdk, nativeVersion, warnings));
+      return warnings.value;
+    } finally {
+      calloc.free(nativeName);
+      calloc.free(nativeSdk);
+      calloc.free(nativeVersion);
+      calloc.free(warnings);
+    }
   }
 
   factory FisicaCore.open(

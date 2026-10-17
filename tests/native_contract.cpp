@@ -1,9 +1,11 @@
 #include "fisica_core.h"
+#include "../native/src/fisica_license.h"
 #include <array>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 int main() {
     assert((fisica_core_abi_version() >> 16) == 2);
@@ -83,4 +85,15 @@ int main() {
     fisica_core_session_destroy(session);
     fisica_core_session_destroy(nullptr);
 
+    // Android: an app ID counts only when that package's own installed APK is mapped.
+    const std::string maps =
+        "7f00-7f10 r--p 00000000 fd:05 1 /data/app/~~Xk2==/com.acme.kiosk-Ab3==/base.apk\n"
+        "7f20-7f30 r--p 00000000 fd:05 2 /data/app/~~Zz1==/com.google.android.webview-Q1==/base.apk\n"
+        "7f40-7f50 r--p 00000000 fd:05 3 /system/framework/framework.jar\n";
+    assert(fisica::apk_mapped(maps, "com.acme.kiosk"));
+    assert(fisica::apk_mapped(maps, "com.google.android.webview"));
+    assert(!fisica::apk_mapped(maps, "com.victim.app"));  // a process named after another app
+    assert(!fisica::apk_mapped(maps, "com.acme"));        // a prefix is not the package
+    assert(fisica::apk_mapped("1-2 r-xp 0 0:0 0 /data/app/com.acme.kiosk-1/base.apk", "com.acme.kiosk"));
+    assert(!fisica::apk_mapped("1-2 r-xp 0 0:0 0 /sdcard/com.acme.kiosk-1/base.apk", "com.acme.kiosk"));
 }

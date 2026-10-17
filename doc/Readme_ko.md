@@ -234,13 +234,18 @@ sdk.wait()
 
 ### 디버깅
 
-디버그 로그 활성화:
+SDK는 기본으로 아무것도 출력하지 않고 앱의 `logging` 설정을 따른다(로거 이름 `fisica_sdk`). 로그 보기:
 
 ```python
 import logging
 
-sdk = fisica.FisicaSDK(debug=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)            # 앱 전체 로그 설정으로
+sdk = fisica.FisicaSDK(debug=logging.DEBUG)        # 또는 SDK 로그만 stderr로
 ```
+
+- `sync_entitlement()`: 키 활성화·갱신을 지금 실행하고 결과를 돌려준다.
+- `set_zero()`·`set_scale()`은 연결되지 않았으면 `RuntimeError`를 낸다.
+- 측정 프레임의 `battery`는 기기가 알려주기 전에는 `None`이다.
 
 ## 📚 API 레퍼런스
 

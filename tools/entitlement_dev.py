@@ -173,7 +173,7 @@ def host_vectors(target_type, target, now, company='acme', contract='ctr-1', key
 
 
 class MockEntitlementServer:
-    """In-memory reference for the developer portal's SDK API (activate, refresh and pairing).
+    """In-memory reference for the developer portal's SDK API (activate, refresh, release and pairing).
 
     Company, contract and key always come from the verified bearer token, never from the body.
     It keeps no usage data: a refresh is not a record of SDK use. Pairing takes only the target;
@@ -276,6 +276,12 @@ class MockEntitlementServer:
                 return 409, {'error': 'key_in_use'}
             seat.update(bind_type=body['bind_type'], bind=body['bind'])
             return 200, {'token': self.issue(*contract, key)}
+        if path == '/sdk/v1/entitlement/release':
+            # The device let go of its key: the seat is free at once. Only the key itself can ask.
+            if body or not key:
+                return 400, {'error': 'unexpected_body'}
+            self.keys[key]['released'] = True
+            return 200, {'released': True}
         if path != '/sdk/v1/entitlement/refresh':
             return 404, {'error': 'not_found'}  # There is no usage endpoint.
         if body:

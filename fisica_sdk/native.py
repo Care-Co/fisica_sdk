@@ -119,6 +119,7 @@ class NativeCore:
             'export': [ct.c_void_p,U8P,U32,U32P],
             'restore': [ct.c_void_p,U8P,U32],
             'release': [ct.c_void_p,U8P,U32,U32P],
+            'next_exchange': [ct.c_void_p,U64,U32P],
         }
         for name, arguments in entitlement_signatures.items():
             function = getattr(self._lib, 'fisica_core_entitlement_' + name)
@@ -403,7 +404,7 @@ class NativeEntitlement:
             raise FisicaRuntimeError(6, 'Entitlement context is closed')
         if now_s is None:
             now_s = int(time.time())
-        if not isinstance(now_s, int) or not 0 <= now_s <= 1 << 53:
+        if not isinstance(now_s, int) or not 0 <= now_s <= 7258118400:  # milliseconds are not seconds
             raise FisicaArgumentError(1, 'Expected Unix seconds')
         return now_s
 
@@ -450,6 +451,12 @@ class NativeEntitlement:
             if error.code == 6:
                 return None
             raise
+
+    def next_exchange(self, now_s=None):
+        """What to ask the developer portal now: 0 nothing, 1 activate, 2 refresh (codes.FisicaExchange)."""
+        exchange = U32()
+        self.core._check(self.core._lib.fisica_core_entitlement_next_exchange(self._handle,self._time(now_s),ct.byref(exchange)))
+        return exchange.value
 
     def release(self):
         """Forget the key activated here and return its FRC1 release code for the developer portal."""

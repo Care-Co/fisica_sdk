@@ -4,7 +4,7 @@
   status    Show the key stored for this PC and whether it gives full mode
   import    Import a key or key file (activation or renewal file) and activate it online
   code      Show the activation code of a stored key that is not activated yet (offline activation)
-  release   Release the stored key and show the release code for the developer portal
+  release   Release the stored key; online the seat is freed at once, otherwise a release code is shown
 
 The key is stored once per PC in the SDK's application-data directory, where every Python script,
 C# program and Flutter desktop app on this PC finds it. An app with its own app ID (iOS, Android, a
@@ -97,8 +97,8 @@ def _import(args):
     return 0 if status['mode'] == 'full' else 1
 
 
-def _stored(args):
-    entitlement = Entitlement(endpoint=args.endpoint, online=False)
+def _stored(args, online=False):
+    entitlement = Entitlement(endpoint=args.endpoint, online=online)
     return entitlement, entitlement.status()
 
 
@@ -130,7 +130,7 @@ def main(argv=None):
             return _pair(args)
         if args.command == 'import':
             return _import(args)
-        entitlement, status = _stored(args)
+        entitlement, status = _stored(args, online=args.command == 'release')
         if args.command == 'status':
             _print(status, args.json)
             return 0 if status['mode'] == 'full' else 1
@@ -153,8 +153,11 @@ def main(argv=None):
         except Exception as error:
             print(f'The key cannot be released here: {error}', file=sys.stderr)
             return 1
-        print('Released. Enter this release code at the key in the developer portal to free the seat now:')
-        print(code)
+        if entitlement.released_online:
+            print('Released. The seat is free in the developer portal.')
+        else:
+            print('Released on this PC. Enter this release code at the key in the developer portal to free the seat now:')
+            print(code)
         return 0
 
 

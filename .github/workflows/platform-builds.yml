@@ -20,27 +20,59 @@ jobs:
     container:
       image: ubuntu:24.04
       volumes: [fisica-sdk-ci-cache:/cache]
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       PIP_CACHE_DIR: /cache/pip
       PUB_CACHE: /cache/pub-cache
     steps:
-      - name: Build tools (Ubuntu packages)
+      - name: Build tools (Ubuntu packages; .NET 8 SDK from Ubuntu)
         run: |
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            ca-certificates git curl unzip xz-utils zip g++ python3 python3-venv >/dev/null
+            ca-certificates git curl unzip xz-utils zip g++ cmake python3 python3-venv dotnet-sdk-8.0 >/dev/null
+          # The core binds a PC's key to /etc/machine-id, which is empty in the image: give this container one.
+          [ -s /etc/machine-id ] || tr -d - < /proc/sys/kernel/random/uuid > /etc/machine-id
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with: {persist-credentials: false}
       - name: Python environment
         run: |
           python3 -m venv /opt/venv
           echo /opt/venv/bin >> "$GITHUB_PATH"
-          /opt/venv/bin/python -m pip install -q pytest numpy packaging pyserial bleak opencv-python-headless Pillow
+          /opt/venv/bin/python -m pip install -q build pytest numpy packaging pyserial bleak opencv-python-headless Pillow
       - run: python tools/native_build.py
       - run: python -m pytest tests -q
       - name: Public C ABI contracts under UBSan (hostile license input included)
         run: python tools/verify_bindings.py native
+      - name: C# contract on .NET 8 (net8.0 runs here; the Windows BLE target is compiled, not run)
+        run: python tools/verify_bindings.py dotnet
+        env:
+          DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      - name: Linux wheel and core ZIP, release and --validation (a CI check; no Linux package is supplied)
+        run: |
+          python tools/build_release.py --output .build/releases
+          python tools/build_release.py --validation --output .build/releases-validation
+      - name: Installed wheels (release rejects a test-signed key; validation opens full mode with it)
+        run: |
+          python tools/verify_wheel.py .build/releases/*/fisica-*.whl
+          python tools/verify_wheel.py --validation .build/releases-validation/*/fisica-*.whl
+      - name: Python sample with the installed release wheel (mock Scale)
+        run: |
+          python -m venv /tmp/sample
+          /tmp/sample/bin/python -m pip install -q .build/releases/*/fisica-*.whl
+          cd /tmp
+          /tmp/sample/bin/python "$GITHUB_WORKSPACE/examples/partner/python/main.py" \
+            --mock "$GITHUB_WORKSPACE/examples/partner/scale-mock.json" | tee python-sample.txt
+          grep -q '^Weight: 70.5 kg' python-sample.txt
+      - name: C and C++ samples built with CMake against the release core ZIP
+        run: |
+          mkdir -p /tmp/core
+          unzip -q .build/releases/*/fisica-core-*.zip -d /tmp/core
+          cmake -S examples/partner -B /tmp/samples -DFISICA_SDK_DIR=/tmp/core >/dev/null
+          cmake --build /tmp/samples
+          for sample in c cpp; do
+            /tmp/samples/fisica-$sample examples/partner/sample-frame.hex | tee /tmp/$sample-sample.txt
+            grep -q '^Synthetic weight: 70.50 kg' /tmp/$sample-sample.txt
+          done
       - name: Flutter 3.47.7 (pinned source, kept in the cache volume)
         run: |
           sdk=/cache/flutter-3.47.7
@@ -61,10 +93,9 @@ jobs:
       - run: flutter analyze
         working-directory: wrappers/flutter_transport
       - name: Adapter failures, MTU and shared-core measurement through fake BLE
-        run: flutter test
+        # $GITHUB_WORKSPACE is the path inside the container; ${{ github.workspace }} is the runner's.
+        run: FISICA_CORE_TEST_LIBRARY="$GITHUB_WORKSPACE/fisica_sdk/_native/libfisica_core.so" flutter test
         working-directory: wrappers/flutter_transport
-        env:
-          FISICA_CORE_TEST_LIBRARY: ${{ github.workspace }}/fisica_sdk/_native/libfisica_core.so
       - run: flutter pub get
         working-directory: examples/partner/flutter
       - run: flutter analyze
@@ -72,9 +103,10 @@ jobs:
       - run: flutter build bundle --debug
         working-directory: examples/partner/flutter
   android:
-    # Self-hosted Linux runner, in a fresh Ubuntu container like the linux job. The Android SDK,
-    # NDK 26.3 (the version verified locally) and Gradle 8.14 (Kotlin 2.0.21 compiler jars) are
-    # downloaded once into the fisica-sdk-ci-cache volume.
+    # Self-hosted Linux runner, in a fresh Ubuntu container like the linux job. The Android
+    # command-line tools and Gradle 8.14 (Kotlin 2.0.21 compiler jars) are downloaded once into the
+    # fisica-sdk-ci-cache volume and checked against pinned checksums on every run; sdkmanager
+    # installs the NDK 26.3 (the version verified locally) and android-35 there.
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, carenco]
     container:
@@ -91,37 +123,54 @@ jobs:
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
             ca-certificates git curl unzip clang python3 openjdk-17-jdk-headless >/dev/null
           echo "$JAVA_HOME/bin" >> "$GITHUB_PATH"
+          # The core binds a PC's key to /etc/machine-id, which is empty in the image: give this container one.
+          [ -s /etc/machine-id ] || tr -d - < /proc/sys/kernel/random/uuid > /etc/machine-id
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with: {persist-credentials: false}
-      - name: Android NDK, android-35 platform and Gradle's Kotlin compiler (cached)
+      - name: Android NDK, android-35 platform and Gradle's Kotlin compiler (cached, checksums pinned)
         run: |
-          sdk=/cache/android-sdk; tools="$sdk/cmdline-tools/latest/bin"
-          if [ ! -x "$tools/sdkmanager" ]; then
-            curl -fsSL -o /tmp/tools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-            mkdir -p "$sdk/cmdline-tools" && unzip -q /tmp/tools.zip -d /tmp/tools && rm -rf "$sdk/cmdline-tools/latest"
-            mv /tmp/tools/cmdline-tools "$sdk/cmdline-tools/latest"
-          fi
+          # fetch URL ALGORITHM CHECKSUM: the archive in /cache/downloads, downloaded when missing or
+          # not matching the checksum, and checked again on every run. Google publishes only SHA-1 for
+          # the command-line tools (https://dl.google.com/android/repository/repository2-3.xml);
+          # Gradle publishes SHA-256 (gradle-8.14-bin.zip.sha256).
+          fetch() {
+            file="/cache/downloads/${1##*/}"
+            mkdir -p /cache/downloads
+            if ! echo "$3  $file" | "${2}sum" --check --status 2>/dev/null; then
+              part="$(mktemp "$file.XXXXXX")"
+              curl -fsSL -o "$part" "$1"
+              if ! echo "$3  $part" | "${2}sum" --check --status; then
+                rm -f "$part"; echo "::error::$1 does not match its pinned checksum" >&2; exit 1
+              fi
+              mv "$part" "$file"
+            fi
+            echo "$file"
+          }
+          tools_zip="$(fetch https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            sha1 d313adb7aedccf6cf0cfca51ec180f0059f5f8f8)"
+          gradle_zip="$(fetch https://services.gradle.org/distributions/gradle-8.14-bin.zip \
+            sha256 61ad310d3c7d3e5da131b76bbf22b5a4c0786e9d892dae8c1658d4b484de3caa)"
+          # Extracted afresh into the container; earlier runs kept unverified copies in the volume.
+          rm -rf /cache/android-sdk/cmdline-tools /cache/gradle-8.14
+          unzip -q "$tools_zip" -d /opt/android-cmdline-tools
+          unzip -q "$gradle_zip" -d /opt
+          sdk=/cache/android-sdk; tools=/opt/android-cmdline-tools/cmdline-tools/bin; gradle=/opt/gradle-8.14
           yes | "$tools/sdkmanager" --sdk_root="$sdk" --licenses >/dev/null
           "$tools/sdkmanager" --sdk_root="$sdk" "platforms;android-35" "ndk;26.3.11579264" >/dev/null
-          gradle=/cache/gradle-8.14
-          if [ ! -d "$gradle/lib" ]; then
-            curl -fsSL -o /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.14-bin.zip
-            unzip -q /tmp/gradle.zip -d /cache
-          fi
           ls "$gradle"/lib/kotlin-compiler-embeddable-*.jar
           { echo "FISICA_ANDROID_NDK=$sdk/ndk/26.3.11579264"; echo "ANDROID_SDK_ROOT=$sdk"; echo "FISICA_GRADLE_LIB=$gradle/lib"; } >> "$GITHUB_ENV"
       - name: Python is python3
         run: mkdir -p /opt/bin && ln -sf "$(command -v python3)" /opt/bin/python && echo /opt/bin >> "$GITHUB_PATH"
       - name: Android libraries for 16 KB pages (LOAD alignment and RELRO end checked), and the AAR
         run: python tools/build_platforms.py --validation --target android
-      - name: Audit public Android artifacts (16 KB LOAD and RELRO checks included)
-        run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts android)
+      - name: Audit public Android artifacts (16 KB LOAD and RELRO checks included; QA build, test key allowed)
+        run: python tools/audit_artifacts.py --validation $(python tools/build_platforms.py --print-artifacts android)
       - name: Kotlin contract (client, link check, entitlement, mock server)
         run: python tools/verify_bindings.py kotlin
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         continue-on-error: true  # artifact storage is billed to the account; the checks above are the result
         with:
-          name: fisica-android
+          name: fisica-android-validation  # QA build: trusts the test key, never for customers
           path: |
             .build/platforms/android/*.aar
             .build/platforms/android/*.zip

@@ -386,6 +386,37 @@ final class ClientTests: XCTestCase {
         waitFor("connect") { done in client.connect(.usb) { result in self.ok(result); done() } }
         waitFor("close") { done in client.close { _ in done() } }
     }
+    func testLinkDefaultsToTheTransportsAndIsRequiredOtherwise() throws {
+        let core = try FisicaCore(), declared = try scale(core)
+        declared.link = .usb
+        let client = try FisicaClient(core: core, transport: declared)
+        waitFor("transport link") { done in client.connect { result in self.ok(result); done() } }
+        waitFor("start") { done in client.start { result in self.ok(result); done() } }
+        XCTAssertTrue(declared.sent.contains(try core.command("SET_DEVICE_USB")))
+        waitFor("close") { done in client.close { _ in done() } }
+        // A transport that does not declare its link must be given one; nothing is sent without it.
+        let undeclared = try scale(core), other = try FisicaClient(core: core, transport: undeclared)
+        waitFor("missing link") { done in other.connect { result in
+            XCTAssertEqual((self.failure(result) as? FisicaError)?.code, Int32(FisicaStatus.invalidArgument.rawValue)); done() } }
+        XCTAssertFalse(undeclared.isOpen); XCTAssertTrue(undeclared.sent.isEmpty)
+        waitFor("given link") { done in other.connect(.ble) { result in self.ok(result); done() } }
+        waitFor("start ble") { done in other.start { result in self.ok(result); done() } }
+        XCTAssertTrue(undeclared.sent.contains(try core.command("SET_DEVICE_BLE")))
+        waitFor("close ble") { done in other.close { _ in done() } }
+    }
+    func testReportAfterCloseInBasicModeWithoutFrames() throws {
+        // The report comes from the core's analysis, not the frames handed out, also after close.
+        let core = try FisicaCore(), transport = try scale(core)
+        let client = try FisicaClient(core: core, transport: transport)
+        waitFor("connect") { done in client.connect(.usb) { _ in done() } }
+        waitFor("start") { done in client.start { result in self.ok(result); done() } }
+        client.clearFrames()
+        waitFor("stop") { done in client.stop { result in self.ok(result); done() } }
+        waitFor("close") { done in client.close { _ in done() } }
+        XCTAssertTrue(client.frames.isEmpty)
+        XCTAssertEqual(try client.report()?.weight, 70.5)
+        waitFor("start after close") { done in client.start { result in XCTAssertNotNil(self.failure(result)); done() } }
+    }
     func testStartClearsThePreviousMeasurementAndFramesStayBounded() throws {
         let core = try FisicaCore(), transport = try scale(core, frames: 8)
         let client = try FisicaClient(core: core, transport: transport, entitlement: try Vectors.entitlement(core, key: "full"))
@@ -436,6 +467,10 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(try fresh.status().key, "key_pair_1"); XCTAssertEqual(try fresh.status().bind, target)
         let later = try FisicaEntitlement(core: core, storage: paired, clock: { serverNow })
         XCTAssertEqual(try later.status().mode, .full); XCTAssertEqual(try later.status().key, "key_pair_1")
+        let releasing = try FisicaEntitlement(core: core, endpoint: endpoint, storage: paired, clock: { serverNow })
+        let released = try releasing.releaseNow()
+        XCTAssertTrue(released.releasedOnline, releasing.lastSyncError ?? ""); XCTAssertTrue(released.code.hasPrefix("FRC1."))
+        XCTAssertEqual(try releasing.status().reason, .noKey)
         let asynchronous = try FisicaEntitlement(core: core, endpoint: endpoint, storage: nil, clock: { serverNow })
         let result = try awaitResult { try await asynchronous.pair(onCode: { _ in }) }
         XCTAssertEqual(result, .approved)

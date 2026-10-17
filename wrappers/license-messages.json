@@ -1,0 +1,23 @@
+{
+  "note": "Messages every wrapper shows for the license status. tools/sync_binding_metadata.py generates them into each language; edit them here.",
+  "basic_mode": "Basic mode keeps connection, measurement, weight and foot size; raw data and full-rate frames need full mode.",
+  "reasons": {
+    "no_key": "No SDK key. Create one in the developer portal and import it.",
+    "legacy_token": "This is a contract confirmation, not an SDK key. Create an SDK key in the developer portal.",
+    "not_activated": "The SDK key is not activated yet: connect to the internet, or enter the activation code in the developer portal and import the file it gives.",
+    "no_target": "The SDK cannot read this app's ID or this PC's identity, so a key cannot be activated here.",
+    "other_target": "This SDK key is activated for another app or PC.",
+    "revoked": "The SDK key was released or its contract was revoked.",
+    "clock_rollback": "This device's clock is earlier than a time the SDK has already seen: correct the clock, or connect to the internet so the key is confirmed again.",
+    "key_expired": "The SDK key expired: connect to renew it, or import a renewal file from the developer portal.",
+    "not_started": "The contract of this SDK key has not started yet.",
+    "full_ended": "The trial or contract of this SDK key has ended."
+  },
+  "warnings": {
+    "renew_due": "The SDK key is due for renewal: connect to the internet or import a renewal file.",
+    "grace": "The contract has ended; full mode continues during the grace period.",
+    "full_ending": "Full mode ends within 7 days (trial or contract end).",
+    "import_rejected": "The last SDK key or file was rejected (format, unknown signing key, signature or another app/PC).",
+    "test_key": "The SDK key is signed with a TEST key; this is not a production license."
+  }
+}

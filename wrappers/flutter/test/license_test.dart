@@ -458,6 +458,11 @@ void main() {
     final later = license(clock: () => serverNow, storage: paired);
     expect(later.status().isFull, isTrue);
     expect(later.status().key, 'key_pair_1');
+    final releasing = license(clock: () => serverNow, endpoint: endpoint, storage: paired);
+    final released = await releasing.releaseOnline();
+    expect(released.releasedOnline, isTrue, reason: releasing.lastSyncError);
+    expect(released.code, startsWith('FRC1.'));
+    expect(releasing.status().reason, FisicaModeReason.noKey);
     await expectLater(license().pair((_) {}), throwsA(isA<FisicaStateError>()));
   });
 }
