@@ -29,7 +29,8 @@ await client.CloseAsync();
   unanswered probe does not prevent use. A transport that never becomes ready fails
   after `timeout` (default 15 s).
 - `CloseAsync` releases resources even when the Scale does not confirm. On `LinkLost`,
-  reopen the same Scale with `ConnectAsync`.
+  reopen the same Scale with `ConnectAsync`. A client dropped without `CloseAsync` is still
+  collected, also while its license lives on.
 - `Report()` returns unrounded weight and foot size from the core's analysis of every
   packet it received since the start, in every mode, and still after `CloseAsync`.
 - `StartAsync` clears the frames of the previous measurement once the core accepts it,
@@ -52,7 +53,9 @@ Transports: `SerialTransport` (USB virtual COM port, 115200 8N1 with DTR and RTS
 like the Python SDK; with DTR off the Scale's ESP32 reboots or stays in reset),
 `BleTransport` (Windows BLE), `MockTransport` (scripted, no hardware), or your own
 `IFisicaTransport`. A missing or busy port is reported through `Error` and `Lost`,
-never thrown into the caller. Finding the Scale's COM port by USB VID is not included yet.
+never thrown into the caller. A failed read closes and releases the port before `Lost`, so
+`ConnectAsync` opens it afresh; after a failed write the port stays open and `ConnectAsync`
+reconnects over it at once. Finding the Scale's COM port by USB VID is not included yet.
 
 `BleTransport` uses WinRT and is part of the package only for apps targeting
 `net8.0-windows10.0.19041.0` or later:
@@ -95,7 +98,11 @@ file it gives. `Release()` frees the key on this app or PC: it forgets the key, 
 the stored key and returns the code to enter in the portal. The activated key is stored
 per company and contract under LocalApplicationData by default (`storage`) and wins over
 an older original key file. A failed exchange only sets `LastSyncError`; it never changes
-the license or throws. `Warning` and `Changed` report new warnings and license changes.
+the license or throws. An answer that arrives after `Release()` or after another key was
+imported is dropped: a released key stays released and the newer key stays. `Warning` and
+`Changed` report new warnings and license changes; `Warning` may pass several bits at once,
+and `FisicaLicenseMessages.Warnings(bits)` (or `Status().WarningMessages`) gives a message for
+each.
 The key stored for this app or PC (paired or imported earlier) is loaded when the
 `FisicaEntitlement` is created; importing the original key file again then reports
 `IgnoredOlder`. Without a key, `await PairAsync(code => ...)` shows a code that an owner or
@@ -110,6 +117,7 @@ One core binary is loaded per process. The low-level `FisicaSession` remains ava
 
 Verified: shared vectors, client in basic and full mode, license states (including
 online activation, renewal and storage against the mock server, and a released key) and serial open-failure handling on macOS and,
-until 2026-10-17, on the GitHub Windows runner; `BleTransport` compiles on both and its failure paths ran on
+until 2026-10-17, on the GitHub Windows runner; on macOS only since then: server answers arriving after a release or another
+import, and serial reconnects and read failures over a stand-in port. `BleTransport` compiles on both and its failure paths ran on
 that runner, which has no Bluetooth device. Windows CI is paused until a self-hosted Windows runner exists. Not verified: a real COM port or BLE
 connection with a Scale, real Windows drivers, and Windows ARM64 execution.

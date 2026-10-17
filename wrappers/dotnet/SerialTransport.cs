@@ -9,42 +9,53 @@ public sealed class SerialTransport(string portName,int baudRate=115200) : IFisi
     public event Action? Ready; public event Action<byte[]>? Bytes; public event Action? Lost;
     public event Action<Exception>? SendFailed; public event Action<Exception>? Error;
     public FisicaLink? Link => FisicaLink.Usb;
-    readonly object gate=new(); SerialPort? port; Thread? reader; volatile bool open;
+    readonly object gate=new(); ISerialPort? port; volatile bool open;
     public string PortName { get; }=portName;
     public static string[] PortNames() => SerialPort.GetPortNames();
+    /// <summary>The port to open; the system serial port unless a test stands in for it.</summary>
+    internal Func<ISerialPort>? Ports { get; init; }
 
     internal SerialPort CreatePort() =>
         new(PortName,baudRate,Parity.None,8,StopBits.One) { Handshake=Handshake.None, DtrEnable=true, RtsEnable=true, ReadTimeout=200, WriteTimeout=1000 };
+    /// <summary>Open the port and raise Ready. Already open (a reconnect after the session gave up on the link,
+    /// for example after a failed write), the link still works: Ready is raised again on the same port.</summary>
     public void Open() {
         lock(gate) {
-            if (open) return;
-            try {
-                port=CreatePort(); port.Open(); open=true;
-            } catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException) {
-                port?.Dispose(); port=null;
-                Error?.Invoke(new FisicaException(1001,$"Cannot open serial port {PortName}: {error.Message}")); Lost?.Invoke(); return;
+            if (!open) {
+                // Never reuse a port left from an earlier link: the OS may refuse to open the same COM port twice.
+                if (port is {} stale) { port=null; Shut(stale); }
+                ISerialPort? created=null;
+                try {
+                    created=Ports?.Invoke() ?? new SystemPort(CreatePort()); created.Open();
+                } catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException) {
+                    if (created!=null) Shut(created);
+                    Error?.Invoke(new FisicaException(1001,$"Cannot open serial port {PortName}: {error.Message}")); Lost?.Invoke(); return;
+                }
+                port=created; open=true;
+                new Thread(Read) { IsBackground=true, Name="fisica-serial" }.Start(created);
             }
-            reader=new Thread(Read) { IsBackground=true, Name="fisica-serial" }; reader.Start(port);
         }
         Ready?.Invoke();
     }
     void Read(object? state) {
-        var active=(SerialPort)state!; var buffer=new byte[4096];
+        var active=(ISerialPort)state!; var buffer=new byte[4096];
         while (open && ReferenceEquals(active,port)) {
             try {
                 int count=active.Read(buffer,0,buffer.Length);
                 if (count>0) Bytes?.Invoke(buffer[..count]);
             } catch (TimeoutException) { /* Idle link. */ }
             catch (Exception error) when (error is IOException or InvalidOperationException or UnauthorizedAccessException or OperationCanceledException) {
-                // Cable removed or port closed underneath us: report the loss once, unless Close() asked for it.
-                if (open && ReferenceEquals(active,port)) { open=false; Error?.Invoke(new FisicaException(1001,$"Serial read failed: {error.Message}")); Lost?.Invoke(); }
+                // Cable removed or port closed underneath us: release the port and report the loss once, unless Close() asked for it.
+                bool failed;
+                lock(gate) { failed=open && ReferenceEquals(active,port); if (failed) { open=false; port=null; } }
+                if (failed) { Shut(active); Error?.Invoke(new FisicaException(1001,$"Serial read failed: {error.Message}")); Lost?.Invoke(); }
                 return;
             }
         }
     }
     public void Send(byte[] bytes) {
         try {
-            SerialPort? active; lock(gate) active=port;
+            ISerialPort? active; lock(gate) active=port;
             if (!open || active==null) throw new InvalidOperationException("Serial port is not open");
             active.Write(bytes,0,bytes.Length);
         } catch (Exception error) when (error is IOException or InvalidOperationException or TimeoutException or UnauthorizedAccessException) {
@@ -52,9 +63,28 @@ public sealed class SerialTransport(string portName,int baudRate=115200) : IFisi
         }
     }
     public void Close() {
-        SerialPort? active;
+        ISerialPort? active;
         lock(gate) { open=false; active=port; port=null; }
-        try { active?.Close(); } catch (IOException) { /* Device already gone. */ }
-        active?.Dispose();
+        if (active!=null) Shut(active);
     }
+    static void Shut(ISerialPort active) {
+        try { active.Close(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException) { /* Device already gone. */ }
+        try { active.Dispose(); } catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException) { }
+    }
+}
+
+/// <summary>What SerialTransport needs of a port: the system serial port, or a stand-in in tests.</summary>
+internal interface ISerialPort : IDisposable {
+    void Open();
+    int Read(byte[] buffer,int offset,int count);
+    void Write(byte[] buffer,int offset,int count);
+    void Close();
+}
+
+sealed class SystemPort(SerialPort port) : ISerialPort {
+    public void Open() => port.Open();
+    public int Read(byte[] buffer,int offset,int count) => port.Read(buffer,offset,count);
+    public void Write(byte[] buffer,int offset,int count) => port.Write(buffer,offset,count);
+    public void Close() => port.Close();
+    public void Dispose() => port.Dispose();
 }

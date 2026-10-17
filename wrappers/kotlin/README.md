@@ -87,7 +87,10 @@ receives the core's activation request and empty renewals. Without an endpoint n
 is used: show `activationCode()` (FAC1), enter it in the portal and import the file it
 gives. `status()` gives the mode, the reason for basic mode, open features, the key and
 its dates; `onStatus` and `onWarning` report changes. `release()` forgets the key and
-returns the FRC1 code that frees the seat in the portal. Pass `storage` (for example
+returns the FRC1 code that frees the seat in the portal. An answer that arrives after
+`release()` or after another key was imported is dropped: a released key stays released
+and the newer key stays. Close the `FisicaEntitlement` when done; one dropped without
+`close()` frees its core context once it is collected. Pass `storage` (for example
 `context.filesDir`) to keep the activated key across launches; it is loaded when the
 `FisicaEntitlement` is created and wins over the original key file the app imports again.
 Without a key, `pair({ code -> ... })` on a worker thread shows a code that an owner or admin

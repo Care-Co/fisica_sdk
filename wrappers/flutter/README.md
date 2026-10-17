@@ -133,6 +133,7 @@ exchange only sets `lastSyncError` and never changes the license; without an end
 no network is used. A key not activated yet shows an activation code
 (`activationCode()`, FAC1) to enter in the developer portal from another device.
 `release()` frees the key on this app or PC and returns the FRC1 code to enter in the
-portal. Pass `storageDirectory` (for example the app support directory) to keep the
+portal. An answer that arrives after `release()` or after another key was imported is
+dropped: a released key stays released and the newer key stays. Pass `storageDirectory` (for example the app support directory) to keep the
 activated key and the latest time seen across launches; a stored key wins over an
 older original key file. The SDK does not track its own use; see `doc/entitlement.md`.

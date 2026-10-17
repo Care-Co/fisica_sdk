@@ -74,7 +74,8 @@ public sealed record SessionReport(double Weight,double LeftWidth,double LeftLen
 /// awaiting context as usual.
 /// Without an Entitlement holding an SDK key activated for this app or PC the client runs in basic mode: connection,
 /// measurement, settings, weight and foot size work, frames arrive at most once a second without Raw and Packet.
-/// The client's timer does not keep it alive: a client dropped without CloseAsync can still be collected.</summary>
+/// Neither the client's timer nor the Entitlement's Changed event keeps it alive: a client dropped without CloseAsync
+/// can still be collected.</summary>
 public sealed class FisicaClient : IAsyncDisposable {
     public FisicaCore Core { get; } public IFisicaTransport Transport { get; }
     /// <summary>The license applied to the session before every start, every 30 seconds and whenever it changes.</summary>
@@ -109,7 +110,17 @@ public sealed class FisicaClient : IAsyncDisposable {
     /// SynchronizationContext.Current on the UI thread; null raises them on the client's worker thread.</param>
     public FisicaClient(FisicaCore core,IFisicaTransport transport,FisicaEntitlement? entitlement=null,SynchronizationContext? callbacks=null) {
         Core=core; Transport=transport; Entitlement=entitlement; this.callbacks=callbacks; session=new FisicaSession(core);
-        if (entitlement!=null) entitlement.Changed+=OnLicenseChanged;
+        if (entitlement!=null) relay=new LicenseRelay(this,entitlement);
+    }
+    readonly LicenseRelay? relay;
+
+    /// <summary>Forwards Entitlement.Changed to the client, holding it weakly: a license usually outlives its clients,
+    /// and a client dropped without CloseAsync must still be collected. Once it is, the next change unsubscribes.</summary>
+    sealed class LicenseRelay {
+        readonly WeakReference<FisicaClient> client; readonly FisicaEntitlement source;
+        internal LicenseRelay(FisicaClient client,FisicaEntitlement source) { this.client=new(client); this.source=source; source.Changed+=Forward; }
+        void Forward(EntitlementStatus status) { if (client.TryGetTarget(out var alive)) alive.OnLicenseChanged(status); else Detach(); }
+        internal void Detach() => source.Changed-=Forward;
     }
 
     /// <summary>Frames of the current measurement. StartAsync clears them; a reconnect keeps them.
@@ -328,7 +339,7 @@ public sealed class FisicaClient : IAsyncDisposable {
         if (closed) return;
         closed=true; linkReady=false; ticker?.Dispose(); readyDeadline?.Cancel();
         if (wired) { Transport.Ready-=OnReady; Transport.Bytes-=OnBytes; Transport.Lost-=OnLost; Transport.SendFailed-=OnSendFailed; Transport.Error-=OnTransportError; }
-        if (Entitlement!=null) Entitlement.Changed-=OnLicenseChanged;
+        relay?.Detach();
         // Report() still works after closing: keep the core's analysis of the last measurement.
         try { closedAnalysis=session.Analyze(); } catch (FisicaException) { }
         CloseTransport(); session.Dispose();

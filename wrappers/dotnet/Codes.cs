@@ -44,6 +44,7 @@ public static class FisicaLicenseMessages {
         FisicaModeReason.FullEnded => "The trial or contract of this SDK key has ended. Basic mode keeps connection, measurement, weight and foot size; raw data and full-rate frames need full mode.",
         _ => null,
     };
+    /// <summary>The message of one warning bit; "" for no bit or several (Warnings lists each).</summary>
     public static string Warning(FisicaEntitlementWarning warning) => warning switch {
         FisicaEntitlementWarning.RenewDue => "The SDK key is due for renewal: connect to the internet or import a renewal file.",
         FisicaEntitlementWarning.Grace => "The contract has ended; full mode continues during the grace period.",
@@ -52,4 +53,7 @@ public static class FisicaLicenseMessages {
         FisicaEntitlementWarning.TestKey => "The SDK key is signed with a TEST key; this is not a production license.",
         _ => "",
     };
+    /// <summary>A message for each bit raised in warnings (as the Warning event passes them), in bit order.</summary>
+    public static IReadOnlyList<string> Warnings(FisicaEntitlementWarning warnings) =>
+        Enum.GetValues<FisicaEntitlementWarning>().Where(bit => (warnings & bit)!=0).Select(Warning).ToArray();
 }

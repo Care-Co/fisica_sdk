@@ -185,6 +185,46 @@ final class LicenseTests: XCTestCase {
         XCTAssertEqual(try reopened.importToken(try Vectors.string("unbound_older")), .ignoredOlder)
         XCTAssertEqual(try reopened.status().mode, .full); XCTAssertEqual(try reopened.status().bind, target)
     }
+    func testLateServerAnswersAfterReleaseOrAnotherImportChangeNothing() throws {
+        // A renewal answered only after the key was released, or after another key was imported: a released
+        // key does not come back (nor its stored state) and the newer key stays, stored as it is.
+        let core = try FisicaCore(), now = try Vectors.now(), day = Vectors.day
+        URLProtocol.registerClass(StubPortal.self)
+        defer { URLProtocol.unregisterClass(StubPortal.self) }
+        for replaced in [false, true] {
+            let answer = try Vectors.string(replaced ? "revoked" : "full")  // either is accepted for the key it was asked for
+            StubPortal.reset { _ in answer }
+            let storage = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: storage) }
+            let entitlement = try FisicaEntitlement(core: core, endpoint: StubPortal.endpoint, storage: storage, clock: { now + day })
+            XCTAssertEqual(try entitlement.importToken(try Vectors.string(replaced ? "full_older" : "full")), .accepted)
+            var result: EntitlementSyncResult?
+            let renewed = expectation(description: "renewal")
+            DispatchQueue.global().async { result = entitlement.syncNow(force: true); renewed.fulfill() }
+            let deadline = Date().addingTimeInterval(5)
+            while !StubPortal.requests.contains(where: { $0.hasSuffix("/refresh") }) && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            XCTAssertTrue(StubPortal.requests.contains { $0.hasSuffix("/refresh") }, "renewal on its way")
+            if replaced {
+                XCTAssertEqual(try entitlement.importToken(try Vectors.string("full")), .accepted)
+            } else {
+                XCTAssertTrue(try entitlement.releaseNow().releasedOnline)
+                XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: storage.path).isEmpty)
+            }
+            StubPortal.answerRefresh()
+            wait(for: [renewed], timeout: 5)
+            XCTAssertEqual(result, EntitlementSyncResult(activated: false, refreshed: false, error: nil))
+            let status = try entitlement.status()
+            let files = try FileManager.default.contentsOfDirectory(atPath: storage.path)
+            if replaced {
+                XCTAssertEqual(status.mode, .full); XCTAssertEqual(status.verifiedAt, now); XCTAssertEqual(files.count, 1)
+                let reopened = try FisicaEntitlement(core: core, storage: storage, clock: { now + day })
+                XCTAssertEqual(try reopened.status().mode, .full); XCTAssertEqual(try reopened.status().verifiedAt, now)
+            } else {
+                XCTAssertEqual(status.reason, .noKey); XCTAssertEqual(status.key, ""); XCTAssertTrue(files.isEmpty)
+            }
+            XCTAssertEqual(StubPortal.requests.filter { $0.hasSuffix("/refresh") }.count, 1)
+        }
+    }
     func testStatusAndWarningsAreAnnouncedOnce() throws {
         let core = try FisicaCore(), now = try Vectors.now()
         var clock = now, statuses: [EntitlementStatus] = [], warnings: [FisicaEntitlementWarning] = []
@@ -436,6 +476,25 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(try client.report()?.weight, 70.5)
         waitFor("start after close") { done in client.start { result in XCTAssertNotNil(self.failure(result)); done() } }
     }
+    func testClientReleasedMidOperationClosesTheLinkAndCancelsWhatWaits() throws {
+        // Only the start in flight holds the client (the transport's callbacks are weak); the Scale never confirms.
+        let core = try FisicaCore(), transport = try scale(core)
+        transport.exchanges[try core.command("START_CONTINUOUS_MEASUREMENT")] = []
+        weak var released: FisicaClient?
+        var outcome: Error?
+        let started = expectation(description: "start completion")
+        func startAndForget() throws {
+            let client = try FisicaClient(core: core, transport: transport)
+            released = client
+            waitFor("connect") { done in client.connect(.usb) { result in self.ok(result); done() } }
+            client.start { result in outcome = self.failure(result); started.fulfill() }
+        }
+        try startAndForget()
+        wait(for: [started], timeout: 5)
+        XCTAssertNil(released)
+        XCTAssertEqual((outcome as? FisicaError)?.code, Int32(FisicaStatus.cancelled.rawValue))
+        XCTAssertFalse(transport.isOpen)
+    }
     func testStartClearsThePreviousMeasurementAndFramesStayBounded() throws {
         let core = try FisicaCore(), transport = try scale(core, frames: 8)
         let client = try FisicaClient(core: core, transport: transport, entitlement: try Vectors.entitlement(core, key: "full"))
@@ -509,6 +568,36 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(failed.error?.hasPrefix("network:"), true); XCTAssertFalse(failed.activated)
         XCTAssertEqual(try offline.status().reason, .notActivated); XCTAssertEqual(offline.lastSyncError, failed.error)
     }
+}
+
+/// Stands in for the developer portal at `endpoint` inside this process (URLSession.shared asks it first):
+/// every request gets `{"token": answer(path)}`; a renewal's answer waits for `answerRefresh()`.
+final class StubPortal: URLProtocol {
+    static let endpoint = URL(string: "http://portal.stub.test")!
+    private static let lock = NSLock()
+    private static var paths: [String] = [], answer: (String) -> String = { _ in "" }, gate = DispatchSemaphore(value: 0)
+    static var requests: [String] { lock.lock(); defer { lock.unlock() }; return paths }
+    static func reset(answer: @escaping (String) -> String) {
+        lock.lock(); paths = []; self.answer = answer; gate = DispatchSemaphore(value: 0); lock.unlock()
+    }
+    static func answerRefresh() { lock.lock(); let gate = self.gate; lock.unlock(); gate.signal() }
+
+    override class func canInit(with request: URLRequest) -> Bool { request.url?.host == endpoint.host }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let url = request.url!, path = url.path
+        StubPortal.lock.lock(); StubPortal.paths.append(path); let token = StubPortal.answer(path), gate = StubPortal.gate; StubPortal.lock.unlock()
+        DispatchQueue.global().async {
+            if path.hasSuffix("/refresh") { gate.wait() }
+            let body = try! JSONSerialization.data(withJSONObject: ["token": token])
+            self.client?.urlProtocol(self, didReceive: HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",
+                                                                       headerFields: ["Content-Type": "application/json"])!,
+                                     cacheStoragePolicy: .notAllowed)
+            self.client?.urlProtocol(self, didLoad: body)
+            self.client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+    override func stopLoading() {}
 }
 
 /// Runs an async call from a synchronous test.

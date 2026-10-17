@@ -402,6 +402,74 @@ void main() {
     expect((await entitlement.sync())!.refreshed, isFalse);
     expect(requests, hasLength(1));
   });
+  for (final replaced in [false, true]) {
+    // A renewal answered only after the key was released, or after another
+    // key was imported, changes nothing: a released key does not come back
+    // (nor its stored state) and the newer key stays, stored as it is.
+    test(
+      replaced
+          ? 'a renewal answered after another import leaves the newer key'
+          : 'a renewal answered after release does not bring the key back',
+      () async {
+        final answered = Completer<void>();
+        final requests = <String>[];
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        server.listen((request) async {
+          requests.add(request.uri.path);
+          await utf8.decoder.bind(request).join();
+          if (request.uri.path.endsWith('/refresh')) await answered.future;
+          request.response.headers.contentType = ContentType.json;
+          // Either is accepted for the key it was asked for.
+          request.response.write(
+            jsonEncode({'token': vectors[replaced ? 'revoked' : 'full']}),
+          );
+          await request.response.close();
+        });
+        final directory = temporary();
+        final entitlement = license(
+          clock: () => now + day,
+          storage: directory.path,
+          endpoint: 'http://127.0.0.1:${server.port}',
+        );
+        expect(
+          entitlement.importToken(
+            vectors[replaced ? 'full_older' : 'full'] as String,
+          ),
+          FisicaEntitlementOutcome.accepted,
+        );
+        final renewal = entitlement.sync(force: true);
+        while (!requests.any((path) => path.endsWith('/refresh'))) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+        }
+        if (replaced) {
+          expect(
+            entitlement.importToken(vectors['full'] as String),
+            FisicaEntitlementOutcome.accepted,
+          );
+        } else {
+          expect((await entitlement.releaseOnline()).releasedOnline, isTrue);
+          expect(directory.listSync(), isEmpty);
+        }
+        answered.complete();
+        expect(await renewal, (activated: false, refreshed: false, error: null));
+        final status = entitlement.status();
+        if (replaced) {
+          expect(status.isFull, isTrue);
+          expect(status.verifiedAt, now);
+          expect(directory.listSync(), hasLength(1));
+          final reopened = license(clock: () => now + day, storage: directory.path);
+          expect(reopened.status().isFull, isTrue);
+          expect(reopened.status().verifiedAt, now);
+        } else {
+          expect(status.reason, FisicaModeReason.noKey);
+          expect(status.key, isNull);
+          expect(directory.listSync(), isEmpty);
+        }
+        expect(requests.where((path) => path.endsWith('/refresh')), hasLength(1));
+      },
+    );
+  }
   test('online activation for this PC against the mock developer portal', () async {
     // The reference server started by tools/verify_bindings.py holds the
     // unactivated `unbound` key and checks every request it receives.

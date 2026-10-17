@@ -484,7 +484,8 @@ class FisicaEntitlement implements Finalizable {
   /// Release the key activated here: the core forgets it, the stored state is
   /// deleted, and the FRC1 code to enter in the developer portal is returned.
   /// Online, the server is also told in the background, which frees the seat
-  /// at once ([releaseOnline] waits for that). Throws [FisicaStateError]
+  /// at once ([releaseOnline] waits for that). An activation or renewal still
+  /// on its way does not bring the key back. Throws [FisicaStateError]
   /// without a key activated for this app or PC.
   String release() {
     final (code, token) = _releaseHere();
@@ -720,7 +721,10 @@ class FisicaEntitlement implements Finalizable {
         );
       }
       final response = jsonDecode(text) as Map<String, dynamic>;
-      if (_handle == nullptr) {
+      // The answer belongs to the key it was asked for. Released or replaced
+      // (release, importToken, restoreState) while it was on its way, it is
+      // dropped: a released key never comes back and a newer key stays.
+      if (_handle == nullptr || _text(FisicaEntitlementText.token) != due.token) {
         return (activated: false, refreshed: false, error: null);
       }
       final token = response['token'];
@@ -756,7 +760,8 @@ class FisicaEntitlement implements Finalizable {
   /// Activate or renew online when due; [force] renews now. Runs after any
   /// exchange already in progress, completes with what happened (null without
   /// an endpoint or when [online] is false) and never throws. A failure
-  /// changes no license state.
+  /// changes no license state, and neither does an answer for a key released
+  /// or replaced while it was on its way.
   Future<EntitlementSync?> sync({bool force = false}) {
     if (!online || _endpoint == null) return Future.value(null);
     final result = _exchange.then((_) => _exchangeOnce(force));

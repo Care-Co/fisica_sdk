@@ -103,6 +103,8 @@ enum class PairingResult { APPROVED, DENIED, EXPIRED, CANCELLED }
  * SDK use is not tracked: the stored state is the signed key and the latest time seen, and the
  * server receives only the core's activation request (this app's ID or PC hash) and empty
  * renewal requests.
+ *
+ * Close it when done; a license dropped without [close] frees its core context once it is collected.
  */
 class FisicaEntitlement @JvmOverloads constructor(
     @Suppress("unused") private val core: FisicaCore,
@@ -112,6 +114,8 @@ class FisicaEntitlement @JvmOverloads constructor(
     private val clock: () -> Long = { System.currentTimeMillis() / 1000 },
 ) : AutoCloseable {
     private var handle = Bridge.entitlementCreate()
+    // Frees the core context of a license dropped without close(); captures only the native handle, never this object.
+    private val cleanable = handle.let { native -> NativeCleaner.register(this) { Bridge.entitlementDestroy(native) } }
     private val endpoint = endpoint?.trimEnd('/')
     private var syncing = false
     private val syncLock = Any()  // One exchange with the server at a time.
@@ -161,7 +165,8 @@ class FisicaEntitlement @JvmOverloads constructor(
         return synchronized(this) { runCatching { Bridge.entitlementRestore(handle, chosen.third); generation++ }.isSuccess }
     }
 
-    @Synchronized override fun close() { if (handle != 0L) { Bridge.entitlementDestroy(handle); handle = 0 } }
+    /** Frees the core context. A license dropped without close() is freed once it is collected. */
+    @Synchronized override fun close() { if (handle != 0L) { handle = 0; cleanable.clean() } }
     private fun open(): Long { check(handle != 0L) { "Closed entitlement context" }; return handle }
     private fun now(): Long = clock().also { require(it in 0..(1L shl 53)) { "Expected Unix seconds" } }
     private fun monotonic() = System.nanoTime() / 1_000_000
@@ -257,7 +262,8 @@ class FisicaEntitlement @JvmOverloads constructor(
      * Release the key activated for this app or PC: the core forgets it and returns the FRC1
      * release code to enter in the developer portal, which frees the seat. The stored state is
      * deleted. Online, the server is also told in the background, which frees the seat at once
-     * ([releaseNow] waits for that). Throws [FisicaException] ([FisicaStatus.INVALID_STATE]) without such a key.
+     * ([releaseNow] waits for that). An activation or renewal still on its way does not bring the key back.
+     * Throws [FisicaException] ([FisicaStatus.INVALID_STATE]) without such a key.
      */
     fun release(): String {
         val (code, token) = releaseHere()
@@ -273,6 +279,7 @@ class FisicaEntitlement @JvmOverloads constructor(
         return code to (token != null && tellReleased(token))
     }
     private fun releaseHere(): Pair<String, String?> {
+        // Under the same lock as importing a server answer, which happens only while its key is still loaded.
         val (code, token) = synchronized(this) {
             open()
             val file = stateFile()
@@ -399,7 +406,8 @@ class FisicaEntitlement @JvmOverloads constructor(
     /**
      * Activate or renew with the server now, on the calling thread (never the main thread): a key
      * not activated yet is activated, a key is renewed when renewal is due or with [force].
-     * Returns null or the problem. A failure changes no license state and nothing is thrown.
+     * Returns null or the problem. A failure changes no license state and nothing is thrown. An
+     * answer for a key released or replaced while it was on its way changes nothing.
      */
     @JvmOverloads fun syncNow(force: Boolean = false): String? {
         if (!online || endpoint == null) return null
@@ -416,9 +424,12 @@ class FisicaEntitlement @JvmOverloads constructor(
                 throw IOException("HTTP $status ${response.take(200)}".trim())
             }
             val token = Json.string(response, "token") ?: throw IOException("Unexpected response")
-            lastSyncError = null
             synchronized(this) {
                 if (handle == 0L) return null
+                // The answer belongs to the key it was asked for. Released or replaced (release, importToken,
+                // restoreState) while it was on its way, it is dropped: a released key never comes back and a newer key stays.
+                if (text(FisicaEntitlementText.TOKEN).orEmpty() != due.token) return null
+                lastSyncError = null
                 val now = now()
                 val accepted = Bridge.entitlementImport(handle, token.toByteArray(Charsets.US_ASCII), now) == FisicaEntitlementOutcome.ACCEPTED
                 if (Bridge.entitlementStatus(handle, now)[1].toInt() == FisicaModeReason.REVOKED) {
@@ -446,6 +457,8 @@ class FisicaEntitlement @JvmOverloads constructor(
         try {
             Thread({
                 try { syncNow(force) } catch (_: Throwable) {} finally { synchronized(this) { syncing = false } }
+                // A key imported during this exchange asked for its own (importToken makes one due at once).
+                if (synchronized(this) { monotonic() >= nextSync }) sync()
             }, "fisica-entitlement-sync").apply { isDaemon = true }.start()
         } catch (error: Throwable) { synchronized(this) { syncing = false }; lastSyncError = "network: ${error.message}" }
     }
