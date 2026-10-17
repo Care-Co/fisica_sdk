@@ -106,9 +106,12 @@ dotnet run --project dotnet/Quickstart.csproj -f net8.0-windows10.0.19041.0 -- b
 3. 기본 App/ContentView 파일을 제거하고 `swift/ScaleApp.swift`를 앱 대상에 추가한다.
 4. Info.plist에 `NSBluetoothAlwaysUsageDescription`, `NSBluetoothPeripheralUsageDescription`을
    넣고 사용자에게 Scale 연결 목적을 설명한다. sandboxed macOS 앱에는 Bluetooth capability를 추가한다.
-5. 지원되는 iOS/macOS 대상으로 실행하고 권한을 허용한 후 목록에서 Scale을 선택한다.
+5. 지원되는 iOS/macOS 대상으로 실행하고 권한을 허용한다. **Scan for Scales**로 찾은 목록에서
+   Scale을 고르고 **Connect**(배터리도 읽음), **Measure (5 s)**, **Disconnect** 순서로 누른다.
+   하드웨어 없이 보려면 `scale-mock.json`을 앱 대상의 리소스로 추가하고 **Demo without hardware**를 누른다.
 
-이 샘플은 BLE 연결 → 5초 측정 → 종료 → 결과 표시 → 연결 해제를 수행한다.
+화면 구성과 결과 항목(Weight, Left foot, Right foot, Frames, Battery)은 모든 샘플이 같다
+([샘플 README](../examples/partner/README.md)).
 기기용 iOS 앱의 서명과 실제 BLE 측정은 별도 확인이 필요하다. Swift USB 어댑터는 없다.
 
 ## Kotlin/Java: Android
@@ -118,7 +121,9 @@ dotnet run --project dotnet/Quickstart.csproj -f net8.0-windows10.0.19041.0 -- b
 2. 받은 AAR를 `android/sdk/fisica-scale-0.3.0.aar`로 넣는다. AAR 안에 공개 클래스와
    세 가지 CPU의 core/JNI 바이너리가 포함돼 있다. Kotlin stdlib 의존성은 샘플에 선언돼 있다.
 3. `app-kotlin` 또는 `app-java` 실행 구성을 선택한다. SDK 사용 과정은 같고 호출 문법만 다르다.
-4. 앱에서 **Scan BLE**를 누르고 권한을 허용한 뒤 기기 목록에서 Scale을 선택한다.
+4. 앱에서 **Scan for Scales**를 누르고 권한을 허용한 뒤 목록에서 Scale을 고르고 **Connect**,
+   **Measure (5 s)**, **Disconnect** 순서로 누른다. 하드웨어 없이 보려면 `scale-mock.json`을
+   `app-kotlin/src/main/assets/`(또는 `app-java/src/main/assets/`)에 넣고 **Demo without hardware**를 누른다.
 
 AAR의 네이티브 라이브러리는 16KB 페이지 기기(Android 15+, Google Play 요구사항)용으로
 빌드돼 있다: LOAD 세그먼트 16KB 정렬, RELRO 끝 16KB 경계. 앱은 AGP 8.5.1 이상으로 빌드해야
@@ -159,7 +164,8 @@ flutter run -d windows      # Windows에서 실행
 대상을 빌드 오류로 거절하므로 iOS 13/14 기기는 지원하지 않는다). 이를 위해 `ios/Podfile`과
 `macos/Podfile`을 만들어 `platform :ios, '15.0'`, `platform :osx, '12.0'`으로 하고, 더 낮은 버전을
 선언한 pod(`Flutter`, `libserialport` 등)를 `post_install`에서 최소 버전으로 올린다. Android 런타임 권한 요청은 샘플 Dart 코드에 있다.
-**Demo without hardware**로 합성 데이터의 70.5kg·12프레임을 확인한 뒤 실제 연결을 시도한다.
+**Demo without hardware**로 합성 데이터의 `Weight: 70.5 kg`을 확인한 뒤 실제 연결을 시도한다. 키 없는
+기본 모드에서는 합성 데이터의 12프레임이 한꺼번에 들어와 초당 1장 제한으로 `Frames: 1`이 표시된다.
 
 Xcode 27에서는 Flutter 3.44.8 이상(최신 stable 권장)을 쓴다. 그보다 낮은 Flutter(예: 3.41.x)는
 여러 아키텍처를 한 번에 확인하는 `lipo -verify_arch`를 Xcode 27의 `lipo`가 거절해, arm64와 x86_64를
