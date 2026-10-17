@@ -1,13 +1,13 @@
 name: Multi-platform core and bindings
-# Pull requests and manual runs only: merging to main does not run the same checks again.
+# Manual only (Actions > Run workflow, or gh workflow run): wrappers and platform builds are checked
+# when someone asks for it. Verify locally with tools/verify_bindings.py and pytest first.
 on:
   workflow_dispatch:
-  pull_request:
-    paths: ['native/**', 'wrappers/**', 'tools/**', 'tests/**', 'examples/partner/**', 'sdk-release.json', '.github/workflows/platform-builds.yml']
+
 permissions:
   contents: read
 concurrency:
-  # A newer push to the same branch or pull request replaces the run in progress.
+  # A newer run on the same branch replaces the one in progress.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
