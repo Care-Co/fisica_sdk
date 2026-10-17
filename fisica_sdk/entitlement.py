@@ -71,9 +71,10 @@ class Entitlement:
     token/file: an SDK key from the developer portal, or a key file the portal made for this
     device (activation or renewal file; works on a PC that is never online). endpoint: server
     base URL; without it no network is used. online=False keeps a configured endpoint unused.
-    storage: state file path, None for memory only, or by default a per-seat file in the user's
-    application-data directory; there, without token and file, the key stored for this app or PC
-    (paired or imported earlier) is loaded. Contexts are never shared between instances.
+    storage: None for memory only; by default a per-seat file in the user's application-data
+    directory; an existing directory to keep those per-seat files there instead (as the other
+    wrappers take it); or a file path. Without token and file, the key stored there for this app or
+    PC (paired or imported earlier) is loaded. Contexts are never shared between instances.
 
     Online, an unactivated key is activated for this app or PC automatically, and a key is
     renewed before it expires. Network failures never change the license.
@@ -98,7 +99,7 @@ class Entitlement:
             token = Path(file).read_text(encoding='ascii', errors='replace')
         if token is not None:
             self.import_token(token)
-        elif storage is AUTO and self._load_stored():
+        elif storage is not None and self._load_stored():
             self._notify()
             self.sync()
         else:
@@ -112,14 +113,23 @@ class Entitlement:
     def _now(self):
         return int(self._clock())
 
+    def _directory(self):
+        """The directory of per-seat state files, or None when storage is one file (or memory only)."""
+        if self._storage is AUTO:
+            return default_storage_directory()
+        if self._storage is not None and Path(self._storage).is_dir():
+            return Path(self._storage)
+        return None
+
     def _path(self, status):
         if self._storage is None or not status['company']:
             return None
-        if self._storage is not AUTO:
+        directory = self._directory()
+        if directory is None:
             return Path(self._storage)
         # One file per seat on this device, named by the core from the company, the contract and this
         # app's or PC's target: every wrapper on the PC finds the same file. Never a usage record.
-        return default_storage_directory() / self._native.state_name()
+        return directory / self._native.state_name()
 
     def _save(self, path=None):
         try:
@@ -145,10 +155,23 @@ class Entitlement:
 
         State files are named by the core from the company, the contract and the target, so a file
         whose name the core gives again after restoring it belongs to this app or PC. With several,
-        a full-mode key wins, then the most recently verified one.
+        a full-mode key wins, then the most recently verified one. With storage set to one file, that
+        file is loaded as it is.
         """
+        directory = self._directory()
+        if directory is None:
+            try:
+                state = Path(self._storage).read_bytes()
+            except OSError:
+                return False
+            with self._lock:
+                try:
+                    self._native.restore_state(state)
+                except (ValueError, RuntimeError):
+                    return False
+            return True
         try:
-            paths = sorted(default_storage_directory().glob('entitlement-*.state'))
+            paths = sorted(directory.glob('entitlement-*.state'))
         except OSError:
             return False
         best = None
@@ -279,23 +302,25 @@ class Entitlement:
         once; `released_online` says whether that worked. Offline, or when it failed, enter the code at
         the key in the developer portal.
         """
-        with self._lock:
-            path = self._path(self._native.status(self._now()))
-            token = self._native.token()
-            code = self._native.release()
-            try:
-                if path:
-                    path.unlink(missing_ok=True)
-            except OSError as error:
-                self.last_sync_error = 'storage: ' + str(error)
-        self._notify()
-        self.released_online = False
-        if self._online and self._endpoint and token:
-            try:
-                self._post('/sdk/v1/entitlement/release', token, {})
-                self.released_online = True
-            except Exception as error:
-                self.last_sync_error = 'network: ' + str(error)
+        # After any exchange in flight: a renewal answered after the release would store the key again.
+        with self._sync_lock:
+            with self._lock:
+                path = self._path(self._native.status(self._now()))
+                token = self._native.token()
+                code = self._native.release()
+                try:
+                    if path:
+                        path.unlink(missing_ok=True)
+                except OSError as error:
+                    self.last_sync_error = 'storage: ' + str(error)
+            self._notify()
+            self.released_online = False
+            if self._online and self._endpoint and token:
+                try:
+                    self._post('/sdk/v1/entitlement/release', token, {})
+                    self.released_online = True
+                except Exception as error:
+                    self.last_sync_error = 'network: ' + str(error)
         return code
 
     def pair(self, on_code=None, timeout=None, cancel=None):
@@ -406,6 +431,8 @@ class Entitlement:
                     self._next_sync = time.monotonic() + 3600
                 raise RuntimeError(f"{error.code} {error.read().decode('utf-8', 'replace')[:200]}") from None
             with self._lock:
+                if self._native.token() != token:  # released or replaced while the server answered
+                    return result
                 save = self._native.import_token(response['token'], self._now()) == 1
                 result['activated' if path.endswith('activate') else 'refreshed'] = save
                 if REASON[self._native.status(self._now())['reason']] == 'revoked':

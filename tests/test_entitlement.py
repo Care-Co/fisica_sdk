@@ -569,3 +569,70 @@ def test_times_that_are_not_unix_seconds_are_refused():
     with NativeEntitlement() as context:
         with pytest.raises(FisicaArgumentError):
             context.status(NOW * 1000)  # milliseconds by mistake
+
+
+def test_a_storage_file_or_directory_is_loaded_again_without_a_key(tmp_path):
+    quiet(token=key(), storage=tmp_path / 'state', clock=Clock())
+    again = quiet(storage=tmp_path / 'state', clock=Clock())
+    assert again.status()['key'] == 'key_1'
+    directory = tmp_path / 'keys'
+    directory.mkdir()
+    quiet(token=key(), storage=directory, clock=Clock())  # per-seat files, as the other wrappers keep them
+    assert [path.name.startswith('entitlement-') for path in directory.iterdir()] == [True]
+    assert quiet(storage=directory, clock=Clock()).status()['key'] == 'key_1'
+
+
+def test_a_renewal_in_flight_does_not_bring_a_released_key_back(server, tmp_path):
+    import threading
+    mock, url = server
+    entitlement = quiet(token=key(bound=False), endpoint=url, storage=tmp_path / 'state', clock=Clock())
+    entitlement.sync(wait=True)  # activated here, as the server knows it
+    assert entitlement.status()['mode'] == 'full'
+    post, started = entitlement._post, threading.Event()
+
+    def slow(path, token, body):
+        if path.endswith('/refresh'):
+            started.set()
+            time.sleep(0.3)  # the release comes while the renewal waits for its answer
+        return post(path, token, body)
+    entitlement._post = slow
+    entitlement.sync(force=True)
+    assert started.wait(2)
+    entitlement.release()
+    entitlement._sync_thread.join()
+    assert entitlement.status()['reason'] == 'no_key' and not (tmp_path / 'state').exists()
+
+
+def test_license_import_takes_the_key_itself_or_a_file(key_storage, capsys, tmp_path):
+    from conftest import full_key
+    from fisica_sdk.cli import main
+    assert main(['license', 'import', full_key()]) == 0
+    assert 'Mode: full' in capsys.readouterr().out
+    (tmp_path / 'key.fse').write_text(full_key())
+    assert main(['license', 'import', str(tmp_path / 'key.fse')]) == 0
+    assert main(['license', 'import', 'x' * 400]) == 2  # neither a key nor a file: no traceback
+    assert 'No such key file' in capsys.readouterr().err
+
+
+def test_a_renewal_in_flight_does_not_replace_a_key_imported_meanwhile(server, tmp_path):
+    import threading
+    mock, url = server
+    mock.add_key('key_2', 'acme', 'ctr-1', days=30)
+    entitlement = quiet(token=key(bound=False), endpoint=url, storage=None, clock=Clock())
+    entitlement.sync(wait=True)
+    post, started, answer = entitlement._post, threading.Event(), threading.Event()
+
+    def slow(path, token, body):
+        if path.endswith('/refresh'):
+            started.set()
+            answer.wait(2)
+        return post(path, token, body)
+    entitlement._post = slow
+    entitlement.sync(force=True)
+    assert started.wait(2)
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', FisicaEntitlementWarning)
+        entitlement.import_token(key(key='key_2'))
+    answer.set()
+    entitlement._sync_thread.join()
+    assert entitlement.status()['key'] == 'key_2'

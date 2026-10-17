@@ -191,11 +191,14 @@ if __name__ == "__main__":
 ### 커스텀 콜백 함수
 
 ```python
+import numpy as np
+
 def advanced_callback(frame):
     """고급 데이터 처리"""
     # 커스텀 분석
-    pressure_sum = frame.grid.sum()
-    max_pressure = frame.grid.max()
+    grid = np.array(frame.sensor_matrix)
+    pressure_sum = grid.sum()
+    max_pressure = grid.max()
     
     # 파일에 로그 기록
     with open("pressure_log.txt", "a") as f:
@@ -268,9 +271,8 @@ sdk = fisica.FisicaSDK(debug=logging.DEBUG)        # 또는 SDK 로그만 stderr
 ### `scan_devices()`
 
 **Description**:  
-시리얼 또는 블루투스 연결을 통해 사용 가능한 스케일 장치를 스캔합니다.  
-유선 장치가 연결되어 있으면 즉시 유선 장치 정보를 반환하고,  
-그렇지 않으면 블루투스를 통해 전원이 켜진 스케일 장치를 검색합니다.
+시리얼(USB)과 블루투스로 사용 가능한 스케일 장치를 스캔합니다. 기본으로 두 연결을 모두 검색하며,
+`transport='Serial'` 또는 `transport='Bluetooth'`로 하나만 검색할 수 있습니다(그때 검색할 수 없는 연결이면 `FisicaTransportError`).
 
 **Parameters**:  
 없음
@@ -296,7 +298,7 @@ sdk = fisica.FisicaSDK(debug=logging.DEBUG)        # 또는 SDK 로그만 stderr
 ### `disconnect()`
 
 **Description**:  
-연결된 Scale 연결을 종료합니다. 측정 작업이 완료될 때까지 자동으로 대기합니다.
+연결된 Scale 연결을 종료합니다. 기다리지 않고 바로 돌아오므로, 끝난 뒤에 이어서 작업하려면 `wait()`를 호출하세요.
 
 **Parameters**:  
 없음
@@ -386,15 +388,15 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 **Description**:  
 현재 세션에서 수집한 프레임을 분석하여 발 크기, 압력 분포 등 관련 지표를 계산합니다.
 
-이 함수는 측정 직후에만 유효한 값을 반환하며, 이후에는 정상 동작하지 않을 수 있습니다.  
-가장 최신 세션 레포트를 얻으려면 `get_current_report()` 호출을 권장합니다.  
+이 함수는 측정 직후에만 유효한 값을 반환하며, 분석한 뒤에는 세션의 프레임을 비웁니다.  
+가장 최근 레포트는 `get_report()`로 다시 얻을 수 있습니다.  
 레포트를 불러오거나, 내보내기 전에 반드시 `analyze()`를 호출하시기 바랍니다.
 
 **Parameters**:  
 없음
 
 **Returns**:
-- `Dict`: 메타데이터, 센서 그리드, 체중 등 분석 결과가 포함된 Dictionary 데이터 입니다.
+- `SessionReport`: 체중, 발 길이·너비, 프레임 수, 배터리 등 분석 결과입니다. 안정된 구간이 없으면 `None`입니다.
 
 ---
 
@@ -420,7 +422,7 @@ SDK 내장 `sleep()`은 메인 스레드 실행을 차단하지 않습니다.
 없음
 
 **Returns**:
-- `Dict`: 메타데이터, 센서 그리드, 계산된 결과가 포함된 Dictionary 데이터 입니다.
+- `List[Dict]`: 가장 최근 레포트 하나를 직렬화한 목록입니다(기본 모드에서는 프레임 없이 요약만). 아직 분석하지 않았으면 `None`입니다.
 
 ---
 

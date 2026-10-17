@@ -84,10 +84,23 @@ def _pair(args):
     return 0 if outcome == 'approved' else 1
 
 
+def _is_file(text):
+    try:
+        return Path(text).is_file()
+    except (OSError, ValueError):  # a name too long or with a NUL byte cannot be a file
+        return False
+
+
 def _import(args):
-    source = Path(args.key)
-    file = source if source.is_file() else None
-    entitlement = Entitlement(token=None if file else args.key, file=file, endpoint=None if args.offline else args.endpoint)
+    key = args.key.strip()
+    if key.startswith('FSE1.'):  # the key itself, pasted from the developer portal
+        file = None
+    elif _is_file(key):
+        file = Path(key)
+    else:
+        print(f'No such key file: {key}. Pass a key file (.fse) or the key itself (FSE1.…).', file=sys.stderr)
+        return 2
+    entitlement = Entitlement(token=None if file else key, file=file, endpoint=None if args.offline else args.endpoint)
     entitlement.sync(wait=True)
     status = entitlement.status()
     _print(status, args.json)

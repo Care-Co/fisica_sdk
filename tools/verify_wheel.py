@@ -129,6 +129,8 @@ def verify_wheel(path, extras=None, validation=False):
     path = Path(path).resolve()
     audit_archive(path, validation=validation)
     full = wheel_trusts_test_key(path)
+    if validation and not full:
+        raise SystemExit(f'{path.name}: --validation was given but the wheel does not trust the test key')
     with tempfile.TemporaryDirectory(prefix='fisica-wheel-') as temporary:
         root = Path(temporary)
         venv.EnvBuilder(with_pip=True).create(root / 'venv')
@@ -137,6 +139,11 @@ def verify_wheel(path, extras=None, validation=False):
         subprocess.run([str(python),'-m','pip','install','--disable-pip-version-check',requirement],check=True,cwd=root)
         from entitlement_dev import host_pc_vectors
         environment = dict(os.environ)
+        # Keys stored for this PC (a paired development Mac) must not leak into the smoke test.
+        home = root / 'home'
+        home.mkdir()
+        environment.update(HOME=str(home), USERPROFILE=str(home), XDG_STATE_HOME=str(home / 'state'),
+                           LOCALAPPDATA=str(home / 'AppData' / 'Local'), APPDATA=str(home / 'AppData' / 'Roaming'))
         # The same test-signed key for this PC opens full mode in a validation wheel and nothing in a release wheel.
         environment['FISICA_VERIFY_TOKEN'] = host_pc_vectors(int(time.time()))['full']
         environment['FISICA_VERIFY_FULL'] = '1' if full else '0'
