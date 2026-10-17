@@ -30,10 +30,12 @@ jobs:
           test -x "$developer/usr/bin/xcodebuild" || { echo "::error::No Xcode on this runner"; exit 1; }
           DEVELOPER_DIR="$developer" xcodebuild -version
           { echo "DEVELOPER_DIR=$developer"; echo "FISICA_XCODE_DEVELOPER=$developer"; } >> "$GITHUB_ENV"
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with: {python-version: '3.11'}
-        # On a self-hosted Mac the Python installer otherwise writes to /Users/runner (GitHub's runner user).
-        env: {AGENT_TOOLSDIRECTORY: '${{ runner.tool_cache }}'}
+      - name: Python from the Mac (setup-python cannot install into this runner's tool cache)
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -sf "$(command -v python3)" "$RUNNER_TEMP/bin/python"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/python" --version
       - run: python tools/build_platforms.py --validation --target apple
       - name: Swift contract (client, entitlement, online exchange with the mock server)
         run: python tools/verify_bindings.py swift
