@@ -22,7 +22,8 @@ final class ScaleModel: ObservableObject {
             // Online, the developer portal activates the SDK key for this app's bundle ID and renews it.
             let entitlement = try FisicaEntitlement(core: core, endpoint: URL(string: "https://developer.fisicahealthcare.com"))
             entitlement.onStatus = { [weak self] status in DispatchQueue.main.async { self?.show(status) } }
-            // Optional: the SDK key file from the developer portal, added to the app as fisica.fse.
+            // Optional: the SDK key file from the developer portal, added to the app as fisica.fse. The key is
+            // bound to this bundle ID, one seat for every install, so it ships inside the app (pairing is for PCs).
             // Without a key the app runs in basic mode: weight and foot size, one preview frame a second.
             if let key = Bundle.main.url(forResource: "fisica", withExtension: "fse") { try entitlement.importFile(key) }
             self.core = core; self.entitlement = entitlement

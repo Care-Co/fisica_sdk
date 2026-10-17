@@ -2,7 +2,14 @@
 import argparse
 import json
 from pathlib import Path
+import webbrowser
 from fisica_sdk import FisicaSDK, MockTransport, NativeCore
+
+
+def show_code(info):
+    print(f"Pairing code: {info['user_code']}")
+    print(f"Approve it at {info['verification_uri']} (valid for {info['expires_in'] // 60} minutes). Waiting...", flush=True)
+    webbrowser.open(info['verification_uri_complete'])
 
 
 def main():
@@ -12,13 +19,22 @@ def main():
     parser.add_argument('--list', action='store_true')
     parser.add_argument('--mock', type=Path, help='Path to scale-mock.json; no hardware needed')
     parser.add_argument('--key', type=Path, help='SDK key file from the developer portal (full mode)')
-    parser.add_argument('--endpoint', help='Developer portal URL, to activate and renew the key online')
+    parser.add_argument('--pair', action='store_true',
+                        help='Without a stored key: show a code to approve in the developer portal; the key is stored for this PC')
+    parser.add_argument('--endpoint', help='Developer portal URL, to activate and renew the key online '
+                                           '(stored and paired keys: https://developer.fisicahealthcare.com by default)')
     args = parser.parse_args()
     sdk = FisicaSDK()
     if args.key:
         sdk.configure_entitlement(file=args.key, endpoint=args.endpoint)
         if args.endpoint:
             sdk._entitlement.sync(wait=True)  # activate a new key before measuring
+    elif args.endpoint:
+        sdk.configure_entitlement(endpoint=args.endpoint)  # the key stored for this PC, renewed with this server
+    # Without --key the SDK uses the key stored for this PC: paired with --pair or
+    # `python -m fisica_sdk license pair`, or imported earlier.
+    if args.pair and not sdk.entitlement_status()['key']:
+        print(f"Pairing: {sdk.pair_device(endpoint=args.endpoint, on_code=show_code)['pairing']}")
     status = sdk.entitlement_status()
     print(f"License: {status['mode']} mode" + (f" ({status['reason']})" if status['reason'] else ''))
     if args.list:
