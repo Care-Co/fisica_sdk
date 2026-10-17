@@ -1,12 +1,203 @@
+Fisica Scale SDK 라이선스
+버전 2.0 (검토용 초안 2, 2026-10-17)
+
+이 파일은 한국어 원문과 그 영어 번역으로 되어 있다. 두 문안의 뜻이 다르면 한국어 원문이
+우선한다(14조).
+
+이 버전은 2026-10-17 제품 정책(SDK 키, 기본 모드와 전체 모드)을 적은 것으로, 검토를 위해
+공개한다. 법무 검토를 마치지 않았다. 같은 버전 번호로 앞서 공개한 문안(2026-10-14,
+2026-10-17)은 이 문안으로 대체되며, 바뀐 내용은 doc/policy-history.md에 기록한다. 이 버전은
+기존 계약, Version 1.0(doc/LICENSE-1.0.txt)으로 이미 제공한 패키지, MIT License 등 이전
+라이선스로 부여된 권리를 바꾸지 않는다.
+
+Copyright (c) 2026 Care&Co. All rights reserved.
+
+1. 적용 범위와 정의
+
+이 라이선스는 Care&Co가 이 라이선스로 배포하는 Fisica Scale SDK 자료, 즉 공개 언어 래퍼,
+예제, 문서, 공개 C 헤더와 컴파일된 네이티브 코어에 적용된다.
+
+- "귀하"는 이 라이선스에 따라 SDK를 쓰는 개인 또는 조직을 말한다.
+- "장비"는 Care&Co 또는 공인 판매처에서 적법하게 취득한 정품 Fisica Scale을 말한다.
+  공인 판매처는 개발자 포털에 게시한다.
+- "공개 래퍼"는 Care&Co가 명시적으로 제공하는 래퍼 소스를 말한다.
+- "네이티브 코어"는 컴파일된 구현과 그 비공개 소스를 말한다.
+- "개발자 포털"은 Care&Co가 SDK 문서와 이 라이선스가 가리키는 현재 조건을 게시하는
+  https://developer.fisicahealthcare.com 을 말한다.
+- "기본 모드"와 "전체 모드"는 SDK가 동작하는 두 방식이다(2조, 3조).
+- "체험", "연장", "계약"은 전체 모드를 얻는 세 방법이며(3조), 이를 통틀어 "이용권"이라 한다.
+- "SDK 키"는 이용권 하나에 대해 Care&Co가 서명해 개발자 포털에서 발급하는 키를 말한다.
+  SDK 키 하나가 좌석 하나다.
+- "대상"은 SDK 키가 활성화되는 곳으로, 앱 ID(번들 ID 또는 패키지명. 그 앱의 디버그 빌드는
+  같은 앱으로 본다)로 식별하는 앱 하나, 또는 고유 식별자의 해시로 식별하는 컴퓨터 한 대를
+  말한다.
+- "별도 계약"은 6조의 사항에 관해 Care&Co와 맺는 서면 계약을 말하며, 계약의 일부일 수 있다.
+
+2. 기본 사용권: 기본 모드(장비에 포함)
+
+장비를 구매하면 그 장비와 함께 SDK를 기본 모드로 쓸 수 있는 비독점적 사용권이 포함된다.
+용도에 제한이 없으며, 상업용 앱·서비스·시설 측정과 그에 대해 귀하의 고객에게 요금을 받는
+것도 포함한다. 기본 사용권은 기한이 없고, SDK 키·등록·서명한 계약이 필요하지 않다.
+
+기본 모드는 연결, 측정, 장비 설정과 보정, 무게, 발 길이와 너비, 제한된 프레임 속도의
+실시간 미리보기, 보고서 요약을 제공한다. Care&Co는 등록, SDK 키, 이용권이나 계약 상태를
+이유로 기본 모드를 막지 않는다.
+
+3. 전체 모드
+
+전체 모드는 원본 패킷, 원본·처리된 센서 격자, 모든 프레임, 전체 보고서 내보내기, 앞으로
+추가될 고급 분석 등 개발자 포털에 적은 기능을 더한다. 유효한 이용권의 SDK 키가 그것을 쓰는
+대상에 활성화된 동안, 키의 유효기간과 이용권의 전체 모드 기간 안에서만 쓸 수 있다.
+
+- 체험: 계정, 조직, 사업자등록번호, 대상마다 한 번, Care&Co가 신청을 승인한 뒤 쓸 수 있다.
+  기간, 좌석, 기능은 승인되어 개발자 포털에 표시된 대로다.
+- 연장: 비상업적 교육·연구 또는 공공·비영리 용도를 위한 무료 전체 모드로, Care&Co가 재량으로
+  승인한 기간, 좌석, 기능만큼 부여한다.
+- 계약: 체험 뒤 전체 모드를 상업적으로 쓰려면 계약이 필요하다. 기간, 좌석, 기능, 월 좌석
+  이동 상한, 키의 최대 유효기간, 종료 후 유예 기간, 6조의 권리는 계약과 개발자 포털에 적은
+  대로다.
+
+이용권, 키의 유효기간 또는 유예 기간이 끝나거나 키가 해제·폐기되면 SDK는 기본 모드로 계속
+동작한다. 전체 모드가 끝나도 기본 사용권, 장비 소유권, 장비 등록은 끝나지 않으며, 적법하게
+제공된 앱의 최종 사용자는 기본 모드를 계속 쓴다.
+
+4. SDK 키와 좌석
+
+- SDK 키 하나가 좌석 하나다. 이용권은 Care&Co가 승인하거나 합의한 좌석 수를 가지며, SDK
+  키는 그 안에서만 만들 수 있다.
+- SDK 키는 대상 하나에 한 번 활성화되며 그 대상에서만 전체 모드를 준다. 앱 대상은 그 앱의
+  모든 설치에 적용되고, 컴퓨터 대상은 그 컴퓨터에만 적용된다.
+- 키를 해제하면 좌석이 비워진다. 해제는 SDK가 온라인으로 키를 해제하거나, SDK가 만든 해제
+  코드를 개발자 포털에 입력하거나, 키의 유효기간이 끝나거나, Care&Co가 해제할 때 이루어진다.
+  해제된 좌석에 키를 만드는 것은 좌석 이동이며, 좌석 이동은 이용권에 정한 월 상한 안에서만
+  할 수 있다.
+- 하나의 앱 ID는 한 번에 하나의 이용권에서만 쓸 수 있다. 별도 계약이 허용하는 경우를
+  제외하고, SDK 키, 대상, 이용권을 재판매·양도·공유하거나, SDK 키를 그것이 활성화되지 않은
+  앱이나 컴퓨터에 쓸 수 없다.
+- SDK 키는 귀하의 조직과 그것을 쓰는 제품 안에서만 보관한다.
+- 이 라이선스에 어긋나게 쓰인 SDK 키는 Care&Co가 폐기할 수 있다. Care&Co가 서면(이메일
+  포함)으로 시정을 요청한 뒤에도 이 라이선스 위반이 계속되면, Care&Co는 그 위반과 관련된
+  이용권을 종료할 수 있으며, 그 이용권의 전체 모드는 3조에 따라 끝난다. 이 조치는 2조의
+  기본 사용권에 영향을 주지 않는다.
+
+5. 등록과 신청
+
+체험, 연장, 계약은 개발자 포털에서 요구하는 계정, 조직, 프로젝트 정보를 적어 신청하며,
+상업 신청에는 신청자의 연락처가 포함된다. Care&Co는 각 신청을 검토해 승인, 조정 또는 거절할
+수 있다. 등록 정보는 이 신청, 지원, 이 라이선스의 관리에 쓰며, 실행 중 추적의 단위가 아니다.
+
+6. 별도 계약이 필요한 사항
+
+기본 사용권과 이용권에는 다음이 포함되지 않으며, 별도 계약이 필요하다.
+
+- SDK를 단독으로 판매·배포하거나 재판매하는 것
+- 장비나 SDK를 다른 회사의 제품으로 OEM 통합·공급하는 것
+- 장비의 리브랜딩
+- 장비가 아닌 것과 SDK를 함께 쓰는 것
+- 이 조건의 그 밖의 예외
+
+유료 지원, 클라우드, 분석 서비스는 제공하는 경우 각자의 계약에 따른다.
+
+7. 공개 래퍼: 수정과 재배포
+
+귀하는 이 조건 안에서 공개 래퍼를 사용·복제·수정할 수 있고, 수정하지 않은 컴파일된 네이티브
+코어와 함께 귀하의 앱과 제품에 포함해 귀하의 사용자에게 배포할 수 있다. 이 라이선스와 해당
+저작권·제3자 고지를 유지하고, 수정한 부분을 표시해 수정하지 않은 Care&Co 배포본처럼 보이지
+않게 한다. 귀하의 사용자에게 주는 권리는 이 라이선스와 맞아야 한다. 이 조건을 없애는 방식으로
+SDK를 재사용허락(서브라이선스)할 수 없다.
+
+8. 네이티브 코어, 역설계, 유보된 권리
+
+네이티브 코어의 소스는 제공하지 않으며, 공개·수정·재배포를 허락하지 않는다. 비공개 구현
+소스, 디버그 심볼, 내부 빌드 자료를 배포하지 않는다. 관련 법령이 이 제한에도 불구하고
+명시적으로 허용하는 범위(예: 상호운용)를 제외하고, 네이티브 코어를 디컴파일·디스어셈블하거나
+그 밖의 방법으로 역설계할 수 없으며, SDK가 기본 모드와 전체 모드를 정하는 방식을 수정·우회·
+무력화할 수 없다. 명시적으로 부여하지 않은 권리는 Care&Co에 유보된다. 이 라이선스의 어떤
+내용도 법적으로 제한할 수 없는 권리를 제한하지 않는다.
+
+9. 라이선스 운영과 데이터
+
+네이티브 코어가 직접 대상을 읽고 서명된 SDK 키로 모드를 정한다. 온라인에서는 SDK가 새 SDK
+키를 활성화하고 만료 전에 갱신한다. 온라인에 연결되지 않는 컴퓨터는 개발자 포털의 활성화
+코드와 키 파일을 쓴다.
+
+- 활성화 때는 SDK 키와 대상(앱 ID, 또는 컴퓨터 고유 식별자의 해시. 식별자 자체는 보내지
+  않는다)을 보낸다. 갱신과 온라인 해제 때는 SDK 키만 보낸다.
+- Care&Co는 좌석과 이용권을 관리하기 위해 SDK 키마다 대상과 활성화·갱신·해제 시각을 저장한다.
+- SDK가 실행되는 기기에는 서명된 SDK 키와 SDK가 본 가장 늦은 시각을 저장해, 오프라인에서
+  라이선스를 확인하고 시계를 되돌린 것을 알아챌 수 있게 한다. 시계를 한 시간보다 많이
+  되돌리면 바로잡을 때까지 기본 모드로 동작한다.
+- 통신 실패는 만료, 해제, 폐기로 보지 않는다.
+- SDK 키는 장비가 정품인지, 코드의 출처, 계약을 지키는지 증명하지 않는다.
+
+10. SDK 사용 추적 없음
+
+SDK는 Care&Co가 SDK 사용 방식을 추적할 목적으로 활동 기록을 수집·보관·보고하지 않는다. 측정
+데이터를 보내지 않으며, SDK를 썼는지·언제 썼는지, 측정이나 API 호출 횟수, 이용권이 끝난 뒤의
+사용을 보고하지 않는다. 활성화·갱신·해제 기록(9조)은 SDK 키와 대상에 관한 기록이지 SDK 사용
+기록이 아니다. 갱신은 SDK를 썼는지 또는 계약을 지켰는지 보여주지 않으며, 갱신 없이 쓴 것은
+Care&Co에 전달되지 않는다.
+
+이 라이선스는 앱이 자신의 서비스를 위해 측정 데이터와 보고서를 저장하는 것을 제한하지 않는다.
+
+11. 이전 버전과 제3자 자료
+
+MIT License로 공개한 버전을 포함해, 이전 SDK 버전에 대해 이전 라이선스로 부여된 권리는 이
+라이선스로 소급해 제한되지 않는다. 예제, 래퍼, 네이티브 코어, 포함된 제3자 라이브러리나
+모델은 각각 그것에 적힌 라이선스를 따르며, 제3자 라이선스는 이 라이선스로 대체되지 않는다.
+네이티브 코어에는 Monocypher(CC0-1.0 또는 BSD-2-Clause)가 포함된다. 선택 사항인 Python 시각화
+extra는 각자의 라이선스를 따르는 OpenCV와 Pillow에 의존한다.
+
+12. 의료 용도가 아님
+
+SDK와 SDK가 제공하는 측정값, 분석 결과, 보고서는 의료기기가 아니며, 질병의 진단, 치료,
+경감, 처치, 예방이나 그에 관한 결정에 써서는 안 된다. SDK를 쓰는 앱이나 서비스를 의료
+목적으로 제공하려면 필요한 허가·인증·신고를 받고 관련 법령을 지켜야 하며, 이는 그 앱이나
+서비스를 제공하는 자의 책임이다.
+
+13. 보증과 책임
+
+관련 법령이 허용하는 범위에서 SDK는 "있는 그대로" 제공되며, Care&Co는 상품성, 특정 목적
+적합성, 권리 비침해를 포함한 명시적·묵시적 보증을 하지 않는다.
+
+관련 법령이 허용하는 범위에서:
+
+- Care&Co는 SDK 사용으로 생긴 간접, 부수적, 특별, 결과적 손해(이익 손실, 데이터 손실, 영업
+  중단 포함)를 책임지지 않는다.
+- SDK와 관련해 Care&Co가 귀하에게 지는 손해배상 책임의 총액은, 손해의 원인이 된 일이 있기
+  전 12개월 동안 귀하가 SDK와 관련해 Care&Co에 지급한 금액을 넘지 않는다. 기본 모드, 체험,
+  무료 연장만 쓴 경우 이 금액은 0원이다.
+- 위 제한은 Care&Co의 고의 또는 중대한 과실로 생긴 손해, 사람의 생명·신체에 대한 손해,
+  그 밖에 관련 법령상 제한할 수 없는 책임에는 적용하지 않는다.
+
+별도 계약에 달리 정한 경우에는 그에 따른다. 이 조는 SDK에 관한 것이며, 장비의 보증과 책임은
+장비의 구매 조건을 따른다.
+
+14. 준거법, 관할, 언어
+
+이 라이선스는 대한민국 법을 따른다. 이 라이선스나 SDK에 관한 분쟁은, 관련 법령이 달리 정하지
+않는 한, Care&Co 본점 소재지를 관할하는 법원을 전속 관할 법원으로 한다. 이 라이선스는 한국어
+원문과 영어 번역으로 되어 있으며, 두 문안의 뜻이 다르면 한국어 원문이 우선한다.
+
+15. 연락처
+
+이용권, 별도 계약, 문의: carencoinc@carenco.kr
+
+
+================================================================================
+
 Fisica Scale SDK License
-Version 2.0 (draft for review, revised 2026-10-17)
+Version 2.0 (draft for review 2, 2026-10-17)
+
+English translation. The Korean text above is the original; where the two differ in
+meaning, the Korean text prevails (section 14).
 
 This version states the product policy of 2026-10-17 (SDK keys, basic and full mode) and
-is published for review. It has not completed legal review. The text first published
-under this version number on 2026-10-14 is superseded; doc/policy-history.md records the
-change. This version does not change any existing agreement, any package already delivered
-under Version 1.0 (doc/LICENSE-1.0.txt), or any rights granted under an earlier license
-such as the MIT License.
+is published for review. It has not completed legal review. The texts published earlier
+under this version number (2026-10-14 and 2026-10-17) are superseded by this text;
+doc/policy-history.md records the changes. This version does not change any existing
+agreement, any package already delivered under Version 1.0 (doc/LICENSE-1.0.txt), or any
+rights granted under an earlier license such as the MIT License.
 
 Copyright (c) 2026 Care&Co. All rights reserved.
 
@@ -16,8 +207,9 @@ This license applies to the Fisica Scale SDK materials distributed by Care&Co un
 public language wrappers, examples, documentation, public C headers and the compiled
 native core.
 
+- "You" means the person or organization using the SDK under this license.
 - "Hardware" means a genuine Fisica Scale lawfully obtained from Care&Co or an
-  authorized channel.
+  authorized seller. Authorized sellers are listed on the Developer Portal.
 - "Public Wrappers" means wrapper source expressly provided by Care&Co.
 - "Native Core" means the compiled implementation and its private source.
 - "Developer Portal" means https://developer.fisicahealthcare.com, where Care&Co
@@ -75,16 +267,18 @@ lawfully supplied applications keep Basic Mode.
 - An SDK Key is activated once for one Target and gives Full Mode only on that Target.
   An application Target covers every installation of that application; a computer
   Target covers that computer only.
-- Releasing a key frees its seat when the device lets go of the key, a release code from
-  the device is entered in the Developer Portal, the key's validity ends, or Care&Co
-  releases it. Creating a key in a released seat is a seat move; seat moves are limited
-  per month as stated for the Grant.
-- An application ID may be used under one Contract or Grant at a time. You may not
-  resell, transfer or share an SDK Key, a Target or a Grant, or use an SDK Key for an
-  application or computer it was not activated for, except as a Separate Agreement
-  allows.
-- Keep SDK Keys within your organization and the products that use them. Care&Co may
-  revoke an SDK Key that is used against this license.
+- Releasing a key frees its seat. A key is released when the SDK releases it online, a
+  release code produced by the SDK is entered in the Developer Portal, the key's validity
+  ends, or Care&Co releases it. Creating a key in a released seat is a seat move; seat
+  moves are limited per month as stated for the Grant.
+- An application ID may be used under one Grant at a time. You may not resell, transfer
+  or share an SDK Key, a Target or a Grant, or use an SDK Key for an application or
+  computer it was not activated for, except as a Separate Agreement allows.
+- Keep SDK Keys within your organization and the products that use them.
+- Care&Co may revoke an SDK Key that is used against this license. If a breach of this
+  license continues after Care&Co asks in writing (email included) for it to be
+  corrected, Care&Co may end the Grant concerned, and that Grant's Full Mode ends as
+  described in section 3. This does not affect the Base SDK License in section 2.
 
 5. Registration and requests
 
@@ -134,16 +328,16 @@ Online, the SDK activates a new SDK Key and renews it before it expires; a compu
 is never online uses an activation code and key files from the Developer Portal.
 
 - Activation sends the SDK Key and the Target (the application ID, or the hash of the
-  computer's machine identifier; the identifier itself is not sent). Renewal sends the
-  SDK Key only.
+  computer's machine identifier; the identifier itself is not sent). Renewal and online
+  release send the SDK Key only.
 - Care&Co stores, for each SDK Key, its Target and the times it was activated, renewed
   and released, to administer seats and Grants.
-- The device stores the signed SDK Key and the latest time the SDK has seen, so the
-  license can be checked offline and a clock set back can be noticed; a clock set back
-  by more than an hour leads to Basic Mode until it is corrected.
+- The device running the SDK stores the signed SDK Key and the latest time the SDK has
+  seen, so the license can be checked offline and a clock set back can be noticed; a
+  clock set back by more than an hour leads to Basic Mode until it is corrected.
 - A communication failure is not treated as an expiry, a release or a revocation.
-- An SDK Key does not prove that a device is genuine, where code came from, or that an
-  agreement is being complied with.
+- An SDK Key does not prove that the Hardware is genuine, where code came from, or that
+  an agreement is being complied with.
 
 10. No SDK usage tracking
 
@@ -167,14 +361,44 @@ each under the license stated for them; third-party licenses are not replaced by
 one. The Native Core includes Monocypher (CC0-1.0 or BSD-2-Clause). The optional Python
 visualization extra depends on OpenCV and Pillow under their own licenses.
 
-12. Warranty and liability
+12. Not for medical use
 
-To the extent permitted by applicable law, the SDK is provided "AS IS", without
-warranties of any kind, express or implied, including merchantability, fitness for a
-particular purpose and non-infringement. Care&Co is not liable for indirect,
-incidental, special or consequential damages arising from use of the SDK, except
-where applicable law or a separate written agreement requires otherwise.
+The SDK and the measurements, analysis results and reports it provides are not a
+medical device and must not be used to diagnose, treat, mitigate, cure or prevent any
+disease, or to make decisions about these. Anyone who offers an application or service
+using the SDK for a medical purpose is responsible for obtaining the approvals,
+certifications or notifications it requires and for complying with applicable law.
 
-13. Contact
+13. Warranty and liability
+
+To the extent permitted by applicable law, the SDK is provided "AS IS", and Care&Co gives
+no warranties of any kind, express or implied, including merchantability, fitness for a
+particular purpose and non-infringement.
+
+To the extent permitted by applicable law:
+
+- Care&Co is not liable for indirect, incidental, special or consequential damages
+  arising from use of the SDK, including lost profits, lost data or business
+  interruption.
+- Care&Co's total liability to you in connection with the SDK does not exceed the
+  amount you paid Care&Co for the SDK in the 12 months before the event giving rise to
+  the claim. If you used only Basic Mode, a Trial or a free Extension, that amount is
+  zero.
+- These limits do not apply to damage caused by Care&Co's wilful misconduct or gross
+  negligence, to injury to life or body, or to any other liability that applicable law
+  does not allow to be limited.
+
+A Separate Agreement that provides otherwise prevails. This section concerns the SDK;
+the warranty and liability for the Hardware follow its purchase terms.
+
+14. Governing law, jurisdiction and language
+
+This license is governed by the laws of the Republic of Korea. Unless applicable law
+provides otherwise, any dispute about this license or the SDK is subject to the exclusive
+jurisdiction of the court having jurisdiction over Care&Co's head office. This license
+is written in Korean with this English translation; where the two differ in meaning,
+the Korean text prevails.
+
+15. Contact
 
 For Grants, Separate Agreements or questions: carencoinc@carenco.kr.
