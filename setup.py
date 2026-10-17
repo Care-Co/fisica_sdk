@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import runpy
+import shutil
 import sys
 from setuptools import Distribution, setup
 from setuptools.command.build_py import build_py
@@ -13,6 +14,9 @@ from wheel.bdist_wheel import bdist_wheel
 
 ROOT = Path(__file__).resolve().parent
 builder = runpy.run_path(str(ROOT / 'tools' / 'native_build.py'))
+# A wheel is a customer package: its core trusts production keys only. tools/build_release.py
+# --validation sets FISICA_ENTITLEMENT_KEYS=validation for QA wheels that also trust the test key.
+os.environ.setdefault(builder['KEY_MODE'], 'release')
 release = builder['release_metadata']()
 if sys.platform == 'darwin':
     os.environ.setdefault('MACOSX_DEPLOYMENT_TARGET', '11.0')
@@ -28,6 +32,12 @@ class PlatformBuild(build):
         super().finalize_options()
         # Keep DLLs and dylibs in separate trees, including trusted cross-builds.
         self.build_lib = str(ROOT / '.build' / 'python' / builder['platform_tag']())
+
+    def run(self):
+        # The wheel takes everything in build_lib: start empty, so modules removed from
+        # fisica_sdk/ (or a core from an earlier build) cannot reach it.
+        shutil.rmtree(self.build_lib, ignore_errors=True)
+        super().run()
 
 
 class BuildPythonWrapper(build_py):

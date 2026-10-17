@@ -1,117 +1,200 @@
-"""Trusted multi-platform binary builder. Never compiles on a customer's device."""
+"""Trusted multi-platform binary builder. Never compiles on a customer's device.
+
+One run builds one target into --output (default .build/platforms):
+
+  apple     apple/CFisica.xcframework, apple/release.json, apple/fisica-swift-<v>.zip
+  android   android/jni/<abi>/*.so, android/classes.jar, android/release.json,
+            android/fisica-scale-<v>.aar, android/fisica-kotlin-<v>.zip
+  desktop   <target>/<core library>, <target>/release.json, fisica-core-<core>-<target>.zip
+
+A run first empties its target's output, so nothing from an earlier build is packaged.
+tools/package_platforms.py makes the partner packages from these; both write every archive
+with tools/release_packages.py.
+"""
 import argparse
-import json
 import os
 from pathlib import Path
 import plistlib
 import shutil
 import subprocess
-import zipfile
-from native_build import ROOT,build_native,prepare_release,release_metadata,require_release_keys
-from audit_artifacts import audit_archive,validate_android_library
 
-def run(args): subprocess.run([str(a) for a in args],check=True)
-def archive(output,files):
-    with zipfile.ZipFile(output,'w',zipfile.ZIP_DEFLATED) as z:
-        for file,name in files: z.write(file,name)
-    audit_archive(output)
-def public_files(directory):
-    return [(p,p.relative_to(directory).as_posix()) for p in directory.rglob('*') if p.is_file() and p.name != 'pubspec.lock' and
-            not any(part in ('Tests','tests','test','.build','obj','bin','.dart_tool','build','CFisica.xcframework','src/test') for part in p.relative_to(directory).parts)]
-def apple(output):
-    output.mkdir(parents=True,exist_ok=True)
-    generated=output/'generated';prepare_release(generated)
-    xc=output/'CFisica.xcframework';shutil.rmtree(xc,ignore_errors=True);xc.mkdir()
-    developer=Path(os.environ.get('FISICA_XCODE_DEVELOPER','/Applications/Xcode.app/Contents/Developer'))
-    macsdk=Path(subprocess.check_output(['xcrun','--sdk','macosx','--show-sdk-path'],text=True).strip())
-    variants=[('macos-arm64_x86_64','macos',None,macsdk,['arm64-apple-macos11','x86_64-apple-macos11']),
-              ('ios-arm64','ios',None,developer/'Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk',['arm64-apple-ios13']),
-              ('ios-arm64_x86_64-simulator','ios','simulator',developer/'Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk',['arm64-apple-ios13-simulator','x86_64-apple-ios13-simulator'])]
-    libraries=[]
-    for identifier,platform,variant,sdk,targets in variants:
-        if not sdk.is_dir(): raise RuntimeError(f'Apple SDK missing: {sdk}')
-        directory=xc/identifier;directory.mkdir();thin=[]
-        for target in targets:
-            objects=[]
-            for source in sorted((ROOT/'native/src').glob('*.cpp')):
-                obj=generated/(identifier+'-'+target.split('-')[0]+'-'+source.stem+'.o')
-                run(['c++','-std=c++17','-O2','-ffp-contract=off','-fvisibility=hidden','-fvisibility-inlines-hidden','-DFISICA_CORE_STATIC','-DFISICA_CORE_BUILD','-target',target,'-isysroot',sdk,'-I'+str(ROOT/'native/include'),'-I'+str(generated),'-c',source,'-o',obj]);objects.append(obj)
-            lib=generated/(identifier+'-'+target.split('-')[0]+'.a');run(['libtool','-static','-o',lib,*objects]);thin.append(lib)
-        dest=directory/'libfisica_core.a'
-        if len(thin)>1: run(['lipo','-create',*thin,'-output',dest])
-        else: shutil.copyfile(thin[0],dest)
-        headers=directory/'Headers';headers.mkdir();shutil.copyfile(ROOT/'native/include/fisica_core.h',headers/'fisica_core.h')
-        (headers/'module.modulemap').write_text('module CFisica { header "fisica_core.h" export * }\n')
-        item={'LibraryIdentifier':identifier,'LibraryPath':dest.name,'HeadersPath':'Headers','SupportedArchitectures':[t.split('-')[0] for t in targets],'SupportedPlatform':platform}
-        if variant: item['SupportedPlatformVariant']=variant
+from native_build import ROOT, build_native, prepare_release, release_metadata, require_release_keys
+from audit_artifacts import validate_android_library
+import release_packages as packages
+
+TARGETS = ('apple', 'android', *packages.DESKTOP_TARGETS)
+CORE_SOURCES = ROOT / 'native' / 'src'
+PUBLIC_INCLUDE = ROOT / 'native' / 'include'
+
+
+def run(command):
+    subprocess.run([str(part) for part in command], check=True)
+
+
+def fresh(directory):
+    shutil.rmtree(directory, ignore_errors=True)
+    directory.mkdir(parents=True)
+    return directory
+
+
+def static_core(generated, name, target, sdk):
+    """The core as a static library for one Apple clang target."""
+    objects = []
+    for source in sorted(CORE_SOURCES.glob('*.cpp')):
+        obj = generated / f'{name}-{source.stem}.o'
+        run(['c++', '-std=c++17', '-O2', '-ffp-contract=off', '-fvisibility=hidden', '-fvisibility-inlines-hidden',
+             '-DFISICA_CORE_STATIC', '-DFISICA_CORE_BUILD', '-target', target, '-isysroot', sdk,
+             '-I' + str(PUBLIC_INCLUDE), '-I' + str(generated), '-c', source, '-o', obj])
+        objects.append(obj)
+    library = generated / f'{name}.a'
+    run(['libtool', '-static', '-o', library, *objects])
+    return library
+
+
+def apple(output, validation):
+    output = fresh(output)
+    generated = output / 'generated'
+    release = prepare_release(generated)
+    xcframework = output / 'CFisica.xcframework'
+    xcframework.mkdir()
+    developer = Path(os.environ.get('FISICA_XCODE_DEVELOPER', '/Applications/Xcode.app/Contents/Developer'))
+    macos_sdk = Path(subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip())
+    platforms = developer / 'Platforms'
+    # (library identifier, platform, variant, SDK, clang targets)
+    variants = [
+        ('macos-arm64_x86_64', 'macos', None, macos_sdk, ['arm64-apple-macos11', 'x86_64-apple-macos11']),
+        ('ios-arm64', 'ios', None, platforms / 'iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk', ['arm64-apple-ios13']),
+        ('ios-arm64_x86_64-simulator', 'ios', 'simulator', platforms / 'iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk',
+         ['arm64-apple-ios13-simulator', 'x86_64-apple-ios13-simulator']),
+    ]
+    libraries = []
+    for identifier, platform, variant, sdk, targets in variants:
+        if not sdk.is_dir():
+            raise RuntimeError(f'Apple SDK missing: {sdk}')
+        directory = xcframework / identifier
+        directory.mkdir()
+        thin = [static_core(generated, identifier + '-' + target.split('-')[0], target, sdk) for target in targets]
+        library = directory / 'libfisica_core.a'
+        if len(thin) > 1:
+            run(['lipo', '-create', *thin, '-output', library])
+        else:
+            shutil.copyfile(thin[0], library)
+        headers = directory / 'Headers'
+        headers.mkdir()
+        shutil.copyfile(packages.HEADER, headers / 'fisica_core.h')
+        (headers / 'module.modulemap').write_text('module CFisica { header "fisica_core.h" export * }\n')
+        item = {'LibraryIdentifier': identifier, 'LibraryPath': library.name, 'HeadersPath': 'Headers',
+                'SupportedArchitectures': [target.split('-')[0] for target in targets], 'SupportedPlatform': platform}
+        if variant:
+            item['SupportedPlatformVariant'] = variant
         libraries.append(item)
-    (xc/'Info.plist').write_bytes(plistlib.dumps({'CFBundlePackageType':'XFWK','XCFrameworkFormatVersion':'1.0','AvailableLibraries':libraries}))
-    wrapper=ROOT/'wrappers/swift';shutil.rmtree(wrapper/'CFisica.xcframework',ignore_errors=True);shutil.copytree(xc,wrapper/'CFisica.xcframework','src/test')
-    files=public_files(wrapper)+[(p,'CFisica.xcframework/'+p.relative_to(xc).as_posix()) for p in xc.rglob('*') if p.is_file()]+[(ROOT/'LICENSE','LICENSE')]
-    archive(output/('fisica-swift-'+release_metadata()['wrappers']['swift']['version']+'.zip'),files)
-    return xc
+    (xcframework / 'Info.plist').write_bytes(plistlib.dumps(
+        {'CFBundlePackageType': 'XFWK', 'XCFrameworkFormatVersion': '1.0', 'AvailableLibraries': libraries}))
+    packages.write_release(output / 'release.json', release)
+    # swift test (tools/verify_bindings.py swift) builds the wrapper against this XCFramework.
+    local = packages.WRAPPERS / 'swift' / 'CFisica.xcframework'
+    shutil.rmtree(local, ignore_errors=True)
+    shutil.copytree(xcframework, local)
+    packages.swift_package(output, xcframework, release, validation)
 
-def android(output,ndk):
-    output.mkdir(parents=True,exist_ok=True)
-    generated=output/'generated';prepare_release(generated)
-    compiler=next((ndk/'toolchains/llvm/prebuilt').iterdir())/'bin'
-    abis={'arm64-v8a':'aarch64-linux-android23','armeabi-v7a':'armv7a-linux-androideabi23','x86_64':'x86_64-linux-android23'}
-    libs=output/'jni';sources=sorted((ROOT/'native/src').glob('*.cpp'))
-    for abi,target in abis.items():
-        directory=libs/abi;directory.mkdir(parents=True,exist_ok=True)
+
+ANDROID_TARGETS = {'arm64-v8a': 'aarch64-linux-android23', 'armeabi-v7a': 'armv7a-linux-androideabi23',
+                   'x86_64': 'x86_64-linux-android23'}
+
+
+def kotlin_classes(jar):
+    """Compile the public Kotlin sources to classes.jar with Gradle's Kotlin compiler; no build toolchain ships."""
+    gradle = Path(os.environ.get('FISICA_GRADLE_LIB', '/opt/homebrew/opt/gradle/libexec/lib'))
+    stdlib = next(gradle.glob('kotlin-stdlib-[0-9]*.jar'))
+    android_jar = Path(os.environ.get('ANDROID_SDK_ROOT', str(Path.home() / 'Library/Android/sdk'))) / 'platforms/android-35/android.jar'
+    sources = [path for path, _ in packages.tracked_files(ROOT / 'wrappers/kotlin/src/main/kotlin') if path.suffix == '.kt']
+    run(['java', '-cp', str(gradle / '*'), 'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler', '-no-stdlib', '-no-reflect',
+         '-classpath', str(stdlib) + os.pathsep + str(android_jar), '-jvm-target', '1.8', '-d', jar, *sources])
+
+
+def android(output, ndk, validation):
+    output = fresh(output)
+    generated = output / 'generated'
+    release = prepare_release(generated)
+    compiler = next((ndk / 'toolchains/llvm/prebuilt').iterdir()) / 'bin'
+    jni = output / 'jni'
+    sources = sorted(CORE_SOURCES.glob('*.cpp'))
+    for abi, target in ANDROID_TARGETS.items():
+        directory = jni / abi
+        directory.mkdir(parents=True)
         # 16 KB page support (Google Play, Android 15+), also fine on 4 KB devices: LOAD segments
         # aligned to 16 KB and the RELRO segment ending on a 16 KB boundary. NDK r27 and older need
         # both flags; r28+ defaults to them.
-        common=[compiler/(target+'-clang++'),'-std=c++17','-O2','-shared','-fPIC','-fvisibility=hidden','-ffp-contract=off','-static-libstdc++','-Wl,--exclude-libs,ALL',
-                '-Wl,-z,max-page-size=16384','-Wl,-z,common-page-size=16384','-I'+str(ROOT/'native/include')]
-        run([*common,'-DFISICA_CORE_BUILD','-I'+str(generated),*sources,'-Wl,-soname,libfisica_core.so','-o',directory/'libfisica_core.so'])
-        run([*common,ROOT/'wrappers/kotlin/bridge/fisica_jni.cpp','-L'+str(directory),'-lfisica_core','-Wl,-soname,libfisica_jni.so','-o',directory/'libfisica_jni.so'])
-        for library in ('libfisica_core.so','libfisica_jni.so'): validate_android_library((directory/library).read_bytes(),abi)
-    # Compile public Kotlin to a classes.jar without shipping a build toolchain.
-    gradle=Path(os.environ.get('FISICA_GRADLE_LIB','/opt/homebrew/opt/gradle/libexec/lib'))
-    stdlib=next(gradle.glob('kotlin-stdlib-*.jar'))
-    jar=output/'classes.jar'
-    kotlin_sources=sorted((ROOT/'wrappers/kotlin/src/main/kotlin').rglob('*.kt'))
-    androidsdk=Path(os.environ.get('ANDROID_SDK_ROOT',str(Path.home()/'Library/Android/sdk')))
-    androidjar=androidsdk/'platforms/android-35/android.jar'
-    run(['java','-cp',str(gradle/'*'),'org.jetbrains.kotlin.cli.jvm.K2JVMCompiler','-no-stdlib','-no-reflect','-classpath',str(stdlib)+os.pathsep+str(androidjar),'-jvm-target','1.8','-d',jar,*kotlin_sources])
-    manifest=ROOT/'wrappers/kotlin/AndroidManifest.xml'
-    files=[(jar,'classes.jar'),(manifest,'AndroidManifest.xml'),(ROOT/'LICENSE','LICENSE'),(generated/'release.json','release.json'),(ROOT/'wrappers/kotlin/consumer-rules.pro','proguard.txt')]
-    files += [(p,'jni/'+p.relative_to(libs).as_posix()) for p in libs.rglob('*.so')]
-    archive(output/('fisica-scale-'+release_metadata()['wrappers']['kotlin']['version']+'.aar'),files)
-    archive(output/('fisica-kotlin-'+release_metadata()['wrappers']['kotlin']['version']+'.zip'),public_files(ROOT/'wrappers/kotlin')+[(ROOT/'LICENSE','LICENSE'),(ROOT/'native/include/fisica_core.h','fisica_core.h')])
-    return libs
+        common = [compiler / (target + '-clang++'), '-std=c++17', '-O2', '-shared', '-fPIC', '-fvisibility=hidden',
+                  '-ffp-contract=off', '-static-libstdc++', '-Wl,--exclude-libs,ALL',
+                  '-Wl,-z,max-page-size=16384', '-Wl,-z,common-page-size=16384', '-I' + str(PUBLIC_INCLUDE)]
+        run([*common, '-DFISICA_CORE_BUILD', '-I' + str(generated), *sources,
+             '-Wl,-soname,libfisica_core.so', '-o', directory / 'libfisica_core.so'])
+        run([*common, ROOT / 'wrappers/kotlin/bridge/fisica_jni.cpp', '-L' + str(directory), '-lfisica_core',
+             '-Wl,-soname,libfisica_jni.so', '-o', directory / 'libfisica_jni.so'])
+        for library in ('libfisica_core.so', 'libfisica_jni.so'):
+            validate_android_library((directory / library).read_bytes(), abi)
+    classes = output / 'classes.jar'
+    kotlin_classes(classes)
+    packages.write_release(output / 'release.json', release)
+    packages.kotlin_aar(output, classes, jni, release, validation)
+    packages.kotlin_sources(output, release, validation)
 
-def desktop(output,target):
-    previous=os.environ.get('FISICA_BUILD_PLATFORM');os.environ['FISICA_BUILD_PLATFORM']=target
+
+def desktop(output, target, validation):
+    directory = fresh(output / target)
+    (output / packages.core_name(release_metadata(), target)).unlink(missing_ok=True)
+    previous = os.environ.get('FISICA_BUILD_PLATFORM')
+    os.environ['FISICA_BUILD_PLATFORM'] = target
     try:
-        core=build_native(output/target)
-        files=[(core,core.name),(core.parent/'release.json','release.json'),(ROOT/'native/include/fisica_core.h','fisica_core.h'),(ROOT/'LICENSE','LICENSE')]
-        archive(output/f'fisica-core-{release_metadata()["core_version"]}-{target}.zip',files)
+        core = build_native(directory)
     finally:
-        if previous is None: os.environ.pop('FISICA_BUILD_PLATFORM',None)
-        else: os.environ['FISICA_BUILD_PLATFORM']=previous
+        if previous is None:
+            os.environ.pop('FISICA_BUILD_PLATFORM', None)
+        else:
+            os.environ['FISICA_BUILD_PLATFORM'] = previous
+    packages.core_package(output, core, packages.read_release(directory / 'release.json'), target, validation)
 
-def artifact_paths(output,targets):
-    # Names come from release metadata so CI never hardcodes a version.
-    release=release_metadata();wrappers=release['wrappers'];paths=[]
+
+def artifact_paths(output, targets):
+    """The packages each target writes. Names come from release metadata so CI never hardcodes a version."""
+    release = release_metadata()
+    names = packages.package_names(release)
+    paths = []
     for target in targets:
-        if target=='apple': paths.append(output/'apple'/f"fisica-swift-{wrappers['swift']['version']}.zip")
-        elif target=='android': paths += [output/'android'/f"fisica-scale-{wrappers['kotlin']['version']}.aar",output/'android'/f"fisica-kotlin-{wrappers['kotlin']['version']}.zip"]
-        else: paths.append(output/f"fisica-core-{release['core_version']}-{target}.zip")
+        if target == 'apple':
+            paths.append(output / 'apple' / names['swift'])
+        elif target == 'android':
+            paths += [output / 'android' / names['aar'], output / 'android' / names['kotlin']]
+        else:
+            paths.append(output / packages.core_name(release, target))
     return paths
 
+
 def main():
-    targets=['apple','android','macosx_11_0_universal2','win_arm64','win_amd64']
-    p=argparse.ArgumentParser();group=p.add_mutually_exclusive_group(required=True)
-    group.add_argument('--target',choices=targets);group.add_argument('--print-artifacts',nargs='+',choices=targets,metavar='TARGET')
-    p.add_argument('--output',type=Path,default=ROOT/'.build/platforms');p.add_argument('--ndk',type=Path,default=Path(os.environ.get('FISICA_ANDROID_NDK',Path.home()/'Library/Android/sdk/ndk/26.3.11579264')))
-    p.add_argument('--validation',action='store_true',help='QA-only build that may trust test entitlement keys');args=p.parse_args()
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument('--target', choices=TARGETS)
+    group.add_argument('--print-artifacts', nargs='+', choices=TARGETS, metavar='TARGET')
+    parser.add_argument('--output', type=Path, default=ROOT / '.build/platforms')
+    parser.add_argument('--ndk', type=Path, default=Path(os.environ.get(
+        'FISICA_ANDROID_NDK', Path.home() / 'Library/Android/sdk/ndk/26.3.11579264')))
+    parser.add_argument('--validation', action='store_true', help='QA-only build that may trust test entitlement keys')
+    args = parser.parse_args()
     if args.print_artifacts:
-        print(' '.join(path.relative_to(Path.cwd()).as_posix() if path.is_relative_to(Path.cwd()) else str(path) for path in artifact_paths(args.output,args.print_artifacts)));return
+        cwd = Path.cwd()
+        print(' '.join(path.relative_to(cwd).as_posix() if path.is_relative_to(cwd) else str(path)
+                       for path in artifact_paths(args.output, args.print_artifacts)))
+        return
     require_release_keys(args.validation)
-    args.output.mkdir(parents=True,exist_ok=True)
-    if args.target=='apple': apple(args.output/'apple')
-    elif args.target=='android': android(args.output/'android',args.ndk)
-    else: desktop(args.output,args.target)
-if __name__=='__main__':main()
+    args.output.mkdir(parents=True, exist_ok=True)
+    if args.target == 'apple':
+        apple(args.output / 'apple', args.validation)
+    elif args.target == 'android':
+        android(args.output / 'android', args.ndk, args.validation)
+    else:
+        desktop(args.output, args.target, args.validation)
+
+
+if __name__ == '__main__':
+    main()

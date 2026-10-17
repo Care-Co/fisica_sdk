@@ -1,5 +1,12 @@
-"""Reject customer archives containing implementation sources or debug artifacts."""
+"""Reject customer archives that contain implementation sources or debug artifacts, lack their
+binaries, license or release metadata, or hold a core that trusts the repository test key.
+
+    python tools/audit_artifacts.py [--validation] ARCHIVE...
+
+--validation accepts QA archives whose core also trusts the test key (tools/*.py --validation).
+"""
 from pathlib import Path
+import plistlib
 import zipfile
 import json
 import runpy
@@ -62,11 +69,116 @@ def validate_android_library(data, abi):
             raise ValueError(f'Android library RELRO segment does not end on a 16 KB boundary ({abi}); rebuild with {ANDROID_PAGE_FLAGS}')
 
 
-def audit_archive(path):
+NATIVE_LIBRARIES = ('.dylib', '.so', '.dll', '.a')
+CORE_LIBRARIES = ('fisica_core.dll', 'libfisica_core.dylib', 'libfisica_core.so')
+ANDROID_ABIS = ('arm64-v8a', 'armeabi-v7a', 'x86_64')
+KOTLIN_CORE = 'src/main/kotlin/com/carenco/fisica/Core.kt'
+
+
+def repository_test_keys():
+    """Public keys of the non-production entries in native/entitlement-keys.json (none outside the SDK checkout)."""
+    try:
+        keys = json.loads((Path(__file__).resolve().parents[1] / 'native' / 'entitlement-keys.json').read_text())['keys']
+        return [bytes.fromhex(key['public_key']) for key in keys if key['environment'] != 'production']
+    except (OSError, ValueError, KeyError):
+        return []
+
+
+def package_kind(path, names):
+    """What an archive is, from its contents (file names only for wheels and AARs)."""
+    if path.suffix == '.whl':
+        return 'wheel'
+    if 'quickstart.json' in names:
+        return 'samples'
+    if path.suffix == '.aar':
+        return 'aar'
+    if 'Package.swift' in names:
+        return 'swift'
+    if 'pubspec.yaml' in names and 'lib/fisica_core.dart' in names:
+        return 'flutter'
+    if 'pubspec.yaml' in names and 'lib/fisica_flutter.dart' in names:
+        return 'flutter-transport'
+    if KOTLIN_CORE in names:
+        return 'kotlin'
+    if any('/' not in name and name.endswith('.csproj') for name in names):
+        return 'dotnet'
+    return 'core'
+
+
+def xcframework_entries(archive, names, prefix):
+    """Entries an XCFramework in the archive needs: Info.plist and, for each library it lists, the core and its header."""
+    plist = prefix + 'Info.plist'
+    if plist not in names:
+        return [plist]
+    try:
+        libraries = plistlib.loads(archive.read(plist))['AvailableLibraries']
+        platforms = {(item['SupportedPlatform'], item.get('SupportedPlatformVariant')) for item in libraries}
+        entries = [plist] + [prefix + item['LibraryIdentifier'] + '/' + name for item in libraries
+                             for name in (item['LibraryPath'], item['HeadersPath'] + '/fisica_core.h')]
+    except (plistlib.InvalidFileException, ValueError, KeyError, TypeError):
+        raise ValueError(f'{plist} is not an XCFramework Info.plist')
+    missing = {('ios', None), ('ios', 'simulator'), ('macos', None)} - platforms
+    if missing:
+        raise ValueError(f'{plist} has no library for ' + ', '.join(sorted('-'.join(filter(None, item)) for item in missing)))
+    return entries
+
+
+def require_binaries(kind, archive, names):
+    """Packages that promise compiled cores must contain all of them."""
+    def need(entries, package):
+        missing = [entry for entry in entries if entry not in names]
+        if missing:
+            raise ValueError(f'{package} is missing ' + ', '.join(missing))
+    if kind == 'aar':
+        need(['classes.jar', 'AndroidManifest.xml'] + [f'jni/{abi}/{library}' for abi in ANDROID_ABIS
+                                                        for library in ('libfisica_core.so', 'libfisica_jni.so')], 'Android library (AAR)')
+    elif kind == 'swift':
+        need(xcframework_entries(archive, names, 'CFisica.xcframework/'), 'Swift package')
+    elif kind == 'flutter':
+        need([f'android/src/main/jniLibs/{abi}/libfisica_core.so' for abi in ANDROID_ABIS] +
+             [f'windows/lib/{architecture}/fisica_core.dll' for architecture in ('x64', 'arm64')], 'Flutter package')
+        for platform in ('ios', 'macos'):
+            need(xcframework_entries(archive, names, platform + '/CFisica.xcframework/'), 'Flutter package')
+        for architecture, machine in (('x64', 0x8664), ('arm64', 0xaa64)):
+            validate_windows_dll(archive.read(f'windows/lib/{architecture}/fisica_core.dll'), machine)
+    elif kind == 'core':
+        if len([name for name in names if name in CORE_LIBRARIES]) != 1 or 'fisica_core.h' not in names:
+            raise ValueError('Core archive needs exactly one core library and fisica_core.h at its root')
+
+
+def audit_release(path, kind, archive, names, validation):
+    """The release.json a package carries, and the entitlement keys its core trusts."""
+    if kind == 'samples':
+        return
+    name = 'fisica_sdk/_release.json' if kind == 'wheel' else 'release.json'
+    if name not in names:
+        raise ValueError(f'Archive is missing {name}')
+    try:
+        release = json.loads(archive.read(name))
+        keys = release.get('entitlement', {}).get('keys')
+    except (ValueError, AttributeError):
+        raise ValueError(f'{name} is not release metadata')
+    if kind != 'wheel' and (not isinstance(release.get('core_version'), str) or not isinstance(keys, list) or not keys):
+        raise ValueError(f'{name} lacks the core version or the trusted entitlement keys')
+    if validation:
+        return
+    advice = 'customer archives trust production keys only; pass --validation for a QA archive'
+    if any(not isinstance(key, dict) or key.get('environment') != 'production' for key in keys or []):
+        raise ValueError(f'{path.name} trusts test entitlement keys ({name}): {advice}')
+    # The compiled key table, whatever the metadata says.
+    test_keys = repository_test_keys()
+    for entry in names:
+        if entry.endswith(NATIVE_LIBRARIES) and any(key in archive.read(entry) for key in test_keys):
+            raise ValueError(f'{entry} in {path.name} trusts the repository test entitlement key: {advice}')
+
+
+def audit_archive(path, validation=False):
+    """Audit one customer archive; validation=True accepts cores that also trust the test key (QA builds)."""
     path = Path(path)
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
-        sample_package = 'quickstart.json' in names
+        kind = package_kind(path, names)
+        sample_package = kind == 'samples'
         if sample_package:
             metadata = json.loads(archive.read('quickstart.json'))
             if metadata.get('type') != 'fisica-partner-samples' or metadata.get('schema_version') != 1:
@@ -74,8 +186,7 @@ def audit_archive(path):
             expected = set(PARTNER_SAMPLE_FILES) | {'INSTALL.md','LICENSE','quickstart.json'}
             if set(names) != expected or len(names) != len(expected):
                 raise ValueError('Public sample archive differs from the explicit source allowlist')
-        dart_wrapper = ('pubspec.yaml' in names and any(n in names for n in ('lib/fisica_core.dart','lib/fisica_flutter.dart'))) or any(n.endswith(('.csproj','Core.kt','Package.swift')) for n in names)
-        if not dart_wrapper and not any(name.endswith(('.dylib', '.so', '.dll', '.a')) for name in names):
+        if kind in ('wheel', 'core') and not any(name.endswith(NATIVE_LIBRARIES) for name in names):
             raise ValueError('Archive does not contain a native library')
         for name in names:
             parts = Path(name).parts
@@ -134,10 +245,18 @@ def audit_archive(path):
             metadata = [name for name in names if name.endswith('.dist-info/METADATA')]
             if len(metadata) != 1 or 'License-Expression: LicenseRef-Fisica-Scale-SDK' not in archive.read(metadata[0]).decode():
                 raise ValueError('Wheel license metadata does not match the SDK license')
+        require_binaries(kind, archive, names)
+        audit_release(path, kind, archive, names, validation)
     return len(names)
 
 
 if __name__ == '__main__':
-    import sys
-    for path in sys.argv[1:]:
-        print(f'{path}: {audit_archive(path)} files, source-exclusion audit passed')
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
+    parser.add_argument('archives', nargs='+', type=Path)
+    parser.add_argument('--validation', action='store_true',
+                        help='accept QA archives whose core also trusts the repository test key')
+    args = parser.parse_args()
+    for path in args.archives:
+        trust = 'test key allowed (validation)' if args.validation else 'production keys only'
+        print(f'{path}: {audit_archive(path, validation=args.validation)} files, audit passed ({trust})')
