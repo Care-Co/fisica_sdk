@@ -48,13 +48,13 @@ public struct EntitlementSyncResult: Equatable {
 
 /// What to show while pairing: an owner or admin enters `userCode` at `verificationURI`
 /// (`verificationURIComplete` already holds the code). The code is valid for `expiresIn` seconds.
-public struct PairingCode: Equatable {
+public struct PairingCode: Equatable, Sendable {
     public let userCode: String, verificationURI: String, verificationURIComplete: String
     public let expiresIn: Int
 }
 
 /// How pairing ended. `.approved`: the key is loaded and stored.
-public enum PairingResult: Equatable { case approved, denied, expired, cancelled }
+public enum PairingResult: Equatable, Sendable { case approved, denied, expired, cancelled }
 
 // FisicaModeReason.message and FisicaEntitlementWarning.message are generated into Codes.swift
 // from wrappers/license-messages.json, shared by every wrapper.
@@ -162,14 +162,6 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
         guard let license else { return try body(nil, UInt64(max(0, Date().timeIntervalSince1970))) }
         license.lock.lock(); defer { license.lock.unlock() }
         return try body(license.handle, license.clock())
-    }
-    /// True while full mode hands out every frame.
-    var fullRate: Bool {
-        lock.lock(); defer { lock.unlock() }
-        guard let handle else { return false }
-        var values = [UInt64](repeating: 0, count: Int(FisicaLimit.statusFields.rawValue))
-        guard fisica_core_entitlement_status(handle, clock(), &values, UInt32(values.count)) == 0 else { return false }
-        return values[2] & UInt64(FisicaFeature.fullRate.rawValue) != 0
     }
 
     /// Import an SDK key or the content of a key file (activation or renewal file). Returns what
