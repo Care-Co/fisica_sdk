@@ -46,8 +46,21 @@ def static_core(generated, name, target, sdk):
              '-DFISICA_CORE_STATIC', '-DFISICA_CORE_BUILD', '-target', target, '-isysroot', sdk,
              '-I' + str(PUBLIC_INCLUDE), '-I' + str(generated), '-c', source, '-o', obj])
         objects.append(obj)
+    # One relocatable object first: `ld -r` turns the hidden symbols (Monocypher, internal helpers) into local
+    # ones. In an archive of separate objects they stay linkable, so an app that defines crypto_ed25519_check
+    # itself would be linked instead of the core's signature check, and an app with its own Monocypher would
+    # clash. Only the fisica_core_* API stays global.
+    merged = generated / f'{name}-core.o'
+    run(['c++', '-target', target, '-isysroot', sdk, '-r', '-nostdlib', '-o', merged, *objects])
+    # Weak definitions of the C++ standard library (vtables, type info) may stay: any copy is the same one.
+    exported = [line for line in subprocess.check_output(['nm', '-g', '-U', '-m', str(merged)], text=True).splitlines()
+                if line.strip()]
+    stray = [line.split()[-1] for line in exported if not line.split()[-1].startswith('_fisica_core_')
+             and not ('weak external' in line and 'NSt3__' in line.split()[-1])]
+    if stray:
+        raise RuntimeError(f'{merged.name} exports more than the core API: {", ".join(stray[:5])}')
     library = generated / f'{name}.a'
-    run(['libtool', '-static', '-o', library, *objects])
+    run(['libtool', '-static', '-o', library, merged])
     return library
 
 

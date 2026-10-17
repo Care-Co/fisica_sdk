@@ -96,4 +96,10 @@ int main() {
     assert(!fisica::apk_mapped(maps, "com.acme"));        // a prefix is not the package
     assert(fisica::apk_mapped("1-2 r-xp 0 0:0 0 /data/app/com.acme.kiosk-1/base.apk", "com.acme.kiosk"));
     assert(!fisica::apk_mapped("1-2 r-xp 0 0:0 0 /sdcard/com.acme.kiosk-1/base.apk", "com.acme.kiosk"));
+    assert(fisica::apk_mapped("1-2 r-xp 0 0:0 0 /mnt/expand/1a2b/app/~~Q==/com.acme.kiosk-R==/base.apk", "com.acme.kiosk"));
+    // Only where the system installs APKs: not a copy in another app's files or in Downloads.
+    assert(!fisica::apk_mapped("1-2 r--p 0 0:0 0 /data/user/0/com.other/files/app/com.acme.kiosk-1/base.apk", "com.acme.kiosk"));
+    assert(!fisica::apk_mapped("1-2 r--p 0 0:0 0 /storage/emulated/0/Download/app/com.acme.kiosk-1/base.apk", "com.acme.kiosk"));
+    assert(!fisica::apk_mapped("1-2 r--p 0 0:0 0 /data/app/x/y/com.acme.kiosk-1/base.apk", "com.acme.kiosk"));
+    assert(!fisica::apk_mapped("1-2 r--p 0 0:0 0 /data/app/com.acme.kiosk-1/split_config.apk", "com.acme.kiosk"));
 }

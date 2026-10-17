@@ -33,6 +33,9 @@
 #if defined(_MSC_VER)
 #pragma comment(lib, "advapi32.lib")
 #endif
+#elif defined(__ANDROID__)
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -162,19 +165,34 @@ bool app_id(const std::string& value) {
 
 }  // namespace
 namespace fisica {
+// An installed APK lives where only the system writes: /data/app/[~~<hash>/]<package>-<suffix>/base.apk,
+// or the same under /mnt/expand/<volume>/app/ on adopted storage. A file of that shape anywhere else
+// (an app's own files, Downloads) does not count.
 bool apk_mapped(const std::string& maps, const std::string& package) {
     if (package.empty()) return false;
-    const std::string marker = "/" + package + "-";
     for (size_t begin = 0; begin < maps.size();) {
         size_t finish = maps.find('\n', begin);
         if (finish == std::string::npos) finish = maps.size();
         const std::string line = maps.substr(begin, finish - begin);
         begin = finish + 1;
-        const size_t at = line.find(marker);
-        if (at == std::string::npos) continue;
-        const size_t slash = line.find('/', at + marker.size());
-        if (slash != std::string::npos && line.compare(slash, std::string::npos, "/base.apk") == 0 &&
-            line.find("/app/") != std::string::npos && line.find("/app/") < at + 1) return true;
+        const size_t start = line.find('/');  // the fields before the path hold no '/'
+        if (start == std::string::npos) continue;
+        std::string rest = line.substr(start);
+        if (rest.compare(0, 10, "/data/app/") == 0) rest = rest.substr(10);
+        else if (rest.compare(0, 12, "/mnt/expand/") == 0) {
+            const size_t volume = rest.find('/', 12);
+            if (volume == std::string::npos || rest.compare(volume, 5, "/app/") != 0) continue;
+            rest = rest.substr(volume + 5);
+        } else continue;
+        std::vector<std::string> parts;
+        for (size_t at = 0; at <= rest.size();) {
+            const size_t slash = std::min(rest.find('/', at), rest.size());
+            parts.push_back(rest.substr(at, slash - at));
+            at = slash + 1;
+        }
+        if (parts.size() == 3 && parts[0].compare(0, 2, "~~") == 0) parts.erase(parts.begin());
+        if (parts.size() == 2 && parts[1] == "base.apk" && parts[0].size() > package.size() + 1 &&
+            parts[0].compare(0, package.size() + 1, package + "-") == 0) return true;
     }
     return false;
 }
@@ -271,7 +289,12 @@ Target read_target() noexcept {
             std::string maps; char chunk[4096]; size_t size;
             while ((size = std::fread(chunk, 1, sizeof chunk, file)) > 0 && maps.size() < (16u << 20)) maps.append(chunk, size);
             std::fclose(file);
-            if (app_id(name) && fisica::apk_mapped(maps, name)) return {FISICA_BIND_APP, name};
+            // The package's data directory belongs to its own user ID: another app that took its process
+            // name and mapped a copy of its APK runs under a different one (or may not even see it).
+            struct stat data = {};
+            const std::string home = "/data/user/" + std::to_string(getuid() / 100000) + "/" + name;
+            if (app_id(name) && fisica::apk_mapped(maps, name) && stat(home.c_str(), &data) == 0 && data.st_uid == getuid())
+                return {FISICA_BIND_APP, name};
         }
 #else
         for (const char *path : {"/etc/machine-id", "/var/lib/dbus/machine-id"}) {

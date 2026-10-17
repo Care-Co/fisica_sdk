@@ -108,3 +108,44 @@ def test_lean_analysis_matches_decoding_every_packet(full_license, weights):
     expected = core.analyze_matrices([d.sensor_matrix for d in decoded], [d.weight for d in decoded])
     assert core.analyze_packets(sample) == expected
     assert (expected is None) == (weights == [5, 25, 45, 65])
+
+
+def test_a_flood_of_unrequested_answers_drops_old_ones_not_the_session():
+    with NativeSession() as session:
+        session.action(Action.CONNECTED, 2, now_ms=0)
+        session.feed(PROBE_ACK, now_ms=0)  # its result waits, not polled
+        session.feed(bytes.fromhex('242253010000fff0') * 1100, now_ms=1)  # answers nobody asked for
+        found = events(session)
+        assert results(found, Operation.PROBE) and not [e for e in found if e['kind'] == Event.STATE and e['state'] == State.FAULT]
+        assert len(found) == 1024
+
+
+def test_a_stop_before_a_disconnect_still_gets_its_result():
+    with NativeSession() as session:
+        session.action(Action.CONNECTED, 2, now_ms=0)
+        session.feed(PROBE_ACK, now_ms=0)
+        events(session)
+        session.command('_legacy_fixed', payload=bytes([0x31, 0x47, 0, 0]), now_ms=1)  # an answer pending
+        session.action(Action.STOP, 0, now_ms=2)
+        session.action(Action.DISCONNECT, 0, now_ms=3)
+        session.feed(bytes.fromhex('243147010000fff0'), now_ms=4)
+        found = events(session)
+        assert results(found, Operation.END) and results(found, Operation.CLOSE)
+        assert found[-1]['kind'] == Event.RESULT and session_state(found) == State.DISCONNECTED
+
+
+def test_a_link_lost_while_closing_ends_the_close_without_a_reconnect():
+    with NativeSession() as session:
+        measuring(session)
+        session.action(Action.DISCONNECT, 0, now_ms=10)  # waits for the measurement to stop
+        events(session)
+        session.action(Action.LOST, 0, now_ms=11)
+        found = events(session)
+        assert session_state(found) == State.DISCONNECTED and not [e for e in found if e['kind'] == Event.RECONNECT]
+        assert results(found, Operation.CLOSE)
+        session.action(Action.LOST, 0, now_ms=12)  # already closed: nothing happens
+        assert events(session) == []
+
+
+def session_state(found):
+    return [e['state'] for e in found if e['kind'] == Event.STATE][-1]
