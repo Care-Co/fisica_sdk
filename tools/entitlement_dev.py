@@ -8,6 +8,7 @@ import argparse
 import base64
 import hashlib
 import json
+import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -172,15 +173,19 @@ def host_vectors(target_type, target, now, company='acme', contract='ctr-1', key
 
 
 class MockEntitlementServer:
-    """In-memory reference for the developer portal's SDK API (activate and refresh).
+    """In-memory reference for the developer portal's SDK API (activate, refresh and pairing).
 
     Company, contract and key always come from the verified bearer token, never from the body.
-    It keeps no usage data: a refresh is not a record of SDK use.
+    It keeps no usage data: a refresh is not a record of SDK use. Pairing takes only the target;
+    approve() and deny() stand in for an owner entering the code in the portal.
     """
-    def __init__(self, clock=time.time):
+    def __init__(self, clock=time.time, pairing_interval=0):
         self.clock = clock
         self.contracts = {}   # (company, contract) -> dict(kind, contract_start, contract_end, revoked_at, grants, ...)
         self.keys = {}        # key -> dict(company, contract, bind_type, bind, days, released)
+        self.pairings = {}    # device code -> dict(user_code, bind_type, bind, state, key)
+        self.pairing_interval = pairing_interval
+        self.on_pairing = None  # called with the user code when a device asks
         self.fail_requests = 0
         self.requests = []
         self._lock = threading.Lock()
@@ -205,30 +210,77 @@ class MockEntitlementServer:
                 fields['revoked_at'] = now
         return issue_token(company, contract, now, **fields)
 
+    def _pairing(self, user_code):
+        return next(p for p in self.pairings.values() if p['user_code'] == user_code)
+
+    def approve(self, user_code, key):
+        """An owner approves the code with an unbound key: the key is activated for the device's target."""
+        with self._lock:
+            pairing = self._pairing(user_code)
+            self.keys[key].update(bind_type=pairing['bind_type'], bind=pairing['bind'])
+            pairing.update(state='approved', key=key)
+
+    def deny(self, user_code):
+        with self._lock:
+            self._pairing(user_code)['state'] = 'denied'
+
+    def _pair(self, path, body):
+        if path == '/sdk/v1/pairing':
+            if set(body) != {'bind_type', 'bind'}:
+                return 400, {'error': 'unexpected_body'}
+            device = secrets.token_urlsafe(16)
+            user_code = '%s-%s' % tuple(''.join(secrets.choice('BCDFGHJKLMNPQRSTVWXZ') for _ in range(4)) for _ in range(2))
+            self.pairings[device] = {'user_code': user_code, 'bind_type': body['bind_type'], 'bind': body['bind'],
+                                     'state': 'pending', 'key': None}
+            page = 'https://developer.example.test/activate'
+            return 200, {'device_code': device, 'user_code': user_code, 'verification_uri': page,
+                         'verification_uri_complete': page + '?code=' + user_code, 'expires_in': 600,
+                         'interval': self.pairing_interval}
+        pairing = self.pairings.get(body.get('device_code'))
+        if pairing is None or pairing['state'] in ('claimed', 'expired'):
+            return 400, {'error': 'expired_token'}
+        if pairing['state'] != 'approved':
+            return 400, {'error': 'access_denied' if pairing['state'] == 'denied' else 'authorization_pending'}
+        pairing['state'] = 'claimed'
+        seat = self.keys[pairing['key']]
+        return 200, {'token': self.issue(seat['company'], seat['contract'], pairing['key'])}
+
     def handle(self, path, token, body):
+        callback = None
         with self._lock:
             self.requests.append((path, body))
             if self.fail_requests:
                 self.fail_requests -= 1
                 return 503, {'error': 'unavailable'}
-            claims = read_token(token) if token else None
-            contract = (claims['company'], claims['contract']) if claims else None
-            if contract not in self.contracts or (claims.get('key') and claims['key'] not in self.keys):
-                return 401, {'error': 'invalid_token'}
-            key = claims.get('key')
-            if path == '/sdk/v1/entitlement/activate':
-                if not key or set(body) != {'bind_type', 'bind'}:
-                    return 400, {'error': 'invalid_target'}
-                seat = self.keys[key]
-                if seat['bind'] and (seat['bind_type'], seat['bind']) != (body['bind_type'], body['bind']):
-                    return 409, {'error': 'key_in_use'}
-                seat.update(bind_type=body['bind_type'], bind=body['bind'])
-                return 200, {'token': self.issue(*contract, key)}
-            if path != '/sdk/v1/entitlement/refresh':
-                return 404, {'error': 'not_found'}  # There is no usage endpoint.
-            if body:
-                return 400, {'error': 'unexpected_body'}  # No activity or device data is accepted.
+            if path in ('/sdk/v1/pairing', '/sdk/v1/pairing/token'):
+                status, answer = self._pair(path, body)
+                if path == '/sdk/v1/pairing' and status == 200:
+                    callback = self.on_pairing
+            else:
+                return self._handle(path, token, body)
+        if callback:
+            callback(answer['user_code'])  # outside the lock: it may approve or deny
+        return status, answer
+
+    def _handle(self, path, token, body):
+        claims = read_token(token) if token else None
+        contract = (claims['company'], claims['contract']) if claims else None
+        if contract not in self.contracts or (claims.get('key') and claims['key'] not in self.keys):
+            return 401, {'error': 'invalid_token'}
+        key = claims.get('key')
+        if path == '/sdk/v1/entitlement/activate':
+            if not key or set(body) != {'bind_type', 'bind'}:
+                return 400, {'error': 'invalid_target'}
+            seat = self.keys[key]
+            if seat['bind'] and (seat['bind_type'], seat['bind']) != (body['bind_type'], body['bind']):
+                return 409, {'error': 'key_in_use'}
+            seat.update(bind_type=body['bind_type'], bind=body['bind'])
             return 200, {'token': self.issue(*contract, key)}
+        if path != '/sdk/v1/entitlement/refresh':
+            return 404, {'error': 'not_found'}  # There is no usage endpoint.
+        if body:
+            return 400, {'error': 'unexpected_body'}  # No activity or device data is accepted.
+        return 200, {'token': self.issue(*contract, key)}
 
     def start(self, port=0):
         server = self

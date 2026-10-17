@@ -323,13 +323,27 @@ void main() {
   test('the stored activated key wins over the original key file', () {
     final directory = temporary();
     license(storage: directory.path).importToken(vectors['full'] as String);
+    // A later start loads the activated key by itself.
     final reopened = license(storage: directory.path);
+    expect(reopened.status().isFull, isTrue);
     expect(
       reopened.importToken(vectors['unbound_older'] as String),
-      FisicaEntitlementOutcome.accepted,
+      FisicaEntitlementOutcome.ignoredOlder,
     );
     expect(reopened.status().isFull, isTrue);
     expect(reopened.status().bind, target);
+  });
+  test('only a state file of this PC is loaded', () {
+    final directory = temporary();
+    File('${directory.path}/entitlement-0000000000000000.state')
+        .writeAsStringSync('FSS1\nC ${vectors['other_target']}\nT ${now + 400 * day}\n');
+    File('${directory.path}/entitlement-1111111111111111.state')
+        .writeAsStringSync('not a state');
+    final empty = license(storage: directory.path);
+    expect(empty.status().reason, FisicaModeReason.noKey);
+    // The other file's later time is not taken over: no clock rollback here.
+    empty.importToken(vectors['full'] as String);
+    expect(empty.status().isFull, isTrue);
   });
   test('a failed exchange changes nothing and never throws', () async {
     final entitlement = license(endpoint: 'http://127.0.0.1:9');
@@ -423,10 +437,27 @@ void main() {
     expect(changes.last.isFull, isTrue);
     // A forced renewal sends an empty body.
     expect((await entitlement.sync(force: true))!.error, isNull);
-    // A later start with the original key file finds the activated key.
+    // A later start finds the activated key; the original key file does not replace it.
     final reopened = license(clock: () => serverNow, storage: storage);
-    reopened.importToken(vectors['unbound'] as String);
     expect(reopened.status().isFull, isTrue);
+    expect(
+      reopened.importToken(vectors['unbound'] as String),
+      FisicaEntitlementOutcome.ignoredOlder,
+    );
     expect(reopened.status().bind, target);
+    // Pairing without a key: the mock portal approves every code at once
+    // with an unbound key of the contract.
+    final paired = '$storage/paired';
+    final fresh = license(clock: () => serverNow, endpoint: endpoint, storage: paired);
+    expect(fresh.status().reason, FisicaModeReason.noKey);
+    PairingCode? shown;
+    expect(await fresh.pair((code) => shown = code), PairingResult.approved);
+    expect(shown!.userCode, hasLength(9));
+    expect(fresh.status().key, 'key_pair_1');
+    expect(fresh.status().bind, target);
+    final later = license(clock: () => serverNow, storage: paired);
+    expect(later.status().isFull, isTrue);
+    expect(later.status().key, 'key_pair_1');
+    await expectLater(license().pair((_) {}), throwsA(isA<FisicaStateError>()));
   });
 }

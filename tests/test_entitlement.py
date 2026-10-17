@@ -435,3 +435,89 @@ def test_connect_measure_analyze_work_in_every_license_state(state, tmp_path):
     if state == 'unreachable_server':
         assert sdk._entitlement.sync(wait=True)['error']  # Failure is recorded, never raised.
         assert sdk.entitlement_status()['reason'] == 'not_activated'
+
+
+# Pairing: no key, the portal approves a code, the activated key arrives and is stored ---------
+
+def test_pairing_brings_an_activated_key_that_later_runs_find(server, key_storage):
+    mock, url = server
+    mock.on_pairing = lambda code: mock.approve(code, 'key_1')
+    entitlement = quiet(endpoint=url, clock=Clock())
+    assert entitlement.status()['reason'] == 'no_key'
+    shown = []
+    assert entitlement.pair(on_code=shown.append) == 'approved'
+    assert shown[0]['user_code'] == mock.pairings[next(iter(mock.pairings))]['user_code']
+    assert shown[0]['verification_uri_complete'].endswith('/activate?code=' + shown[0]['user_code'])
+    status = entitlement.status()
+    assert (status['mode'], status['key'], status['bind_type'], status['bind']) == ('full', 'key_1', 'pc', here())
+    assert mock.requests[0] == ('/sdk/v1/pairing', {'bind_type': 'pc', 'bind': here()})  # only this PC's hash
+    assert [path.name for path in key_storage.iterdir()] == [entitlement.native.state_name()]
+    entitlement.close()
+
+    later = quiet(clock=Clock())  # a later run without a key or a network
+    assert (later.status()['mode'], later.status()['key']) == ('full', 'key_1')
+
+
+def test_pairing_that_is_denied_or_expires_leaves_basic_mode(server, key_storage):
+    mock, url = server
+    mock.on_pairing = mock.deny
+    entitlement = quiet(endpoint=url, clock=Clock())
+    assert entitlement.pair(on_code=lambda info: None) == 'denied'
+    mock.on_pairing, mock.pairing_interval = None, 0.05
+    assert entitlement.pair(on_code=lambda info: None, timeout=0.3) == 'expired'
+    assert entitlement.status()['reason'] == 'no_key' and not key_storage.exists()
+    with pytest.raises(RuntimeError, match='endpoint'):
+        quiet(clock=Clock()).pair()
+
+
+def test_only_a_key_stored_for_this_target_is_found(key_storage):
+    other = issue_token('acme', 'ctr-2', NOW, key='key_2', track='trial', full_until=NOW + 14 * DAY, bind_type='pc',
+                        bind='0' * 64, key_until=NOW + 90 * DAY)
+    key_storage.mkdir()
+    (key_storage / 'entitlement-0000000000000000.state').write_text(f'FSS1\nC {other}\n')  # another PC's copy
+    (key_storage / 'entitlement-1111111111111111.state').write_bytes(b'not a state')
+    assert quiet(clock=Clock()).status()['reason'] == 'no_key'
+    stored = quiet(token=key(), clock=Clock())
+    stored.close()
+    found = quiet(clock=Clock()).status()
+    assert (found['mode'], found['key']) == ('full', 'key_1')
+    assert quiet(clock=Clock(), storage=None).status()['reason'] == 'no_key'  # memory only: nothing is read
+
+
+def test_sdk_without_configuration_uses_the_stored_key_and_pairs(server, key_storage):
+    from conftest import full_key
+    sdk = FisicaSDK()
+    assert sdk.entitlement_status()['reason'] == 'no_key'
+    quiet(token=full_key()).close()
+    later = FisicaSDK()
+    assert (later.entitlement_status()['mode'], later.entitlement_status()['key']) == ('full', 'key_test_1')
+
+    mock, url = server
+    mock.add_key('key_9', 'acme', 'ctr-1', days=30)
+    mock.on_pairing = lambda code: mock.approve(code, 'key_9')
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore', FisicaEntitlementWarning)
+        paired = sdk.pair_device(endpoint=url, on_code=lambda info: None, clock=Clock())
+    assert (paired['pairing'], paired['key'], paired['bind']) == ('approved', 'key_9', here())
+
+
+def test_license_commands(key_storage, capsys):
+    from fisica_sdk.cli import main
+    mock = MockEntitlementServer()  # the commands use the real clock
+    mock.add_contract('acme', 'ctr-1', track='trial', full_until=int(time.time()) + 14 * DAY)
+    mock.add_key('key_1', 'acme', 'ctr-1', days=30)
+    url = mock.start()
+    assert main(['license', 'status']) == 1
+    assert 'license pair' in capsys.readouterr().out
+    mock.on_pairing = lambda code: mock.approve(code, 'key_1')
+    assert main(['license', 'pair', '--endpoint', url, '--no-browser']) == 0
+    out = capsys.readouterr().out
+    assert 'enter this code' in out and 'Mode: full' in out and 'Activated for: pc ' + here()[:8] in out
+    assert main(['license', 'status', '--json']) == 0
+    assert json.loads(capsys.readouterr().out)['key'] == 'key_1'
+    assert main(['license', 'code']) == 1  # already activated
+    assert main(['license', 'release', '--yes']) == 0
+    code = capsys.readouterr().out.split()[-1]
+    assert read_code(code, 'FRC1') == {'k': 'key_1', 't': 'pc', 'b': here()}
+    assert main(['license', 'status']) == 1 and not list(key_storage.iterdir())
+    mock.stop()

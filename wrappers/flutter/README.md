@@ -106,7 +106,10 @@ The native core decides between two modes and limits what it hands out itself:
 
 `FisicaEntitlement` holds the SDK key. `importToken`/`importFile` take a key from the
 developer portal or a key file it made for a device that is never online (activation
-or renewal file). `status()` returns the mode, the reason for basic mode (`message`
+or renewal file). With a `storageDirectory`, the key stored there for this app or PC is
+loaded at once. Without a key, `await entitlement.pair((code) => ...)` shows a code that an
+owner or admin approves at the portal's `/activate` page; the key arrives activated for this
+app or PC and is stored (endpoint `FisicaEntitlement.defaultEndpoint`). `status()` returns the mode, the reason for basic mode (`message`
 explains it), the open `FisicaFeature` bits, company, contract, key, the app ID or PC
 hash it is activated for, its dates (`keyUntil`, `fullUntil`, `refreshBy`, contract
 dates) and warning bits; `changes` emits whenever the license changes, and

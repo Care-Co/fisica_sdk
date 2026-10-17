@@ -84,8 +84,10 @@ is used: show `activationCode()` (FAC1), enter it in the portal and import the f
 gives. `status()` gives the mode, the reason for basic mode, open features, the key and
 its dates; `onStatus` and `onWarning` report changes. `release()` forgets the key and
 returns the FRC1 code that frees the seat in the portal. Pass `storage` (for example
-`context.filesDir`) to keep the activated key across launches; it wins over the original
-key file the app imports again. Network and storage failures never change the license and
+`context.filesDir`) to keep the activated key across launches; it is loaded when the
+`FisicaEntitlement` is created and wins over the original key file the app imports again.
+Without a key, `pair({ code -> ... })` on a worker thread shows a code that an owner or admin
+approves at the portal's `/activate` page; the key arrives activated for this app and is stored. Network and storage failures never change the license and
 only set `lastSyncError`. Online use needs the INTERNET permission in the app; the AAR
 does not declare it. The SDK does not track its own use; see `doc/entitlement.md`.
 

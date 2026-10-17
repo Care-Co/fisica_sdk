@@ -94,6 +94,12 @@ class EntitlementStatus(
     }
 }
 
+/** What to show while pairing: an owner or admin enters [userCode] at [verificationUri] ([verificationUriComplete] holds the code). */
+class PairingCode(val userCode: String, val verificationUri: String, val verificationUriComplete: String, val expiresIn: Int)
+
+/** How pairing ended. APPROVED: the key is loaded and stored. */
+enum class PairingResult { APPROVED, DENIED, EXPIRED, CANCELLED }
+
 /**
  * One SDK instance's license: its SDK key, the key's activation for this app or PC, and renewal.
  *
@@ -107,9 +113,10 @@ class EntitlementStatus(
  * [endpoint]: developer portal base URL. With it, an imported key that is not activated yet is
  * activated for this app or PC automatically, and a key is renewed before it expires, in the
  * background (the app needs the INTERNET permission). Without it no network is used: activate
- * offline with [activationCode] and import the file the portal gives. [online] false keeps a
- * configured endpoint unused. [storage]: directory for the license state (for example
- * `context.filesDir`), one file per company and contract; null keeps it in memory only.
+ * offline with [activationCode] and import the file the portal gives, or [pair] without a key.
+ * [online] false keeps a configured endpoint unused. [storage]: directory for the license state
+ * (for example `context.filesDir`), one file per seat; null keeps it in memory only. The key stored
+ * there for this app or PC (paired or imported earlier) is loaded at once.
  * Network and storage failures never change the license; they only set [lastSyncError].
  *
  * SDK use is not tracked: the stored state is the signed key and the latest time seen, and the
@@ -138,6 +145,35 @@ class FisicaEntitlement @JvmOverloads constructor(
     @Volatile var onWarning: (Int, EntitlementStatus) -> Unit = { _, _ -> }
     /** Called when the mode, reason, features, warnings or key change. May run on a background thread. */
     @Volatile var onStatus: (EntitlementStatus) -> Unit = {}
+
+    init { if (loadStored()) { notifyStatus(); sync() } }
+
+    /**
+     * The key stored for this app or PC, if any. The core names a state file from the company, the
+     * contract and the target, so a file it names again after restoring it belongs here. With
+     * several, a full-mode key wins, then the most recently verified one.
+     */
+    private fun loadStored(): Boolean {
+        val files = storage?.listFiles { file -> file.name.startsWith("entitlement-") && file.name.endsWith(".state") } ?: return false
+        var best: Triple<Boolean, Long, ByteArray>? = null
+        for (file in files.sortedBy { it.name }) {
+            val probe = Bridge.entitlementCreate()
+            try {
+                val state = file.readBytes()
+                Bridge.entitlementRestore(probe, state)
+                if (Bridge.entitlementText(probe, FisicaEntitlementText.STATE_NAME)?.let { String(it, Charsets.UTF_8) } != file.name) continue
+                val values = Bridge.entitlementStatus(probe, now())
+                val full = values[0] == FisicaMode.FULL.toLong()
+                val current = best
+                if (current == null || (full && !current.first) || (full == current.first && values[8] > current.second)) {
+                    best = Triple(full, values[8], state)
+                }
+            } catch (_: Exception) {
+            } finally { Bridge.entitlementDestroy(probe) }
+        }
+        val chosen = best ?: return false
+        return synchronized(this) { runCatching { Bridge.entitlementRestore(handle, chosen.third); generation++ }.isSuccess }
+    }
 
     @Synchronized override fun close() { if (handle != 0L) { Bridge.entitlementDestroy(handle); handle = 0 } }
     private fun open(): Long { check(handle != 0L) { "Closed entitlement context" }; return handle }
@@ -284,22 +320,79 @@ class FisicaEntitlement @JvmOverloads constructor(
             else -> if (force || values[17].toInt() and FisicaEntitlementWarning.RENEW_DUE != 0) renew else null
         }
     }
-    private fun post(path: String, token: String, body: ByteArray): ByteArray {
+    private fun send(path: String, token: String?, body: ByteArray): Pair<Int, String> {
         val connection = URI(endpoint + path).toURL().openConnection() as HttpURLConnection
         try {
             connection.requestMethod = "POST"; connection.connectTimeout = 5000; connection.readTimeout = 5000
             connection.doOutput = true; connection.useCaches = false
-            connection.setRequestProperty("Authorization", "Bearer $token"); connection.setRequestProperty("Content-Type", "application/json")
+            if (token != null) connection.setRequestProperty("Authorization", "Bearer $token")
+            connection.setRequestProperty("Content-Type", "application/json")
             connection.setFixedLengthStreamingMode(body.size)
             connection.outputStream.use { it.write(body) }
             val code = connection.responseCode
-            if (code !in 200..299) {
-                // A refused activation (key in use elsewhere, released, trial already used) is reported.
-                val detail = try { connection.errorStream?.use { String(it.readBytes(), Charsets.UTF_8).take(200) } } catch (_: Exception) { null }
-                throw IOException("HTTP $code ${detail.orEmpty()}".trim())
-            }
-            return connection.inputStream.use { it.readBytes() }
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            return code to (stream?.use { String(it.readBytes(), Charsets.UTF_8) } ?: "")
         } finally { connection.disconnect() }
+    }
+    private fun post(path: String, token: String, body: ByteArray): ByteArray {
+        val (code, text) = send(path, token, body)
+        // A refused activation (key in use elsewhere, released, trial already used) is reported.
+        if (code !in 200..299) throw IOException("HTTP $code ${text.take(200)}".trim())
+        return text.toByteArray(Charsets.UTF_8)
+    }
+    private fun jsonString(text: String, name: String) =
+        Regex("\"$name\"\\s*:\\s*\"([^\"\\\\]*)\"").find(text)?.groupValues?.get(1)
+    private fun jsonNumber(text: String, name: String) =
+        Regex("\"$name\"\\s*:\\s*([0-9.]+)").find(text)?.groupValues?.get(1)?.toDoubleOrNull()
+
+    /**
+     * Get a key without one: the developer portal approves a code shown here (device authorization).
+     *
+     * Only this app's ID or this PC's hash is sent. [onCode] receives the code to show; an owner or
+     * admin of the organization enters it at [PairingCode.verificationUri] and approves it with a new
+     * or unused key. The key, already activated for this app or PC, then arrives, is loaded and
+     * stored, and later instances load it by themselves. Blocks until the code is approved, denied or
+     * expires, or [isCancelled] returns true: call it on a background thread. Throws
+     * IllegalStateException without an endpoint or a readable app ID or PC, and IOException when
+     * pairing cannot start.
+     */
+    @JvmOverloads fun pair(onCode: (PairingCode) -> Unit, isCancelled: () -> Boolean = { false }): PairingResult {
+        checkNotNull(endpoint) { "Pairing needs the developer portal endpoint" }
+        val request = synchronized(this) { open(); text(FisicaEntitlementText.ACTIVATION_REQUEST) }
+            ?: throw IllegalStateException("The SDK cannot read this app's ID or this PC's identity, so a key cannot be activated here.")
+        val (status, started) = send("/sdk/v1/pairing", null, request.toByteArray(Charsets.UTF_8))
+        if (status != 200) throw IOException("HTTP $status ${started.take(200)}".trim())
+        fun field(name: String) = jsonString(started, name) ?: throw IOException("Unexpected response")
+        val deviceCode = field("device_code")
+        val code = PairingCode(field("user_code"), field("verification_uri"), field("verification_uri_complete"),
+            jsonNumber(started, "expires_in")?.toInt() ?: throw IOException("Unexpected response"))
+        onCode(code)
+        val body = "{\"device_code\":\"$deviceCode\"}".toByteArray(Charsets.UTF_8)
+        var interval = jsonNumber(started, "interval") ?: 5.0
+        // A key approved just before the code expires can still be received for a short while.
+        val deadline = monotonic() + (code.expiresIn + 30) * 1000L
+        while (true) {
+            var wait = minOf((interval * 1000).toLong(), deadline - monotonic()).coerceAtLeast(0)
+            while (wait > 0) {
+                if (isCancelled()) return PairingResult.CANCELLED
+                val step = minOf(wait, 200L); Thread.sleep(step); wait -= step
+            }
+            if (isCancelled()) return PairingResult.CANCELLED
+            try {
+                val (answerStatus, answer) = send("/sdk/v1/pairing/token", null, body)
+                if (answerStatus == 200) {
+                    val outcome = importToken(jsonString(answer, "token") ?: throw IOException("Unexpected response"))
+                    check(outcome == FisicaEntitlementOutcome.ACCEPTED) { "The paired key was not accepted here ($outcome)" }
+                    return PairingResult.APPROVED
+                }
+                when (jsonString(answer, "error")) {
+                    "access_denied" -> return PairingResult.DENIED
+                    "expired_token" -> return PairingResult.EXPIRED
+                    "slow_down" -> interval += 5
+                }
+            } catch (error: IOException) { lastSyncError = "network: ${error.message}" }  // keep polling until the code expires
+            if (monotonic() >= deadline) return PairingResult.EXPIRED
+        }
     }
     /**
      * Activate or renew with the server now, on the calling thread (never the main thread): a key

@@ -39,10 +39,12 @@ def entitlement_server(output):
     """Reference mock developer portal for the online part of each binding's contract.
 
     It holds the shared vectors' unactivated key (key_test_1, a 14-day trial). A binding
-    imports `unbound` with this endpoint, activates it for this PC and renews it. Yields
-    the values a binding needs; afterwards checks what the server received: activation
-    requests carrying exactly this PC's target and empty refreshes, nothing else, so no
-    binding sends usage or activity data.
+    imports `unbound` with this endpoint, activates it for this PC and renews it. Then,
+    without a key and with its own storage directory, it pairs: the server approves every
+    code at once with key_pair_1, and a new instance must find that stored key. Yields the
+    values a binding needs; afterwards checks what the server received: activation and
+    pairing requests carrying exactly this PC's target, pairing polls carrying only the
+    device code, and empty refreshes, nothing else, so no binding sends usage or activity data.
     """
     from entitlement_dev import MockEntitlementServer
     vectors = license_vectors()
@@ -50,17 +52,21 @@ def entitlement_server(output):
     server = MockEntitlementServer(clock=lambda: now)
     server.add_contract('acme', 'ctr-1', track='trial', full_until=vectors['now'] + 14 * 86400)
     server.add_key('key_test_1', 'acme', 'ctr-1', days=90)
+    server.add_key('key_pair_1', 'acme', 'ctr-1', days=90)
+    server.on_pairing = lambda code: server.approve(code, 'key_pair_1')  # an owner approves at once
     storage = output / 'storage'
     shutil.rmtree(storage, ignore_errors=True)
     target = {'bind_type': vectors['target_type'], 'bind': vectors['target']}
     try:
         yield {'endpoint': server.start(), 'storage': storage.as_posix(), 'server_now': now}
         assert any(path.endswith('/activate') for path, _ in server.requests), 'the binding never activated the key'
+        assert any(path == '/sdk/v1/pairing/token' for path, _ in server.requests), 'the binding never paired'
         unexpected = [(path, body) for path, body in server.requests
                       if not ((path == '/sdk/v1/entitlement/refresh' and body == {}) or
-                              (path == '/sdk/v1/entitlement/activate' and body == target))]
-        assert not unexpected, f'binding sent more than its target and empty refreshes: {unexpected}'
-        print('mock server: only activation for this PC and empty refreshes received')
+                              (path in ('/sdk/v1/entitlement/activate', '/sdk/v1/pairing') and body == target) or
+                              (path == '/sdk/v1/pairing/token' and set(body) == {'device_code'}))]
+        assert not unexpected, f'binding sent more than its target, device codes and empty refreshes: {unexpected}'
+        print('mock server: only activation and pairing for this PC, pairing polls and empty refreshes received')
     finally:
         server.stop()
 

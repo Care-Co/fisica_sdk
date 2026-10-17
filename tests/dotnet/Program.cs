@@ -130,7 +130,8 @@ Console.WriteLine("C# shared session and processing vectors passed");
         }
         Require(Directory.GetFiles(directory).Length==1,"activated key stored");
         using var reopened=new FisicaEntitlement(core,() => now,storage: directory);
-        Require(reopened.ImportToken(values["full_older"])==FisicaEntitlementOutcome.Accepted && reopened.Status() is { Mode: FisicaMode.Full, VerifiedAt: var at } && at==now,"stored key wins");
+        Require(reopened.Status() is { Mode: FisicaMode.Full, Key: "key_test_1" },"stored key loaded without importing one");
+        Require(reopened.ImportToken(values["full_older"])==FisicaEntitlementOutcome.IgnoredOlder && reopened.Status() is { Mode: FisicaMode.Full, VerifiedAt: var at } && at==now,"stored key wins");
         var released=ReadCode(reopened.Release(),"FRC1");
         Require(released["k"]=="key_test_1" && released["t"]==values["target_type"] && released["b"]==target.Value,"FRC1 release code");
         Require(reopened.Status() is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.NoKey, Key: "" } && Directory.GetFiles(directory).Length==0,"release forgets the key");
@@ -375,9 +376,25 @@ if (values.TryGetValue("endpoint",out var endpoint)) {
     Require(await entitlement.SyncAsync() is { Activated: false, Refreshed: false, Error: null },"nothing due");
     entitlement.CheckStatus();
     Require(await entitlement.SyncAsync(force: true) is { Refreshed: true, Error: null },"forced renewal: "+entitlement.LastSyncError);
-    // A later start with the original key file still finds the activated key.
+    // A later start finds the activated key; the original key file does not replace it.
     using var reopened=new FisicaEntitlement(core,() => clock,null,directory);
-    Require(reopened.ImportToken(values["unbound"])==FisicaEntitlementOutcome.Accepted && reopened.Status() is { Mode: FisicaMode.Full, VerifiedAt: var verified } && verified==clock,"stored activated key restored");
+    Require(reopened.Status() is { Mode: FisicaMode.Full, VerifiedAt: var verified } && verified==clock
+        && reopened.ImportToken(values["unbound"])==FisicaEntitlementOutcome.IgnoredOlder && reopened.Status().IsFull,"stored activated key restored");
+    // Pairing without a key: the mock portal approves every code at once with an unbound key of the contract.
+    string paired=Path.Combine(directory,"paired");
+    using (var fresh=new FisicaEntitlement(core,() => clock,endpoint,paired)) {
+        Require(fresh.Status() is { Reason: FisicaModeReason.NoKey },"no key before pairing");
+        PairingCode? shown=null;
+        Require(await fresh.PairAsync(code => shown=code)==PairingResult.Approved && shown is { UserCode.Length: 9 },"paired: "+fresh.LastSyncError);
+        Require(fresh.Status() is { Mode: FisicaMode.Full, Key: "key_pair_1" } && fresh.Status().Bind==target.Value,"paired key activated for this PC");
+    }
+    using (var later=new FisicaEntitlement(core,() => clock,null,paired))
+        Require(later.Status() is { Mode: FisicaMode.Full, Key: "key_pair_1" },"a later start finds the paired key");
+    using (var unreachable=new FisicaEntitlement(core,() => clock,null,null)) {
+        bool refused=false;
+        try { await unreachable.PairAsync(_ => { }); } catch (InvalidOperationException) { refused=true; }
+        Require(refused,"pairing needs an endpoint");
+    }
     // A communication failure is recorded, raises nothing and changes no state.
     using var offline=new FisicaEntitlement(core,() => clock,"http://127.0.0.1:9",Path.Combine(directory,"offline"));
     offline.ImportToken(values["unbound"]); offline.CheckStatus();

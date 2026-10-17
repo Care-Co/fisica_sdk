@@ -103,6 +103,24 @@ Dart 0.6.0이며 서버는 개발자 포털 https://developer.fisicahealthcare.c
   같은 회사·계약의 원래 키 파일을 다시 가져와도 저장해 둔 활성화된 키가 이긴다.
 - 같은 키 파일을 다시 가져와도 시계 되돌림 기록은 지워지지 않는다. 서버가 새로 서명한 키만 기록을 새로 맞춘다.
 
+## 키 없이 연결(기기 연결)
+
+키를 앱에 넣지 않고, 기기가 보여주는 코드를 포털에서 승인해 키를 받는다(RFC 8628 장치 인증 방식,
+[licensing-plan.md](licensing-plan.md) 4.7).
+
+1. SDK가 `POST /sdk/v1/pairing`에 코어의 활성화 요청 본문(대상만)을 보내고 연결 코드(`XXXX-XXXX`)와 승인 주소를 받는다.
+2. 사람이 포털 `/activate`에 로그인해 코드를 넣는다. 화면에는 앱 ID 또는 PC 해시 앞 8자리와 요청 시각이 나온다.
+3. 조직 소유자·관리자가 체험·계약과 키(새 키 또는 미활성 키)를 골라 승인한다. 좌석·이동 상한·체험 규칙은 활성화와 같다.
+   거부할 수도 있다. 코드는 10분, 한 번만 쓸 수 있다.
+4. SDK가 `POST /sdk/v1/pairing/token`을 5초마다 묻다가 이 대상에 활성화된 키를 받아 저장한다.
+5. 그 뒤로는 키 없이 시작해도 저장 위치에서 이 앱·PC의 키를 찾아 쓴다. 상태 파일 이름이 코어가 이 대상으로 다시
+   만든 이름과 같은 파일만 쓰며, 여러 개면 전체 모드인 키, 그다음 가장 최근에 확인된 키를 쓴다.
+
+- 저장된 키가 있으면 원래 키 파일을 다시 가져와도 바뀌지 않는다(`ignored_older`). 저장된 키가 더 새롭다.
+- 다른 사람이 보내 준 코드를 승인하면 그 사람의 기기가 이 조직의 키를 받는다. 포털 화면이 이를 경고한다.
+- PC의 Python 스크립트·C# 프로그램·Flutter 데스크톱 앱은 대상이 같은 PC 해시라 한 번 연결하면 함께 쓴다.
+  앱 ID가 있는 앱(iOS·Android·macOS `.app`)은 앱 안에서 `pair`를 불러 연결한다.
+
 ## 세션과 함수
 
 - 세션은 라이선스 판정을 복사해 쓴다(`fisica_core_session_license`). 시작 전, 키가 바뀔 때, 30초마다
@@ -119,7 +137,7 @@ Dart 0.6.0이며 서버는 개발자 포털 https://developer.fisicahealthcare.c
 
 - SDK는 Care&Co의 사용 현황 추적을 위한 활동 기록을 수집·보관·보고하지 않는다.
 - 측정 데이터, 측정 횟수, API 호출 횟수, 사용 여부·사용 시각, 기간 종료 후 사용 여부를 기록하거나 보내지 않는다.
-- 서버로 가는 것: 활성화 때 키와 대상(앱 ID 또는 PC 해시), 갱신 때 키뿐이다.
+- 서버로 가는 것: 활성화 때 키와 대상(앱 ID 또는 PC 해시), 갱신 때 키, 기기 연결 때 대상과 연결 확인용 장치 코드뿐이다.
 - 서버가 저장하는 것: 키마다 묶인 대상과 활성화·갱신·해제 시각. 좌석·체험 관리용이며 사용 이력이 아니다.
   오프라인 사용이나 갱신 없이 쓰는 사용은 서버에 보이지 않는다.
 - 기기에 저장하는 것: 서명된 키와 지금까지 본 가장 늦은 시각. 오프라인 판정과 시계 되돌림 감지용이다.
@@ -133,7 +151,22 @@ sdk.configure_entitlement(file='sdk-key.fse', endpoint='https://developer.fisica
 print(sdk.entitlement_status())   # mode, reason, features, key, track, 날짜, warnings, activation_code
 sdk.activation_code()             # 인터넷이 없는 PC: 포털에 입력할 활성화 코드
 sdk.release_key()                 # 이 앱·PC의 키 해제. 포털에 입력할 해제 코드를 돌려준다
+sdk.pair_device()                 # 키 없이 연결: 코드를 보여주고 포털 승인을 기다린다
 ```
+
+터미널에서 이 PC를 연결하고 관리하는 명령:
+
+```sh
+python -m fisica_sdk license pair      # 코드 표시 + 승인 페이지 열기, 승인되면 키 저장
+python -m fisica_sdk license status    # 이 PC에 저장된 키와 모드 (--json)
+python -m fisica_sdk license import sdk-key.fse   # 키·키 파일 가져오기와 온라인 활성화 (--offline)
+python -m fisica_sdk license code      # 미활성 키의 활성화 코드(오프라인 활성화)
+python -m fisica_sdk license release   # 키 해제와 해제 코드
+```
+
+- `configure_entitlement()`를 부르지 않거나 키 없이 부르면 이 앱·PC에 저장된 키(연결했거나 가져온 키)를 쓴다.
+  저장된 키를 찾아 쓸 때와 `pair_device()`·`license` 명령은 서버 주소 기본값 https://developer.fisicahealthcare.com 을
+  쓴다(`--endpoint`로 바꿀 수 있다).
 
 - `endpoint`를 주지 않으면 네트워크를 전혀 쓰지 않는다. `online=False`로도 끌 수 있다.
 - `endpoint`가 있으면 새 키를 가져오는 즉시 백그라운드에서 활성화하고, 기능 사용 시점에 갱신할 때가 됐는지 본다.
@@ -145,20 +178,23 @@ sdk.release_key()                 # 이 앱·PC의 키 해제. 포털에 입력�
 ## Swift·Kotlin·C#·Dart
 
 `FisicaEntitlement`가 Python과 같은 동작을 제공한다: 키·파일 가져오기, 상태, 자동 활성화·갱신, 활성화 코드,
-해제, 저장·복원. 각 고수준 클라이언트가 세션에 라이선스를 적용하고 기본 모드의 체중·발 크기는 코어 분석을 쓴다.
+해제, 저장·복원, 키 없이 연결. 저장 위치가 있으면 만들 때 이 앱·PC의 저장된 키를 바로 읽는다.
+각 고수준 클라이언트가 세션에 라이선스를 적용하고 기본 모드의 체중·발 크기는 코어 분석을 쓴다.
 
-| 언어 | 온라인 | 저장 위치 인자 | 기본 저장 위치 | 라이선스 오류 |
-|---|---|---|---|---|
-| Swift | `endpoint: URL`, `syncNow()`/`sync()` | `storage: URL?` | Application Support/Fisica/sdk | `FisicaLicenseError` |
-| Kotlin | `endpoint: String`, `syncNow()`/`sync()` | `storage: File?` | 없음. 앱이 `filesDir` 등을 전달 | `FisicaLicenseException` |
-| C# | `endpoint`, `SyncAsync()`/`Sync()` | `storage` | LocalApplicationData/Fisica/sdk | `FisicaLicenseException` |
-| Dart | `endpoint`, `sync()` | `storageDirectory` | 없음. 앱이 디렉터리를 전달 | `FisicaLicenseError` |
+| 언어 | 온라인 | 키 없이 연결 | 저장 위치 인자 | 기본 저장 위치 | 라이선스 오류 |
+|---|---|---|---|---|---|
+| Swift | `endpoint: URL`, `syncNow()`/`sync()` | `pair(onCode:)` (async), `pairNow` | `storage: URL?` | Application Support/Fisica/sdk | `FisicaLicenseError` |
+| Kotlin | `endpoint: String`, `syncNow()`/`sync()` | `pair(onCode)` (백그라운드 스레드) | `storage: File?` | 없음. 앱이 `filesDir` 등을 전달 | `FisicaLicenseException` |
+| C# | `endpoint`, `SyncAsync()`/`Sync()` | `PairAsync(onCode)` | `storage` | LocalApplicationData/Fisica/sdk | `FisicaLicenseException` |
+| Dart | `endpoint`, `sync()` | `pair(onCode)` | `storageDirectory` | 없음. 앱이 디렉터리를 전달 | `FisicaLicenseError` |
 
-- 모든 언어에서 `endpoint`가 없으면 네트워크를 쓰지 않는다. 서버 주소 기본값은 없다.
-- Android 앱은 온라인 활성화·갱신에 INTERNET 권한이 필요하다(AAR은 선언하지 않는다).
-- 네 언어 모두 같은 Mock 서버를 상대로 이 PC 활성화, 갱신, 통신 실패, 저장·복원을 검증한다
-  (`python tools/verify_bindings.py native swift kotlin dotnet dart`). Mock 서버는 이 PC의 활성화 본문과
-  빈 갱신 요청 외의 요청이 오면 실패한다.
+- 모든 언어에서 `endpoint`가 없으면 네트워크를 쓰지 않는다. 연결에 쓸 포털 주소는 상수로 제공한다
+  (`DefaultEndpoint`, `defaultEndpoint`); 앱이 넘겨야 쓰인다.
+- 연결 결과는 승인·거부·만료·취소 네 가지다. 시작 요청이 실패하거나 endpoint·대상이 없으면 예외가 난다.
+- Android 앱은 온라인 활성화·갱신·연결에 INTERNET 권한이 필요하다(AAR은 선언하지 않는다).
+- 네 언어 모두 같은 Mock 서버를 상대로 이 PC 활성화, 갱신, 통신 실패, 저장·복원, 키 없이 연결을 검증한다
+  (`python tools/verify_bindings.py native swift kotlin dotnet dart`). Mock 서버는 이 PC의 활성화·연결 본문,
+  연결 확인용 장치 코드, 빈 갱신 요청 외의 요청이 오면 실패한다.
 
 ## 개발용 도구
 
@@ -177,7 +213,8 @@ python -m pytest tests/test_entitlement.py -q
 1. 운영 Ed25519 키 쌍. 공개키와 `kid`를 SDK에 넣는다. 키 교체는 `kid` 추가로 처리한다.
 2. 체험·연장·계약 신청과 관리자 승인, 계약별 좌석·이동 상한·최대 키 기한·기능·유예.
 3. 키 만들기(유효기간 선택)·상태(미활성·사용 중·해제 대기·만료됨)·삭제, 활성화 파일·갱신 파일·해제 코드.
-4. `/sdk/v1/entitlement/activate`와 `/refresh`. 규칙은 API 명세의 설명 그대로다. 사용 보고 API는 없다.
+4. `/sdk/v1/entitlement/activate`와 `/refresh`, 키 없는 연결 `/sdk/v1/pairing`·`/pairing/token`과 승인 페이지
+   `/activate`. 규칙은 API 명세의 설명 그대로다. 사용 보고 API는 없다.
 5. 활성화·갱신 기록을 SDK 사용 이력이나 계약 준수 판단 자료로 쓰지 않는다.
 
 ## 구현 상태 (2026-10-17)
