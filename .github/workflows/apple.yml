@@ -13,22 +13,33 @@ concurrency:
 jobs:
   apple:
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: macos-15
-    timeout-minutes: 30
+    # Self-hosted macOS runner on the company Intel Mac: Swift tests run as x86_64; the arm64 slices
+    # are cross-built. The workspace is cleaned by checkout; nothing is installed on the Mac.
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with: {persist-credentials: false}
+      - name: Xcode on this runner (the iOS SDK needs Xcode, not only the command line tools)
+        run: |
+          developer="$(xcode-select -p)"
+          case "$developer" in
+            *.app/Contents/Developer) ;;
+            *) developer="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -1)/Contents/Developer" ;;
+          esac
+          test -x "$developer/usr/bin/xcodebuild" || { echo "::error::No Xcode on this runner"; exit 1; }
+          DEVELOPER_DIR="$developer" xcodebuild -version
+          { echo "DEVELOPER_DIR=$developer"; echo "FISICA_XCODE_DEVELOPER=$developer"; } >> "$GITHUB_ENV"
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with: {python-version: '3.11'}
       - run: python tools/build_platforms.py --validation --target apple
-        env:
-          FISICA_XCODE_DEVELOPER: /Applications/Xcode.app/Contents/Developer
       - name: Swift contract (client, entitlement, online exchange with the mock server)
         run: python tools/verify_bindings.py swift
       - run: python tools/build_platforms.py --validation --target macosx_11_0_universal2
       - name: Audit public Apple artifacts
         run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts apple macosx_11_0_universal2)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        continue-on-error: true  # artifact storage is billed to the account; the checks above are the result
         with:
           name: fisica-apple-binaries
           path: |
