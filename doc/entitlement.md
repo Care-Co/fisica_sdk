@@ -57,6 +57,12 @@ Dart 0.6.0이며 서버는 개발자 포털 https://developer.fisicahealthcare.c
   지금 가진 키를 바꾸지 않는다(`rejected_target`, `rejected_*`, `ignored_older`).
 - 디버그 빌드(`.debug`, `.dev`)는 같은 앱이다. 앱 ID 비교에서 접미사를 뗀다(포털도 같다).
 - 통신 실패는 만료·해제·폐기가 아니다. 키 기한 안에서는 오프라인으로 계속 전체 모드다.
+- **시각은 코어가 직접 읽는다.** 고객 빌드(운영 키만 신뢰)의 코어는 시스템 시계를 쓰고, 래퍼가 넘긴 시각은
+  더 늦을 때만 쓴다. 기본 모드의 초당 1장과 세션의 전체 모드 끝도 코어의 단조 시계로 잰다. 래퍼의 `clock` 인자는
+  검증 빌드(테스트 키 신뢰)에서만 그대로 쓰인다. 2200년 이후 값(초 대신 밀리초)은 거부한다.
+- **언제 서버에 물을지도 코어가 정한다**(`fisica_core_entitlement_next_exchange`): 미활성 키는 활성화, 갱신할 때가 됐거나
+  키·기간이 끝났거나 시계 되돌림이면 갱신(새로 서명된 키가 지금까지 본 가장 늦은 시각을 바로잡는다), 그 밖에는 없음.
+  거절(4xx)은 1시간 뒤에 다시 묻는다.
 - 상태는 SDK 인스턴스(컨텍스트 핸들)마다 따로 관리한다.
 
 ## 대상(앱 ID·PC 해시)
@@ -64,7 +70,7 @@ Dart 0.6.0이며 서버는 개발자 포털 https://developer.fisicahealthcare.c
 | 플랫폼 | 대상 | 코어가 읽는 곳 |
 |---|---|---|
 | iOS 앱, macOS `.app` (Swift, Flutter, C#·Python으로 만든 앱 번들) | 번들 ID | `CFBundleGetMainBundle` |
-| Android 앱 (Kotlin, Flutter) | 패키지명 | `/proc/self/cmdline` |
+| Android 앱 (Kotlin, Flutter) | 패키지명 | `/proc/self/cmdline`, 그 패키지의 설치 APK(`base.apk`)가 프로세스에 올라와 있을 때만 |
 | Windows (C#, Flutter, Python) | PC 해시 | 레지스트리 `MachineGuid` |
 | macOS의 스크립트·명령줄 프로그램(Python, `dotnet` 실행, XCTest 등) | PC 해시 | `gethostuuid()`(IOPlatformUUID와 같은 값) |
 | Linux(향후) | PC 해시 | `/etc/machine-id` |
@@ -95,7 +101,7 @@ Dart 0.6.0이며 서버는 개발자 포털 https://developer.fisicahealthcare.c
 |---|---|---|
 | 활성화 | SDK가 `POST /sdk/v1/entitlement/activate`에 키와 대상(코어가 만든 본문)을 보내 묶인 키를 받는다 | SDK가 보여주는 활성화 코드(`FAC1.…`)를 포털의 그 키에 입력해 받은 키 파일을 가져온다 |
 | 갱신 | `renew_due`이거나 키 기한·기간이 지났으면 `POST /refresh`(빈 본문)로 같은 키를 다시 받는다 | 포털에서 같은 키의 갱신 파일을 받아 가져온다 |
-| 해제 | 포털에서 해제를 요청하면 다음 갱신 응답이 `revoked_at`을 담고, SDK는 저장한 키를 지운다 | SDK의 해제 기능이 키를 지우고 해제 코드(`FRC1.…`)를 보여준다. 포털에 입력하면 좌석이 빈다 |
+| 해제 | 기기에서 해제하면 SDK가 키로 `POST /sdk/v1/entitlement/release`(빈 본문)를 보내 좌석이 바로 빈다. 포털에서 해제를 요청하면 다음 갱신 응답이 `revoked_at`을 담고, SDK는 저장한 키를 지운다 | SDK의 해제 기능이 키를 지우고 해제 코드(`FRC1.…`)를 보여준다. 포털에 입력하면 좌석이 빈다 |
 
 - 활성화 코드·해제 코드의 형식은 [licensing-plan.md](licensing-plan.md) 5절과 같고, 포털의 해석기로
   교차 검증한다(포털 `tests/test_sdk_interop.py`).
@@ -137,7 +143,7 @@ Dart 0.6.0이며 서버는 개발자 포털 https://developer.fisicahealthcare.c
 
 - SDK는 Care&Co의 사용 현황 추적을 위한 활동 기록을 수집·보관·보고하지 않는다.
 - 측정 데이터, 측정 횟수, API 호출 횟수, 사용 여부·사용 시각, 기간 종료 후 사용 여부를 기록하거나 보내지 않는다.
-- 서버로 가는 것: 활성화 때 키와 대상(앱 ID 또는 PC 해시), 갱신 때 키, 기기 연결 때 대상과 연결 확인용 장치 코드뿐이다.
+- 서버로 가는 것: 활성화 때 키와 대상(앱 ID 또는 PC 해시), 갱신·해제 때 키, 기기 연결 때 대상과 연결 확인용 장치 코드뿐이다.
 - 서버가 저장하는 것: 키마다 묶인 대상과 활성화·갱신·해제 시각. 좌석·체험 관리용이며 사용 이력이 아니다.
   오프라인 사용이나 갱신 없이 쓰는 사용은 서버에 보이지 않는다.
 - 기기에 저장하는 것: 서명된 키와 지금까지 본 가장 늦은 시각. 오프라인 판정과 시계 되돌림 감지용이다.
@@ -188,6 +194,9 @@ python -m fisica_sdk license release   # 키 해제와 해제 코드
 | C# | `endpoint`, `SyncAsync()`/`Sync()` | `PairAsync(onCode)` | `storage` | LocalApplicationData/Fisica/sdk | `FisicaLicenseException` |
 | Dart | `endpoint`, `sync()` | `pair(onCode)` | `storageDirectory` | 없음. 앱이 디렉터리를 전달 | `FisicaLicenseError` |
 
+- 기본 모드 이유·경고 문구는 `wrappers/license-messages.json` 하나에서 `tools/sync_binding_metadata.py`가 각 언어로 생성한다.
+- 해제는 `release()`(온라인이면 서버 알림을 백그라운드로), 기다리려면 C# `ReleaseAsync`, Swift `releaseNow`,
+  Kotlin `releaseNow`, Dart `releaseOnline`, Python `release()` 뒤 `released_online`.
 - 모든 언어에서 `endpoint`가 없으면 네트워크를 쓰지 않는다. 연결에 쓸 포털 주소는 상수로 제공한다
   (`DefaultEndpoint`, `defaultEndpoint`); 앱이 넘겨야 쓰인다.
 - 연결 결과는 승인·거부·만료·취소 네 가지다. 시작 요청이 실패하거나 endpoint·대상이 없으면 예외가 난다.

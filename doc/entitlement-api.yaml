@@ -8,9 +8,9 @@ info:
     https://developer.fisicahealthcare.com; `tools/entitlement_dev.py` is the reference mock used by
     the tests.
 
-    The SDK calls four endpoints: activate (once per key, sending the key and this app's or PC's
-    target), refresh (renewal of the same key, empty body), and pairing and pairing token for an
-    SDK without a key (device authorization as in RFC 8628: the SDK sends only its target, shows a
+    The SDK calls five endpoints: activate (once per key, sending the key and this app's or PC's
+    target), refresh (renewal of the same key, empty body), release (the device let go of its key,
+    empty body), and pairing and pairing token for an SDK without a key (device authorization as in RFC 8628: the SDK sends only its target, shows a
     code, and receives a key that an owner or admin approved in the portal). There is no usage,
     activity or telemetry endpoint. Trial, extension and contract requests, approval, creating keys,
     approving pairing codes (`/activate`), offline activation files, renewal files and release codes
@@ -94,6 +94,20 @@ paths:
         '401': {description: Missing token, bad signature, unknown signing key or unknown contract., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '429': {description: Rate limited. The SDK keeps what it had.}
         '503': {description: Temporarily unavailable. The SDK keeps what it had.}
+  /sdk/v1/entitlement/release:
+    post:
+      summary: The device released its key; free the seat now.
+      description: |
+        Sent by the SDK when it releases a key online, after the core forgot the key. Only the key
+        itself (bearer) can ask; the body is an empty object. The key is recorded as released by
+        the device and its seat is free at once; asking again changes nothing. Offline devices show
+        the FRC1 release code instead, which is entered in the portal.
+      requestBody: {required: true, content: {application/json: {schema: {type: object, additionalProperties: false}}}}
+      responses:
+        '200': {description: 'Released (or already released).', content: {application/json: {schema: {type: object, properties: {released: {type: boolean}}}}}}
+        '400': {description: Body is not an empty object., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '401': {description: Missing token, bad signature or unknown key., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '429': {description: Rate limited.}
   /sdk/v1/pairing:
     post:
       summary: Start pairing an SDK without a key; answers the codes.
