@@ -13,8 +13,8 @@ concurrency:
 jobs:
   apple:
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    # Self-hosted macOS runner on the company Intel Mac: Swift tests run as x86_64; the arm64 slices
-    # are cross-built. The workspace is cleaned by checkout; nothing is installed on the Mac.
+    # Self-hosted macOS runner (Company-Mac, ARM64): Swift tests run as arm64; the x86_64 slices are
+    # cross-built. The workspace is cleaned by checkout; nothing is installed on the Mac.
     runs-on: [self-hosted, macOS]
     timeout-minutes: 45
     steps:
