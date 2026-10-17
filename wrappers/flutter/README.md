@@ -30,8 +30,9 @@ Apple podspec retains C symbols. iOS app signing is still the host app's respons
 Browser/Flutter Web is not supported by this native FFI package.
 
 `wrapper.json` is the version/policy source. Keep `pubspec.yaml` synchronized and run
-`python tools/sync_flutter_metadata.py` from the trusted repository root. The wrapper
-checks SDK, core, ABI and wrapper support policy offline before decoding or analysis.
+`python tools/sync_flutter_metadata.py` from the trusted repository root. `FisicaCore`
+asks the core (`fisica_core_check_wrapper`, the policy every wrapper uses) whether it
+supports this SDK, ABI and wrapper release, offline, before decoding or analysis.
 Supported older versions produce warnings; unsupported versions fail explicitly.
 
 The wrapper and compiled core use the Fisica Scale SDK License Version 2.0 (draft),
@@ -65,8 +66,11 @@ Core owns all command ordering, ACK deadlines, duration and recovery decisions.
 
 - `connect(link: ...)` takes `FisicaLink.ble` or `FisicaLink.usb`. Without it the
   transport's own link is used (`FisicaLinkTransport`; the BLE adapter is BLE, the USB
-  adapter USB), otherwise BLE. A different link fails with `FisicaArgumentError` before
-  anything is sent. `profile:` is the deprecated name of the same value.
+  adapter USB); any other `FisicaTransport` must be given it. A missing link, or one
+  other than the transport's, fails with `FisicaArgumentError` before anything is sent.
+  `profile:` is the deprecated name of the same value.
+- Only the same operation is busy (a second `start()` while one is pending); the core
+  orders the rest, for example a `stop()` sent while `start()` waits for its ACK.
 - After a link loss the stream emits an error and a `reconnect` event and the session
   is RECOVERING. Call `connect()` again on the same client (optionally with
   `transport:` to replace the transport; the old one is closed): the core resumes a
@@ -85,8 +89,10 @@ legacy protocol limitation. Android/iOS physical measurements are still unverifi
 ## Reports, codes and license modes (0.6)
 
 `FisicaClient` collects decoded frames and `report()` returns weight and foot
-dimensions computed by the shared core (29x29 display grid and per-frame weight;
-unrounded). Codes are generated classes such as `FisicaStatus`, `FisicaSessionState`,
+dimensions computed by the shared core from every packet the session received since
+`start()` (unrounded), in every mode and still after `close()`. A `FisicaSession`
+dropped without `close()` is freed by a native finalizer once it is collected.
+Codes are generated classes such as `FisicaStatus`, `FisicaSessionState`,
 `FisicaSessionEventKind`, `FisicaMode` and `FisicaModeReason`, and
 `FisicaBleProfile.scale` carries the default GATT UUIDs (from the Python SDK, not yet
 confirmed on production firmware) for the BLE plugin your app uses.
