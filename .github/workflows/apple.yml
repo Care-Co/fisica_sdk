@@ -36,12 +36,12 @@ jobs:
       - name: Swift contract (client, entitlement, online exchange with the mock server)
         run: python tools/verify_bindings.py swift
       - run: python tools/build_platforms.py --validation --target macosx_11_0_universal2
-      - name: Audit public Apple artifacts
-        run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts apple macosx_11_0_universal2)
+      - name: Audit public Apple artifacts (QA build, test key allowed)
+        run: python tools/audit_artifacts.py --validation $(python tools/build_platforms.py --print-artifacts apple macosx_11_0_universal2)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         continue-on-error: true  # artifact storage is billed to the account; the checks above are the result
         with:
-          name: fisica-apple-binaries
+          name: fisica-apple-binaries-validation  # QA build: trusts the test key, never for customers
           path: |
             .build/platforms/apple/*.zip
             .build/platforms/*.zip

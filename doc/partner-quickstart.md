@@ -32,7 +32,7 @@ Swift/Kotlin/C# 0.3.0 기준. 설치는 회사가 제공한 **바이너리 패�
 | 앱 언어 | 패키지 | 불러오기 | 샘플 |
 |---|---|---|---|
 | Python 3.9+ | OS/CPU에 맞는 wheel | `from fisica_sdk import FisicaSDK` | `python/main.py` |
-| C#/.NET 8 | `CareCo.Fisica.Scale.0.3.0.nupkg` | `using CareCo.Fisica;` | `dotnet/Quickstart.csproj` |
+| C#/.NET 8 | C# 래퍼 소스 ZIP `fisica-dotnet-0.3.0.zip` + OS/CPU별 core ZIP | `using CareCo.Fisica;` | `dotnet/Quickstart.csproj` |
 | Swift | 공개 소스 + XCFramework가 포함된 Swift ZIP | `import FisicaScale` | `swift/ScaleApp.swift` |
 | Kotlin/Java | `fisica-scale-0.3.0.aar` | `com.carenco.fisica` | `android/app-kotlin`, `android/app-java` |
 | Dart/Flutter | core 플랫폼 ZIP + transport ZIP | `import 'package:fisica_flutter/fisica_flutter.dart';` | `flutter/` |
@@ -64,12 +64,24 @@ Bluetooth 권한을 허용한다. 기본 설치에는 GUI가 필요 없다.
 
 ## C#: Windows 우선
 
-받은 nupkg를 `sdk/nuget/`에 넣는다. 해당 폴더를 로컬 패키지 소스로 등록하고 복원한다.
+C# 래퍼는 당분간 **소스 ZIP** `fisica-dotnet-0.3.0.zip`과 실행할 OS/CPU의 **core ZIP**
+(`fisica-core-2.0.0-win_amd64.zip`, `-win_arm64.zip`, `-macosx_11_0_universal2.zip`)으로 제공한다.
+코어가 들어 있는 NuGet 패키지(`CareCo.Fisica.Scale`)는 Windows에서 빌드·검증할 러너가 생긴 뒤 제공한다.
+샘플 폴더에 다음과 같이 푼다.
+
+```text
+sdk/
+  dotnet/   # fisica-dotnet-0.3.0.zip (Fisica.Scale.csproj)
+  core/     # 이 PC의 core ZIP (예: Windows x64는 fisica-core-2.0.0-win_amd64.zip)
+```
+
+`dotnet/Quickstart.csproj`는 `sdk/dotnet/Fisica.Scale.csproj`를 프로젝트로 참조해 래퍼를 앱과 함께 빌드하고,
+`sdk/core`의 코어(`fisica_core.dll` 또는 `libfisica_core.dylib`)를 실행 파일 옆에 복사한다. 다른 위치에
+풀었으면 `-p:FisicaSdk=/absolute/path/sdk/`로 지정한다. 기존 앱에도 같은 두 가지(래퍼 프로젝트 참조, 코어 복사)를
+넣는다. 공개 래퍼 소스만 빌드하며 비공개 코어는 컴파일하지 않는다.
 USB는 COM 포트를 사용자가 선택한다. SDK가 VID로 자동 선택하지 않는다.
 
 ```sh
-dotnet nuget add source /absolute/path/sdk/nuget --name fisica-local
-dotnet restore dotnet/Quickstart.csproj
 dotnet run --project dotnet/Quickstart.csproj -f net8.0 -- mock scale-mock.json
 dotnet run --project dotnet/Quickstart.csproj -f net8.0 -- list-usb
 dotnet run --project dotnet/Quickstart.csproj -f net8.0 -- usb COM7
