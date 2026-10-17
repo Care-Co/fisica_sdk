@@ -29,6 +29,8 @@ if(FISICA_VALIDATION_DEFINE STREQUAL "#define FISICA_VALIDATION_BUILD 1" AND NOT
 endif()
 set(FISICA_SOURCES src/fisica_core.cpp src/fisica_session.cpp src/fisica_entitlement.cpp
     src/fisica_monocypher.cpp src/fisica_monocypher_ed25519.cpp)
+# Customer packages use the shared core, or for Apple the pre-linked static archive of tools/build_platforms.py:
+# a plain static library keeps hidden helpers (signature check, Monocypher) replaceable by whoever links it.
 option(FISICA_CORE_SHARED "Build shared core instead of a static host library" ON)
 if(FISICA_CORE_SHARED)
     add_library(fisica_core SHARED ${FISICA_SOURCES})

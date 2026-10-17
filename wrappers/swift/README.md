@@ -8,20 +8,31 @@ iOS 13+; desktop universal, iOS arm64, simulator arm64/x86_64. No private source
 compiled in the consuming app. Link libc++.
 
 ```swift
-let core = try FisicaCore()
-let license = try FisicaEntitlement(core: core, endpoint: URL(string: "https://developer.fisicahealthcare.com"))
-try license.importToken(sdkKey)                // SDK key from the developer portal; optional
-let ble = BLETransport()                       // callbacks on the main queue
-ble.onBluetoothState = { if $0 == .poweredOn { ble.scan() } }
-ble.onDevice = { peripheral in
-    guard peripheral.name?.contains(FisicaBleProfile.nameContains) == true else { return }
-    ble.select(peripheral)                     // default profile; pass your own if needed
-    let client = try! FisicaClient(core: core, transport: ble, entitlement: license)
-    client.onFrame = { frame in /* frame.weight, frame.display (29x29); full mode: frame.raw (29x22), frame.packet */ }
-    client.connect(.ble) { _ in
-        client.start(durationMs: 5000) { _ in }
+final class ScaleController {
+    let core: FisicaCore, license: FisicaEntitlement, ble = BLETransport()  // BLE callbacks on the main queue
+    // Keep the client in a property until it is closed: a client nothing holds is released mid-operation,
+    // which closes the link and cancels the pending completions.
+    var client: FisicaClient?
+
+    init(sdkKey: String?) throws {
+        core = try FisicaCore()
+        license = try FisicaEntitlement(core: core, endpoint: URL(string: "https://developer.fisicahealthcare.com"))
+        if let sdkKey { try license.importToken(sdkKey) }  // SDK key from the developer portal; optional
+        ble.onBluetoothState = { [weak self] state in if state == .poweredOn { self?.ble.scan() } }
+        ble.onDevice = { [weak self] peripheral in
+            guard let self, self.client == nil, peripheral.name?.contains(FisicaBleProfile.nameContains) == true else { return }
+            self.ble.select(peripheral)            // default profile; pass your own if needed
+            guard let client = try? FisicaClient(core: self.core, transport: self.ble, entitlement: self.license) else { return }
+            self.client = client
+            client.onFrame = { frame in /* frame.weight, frame.display (29x29); full mode: frame.raw (29x22), frame.packet */ }
+            client.connect(.ble) { _ in client.start(durationMs: 5000) { _ in } }
+        }
     }
-    // later: let report = try client.report(); client.close()
+    func finish() -> SessionReport? {  // later
+        let report = try? client?.report()
+        client?.close { [weak self] _ in self?.client = nil }
+        return report
+    }
 }
 ```
 
@@ -60,7 +71,9 @@ app's or PC's target, the key's dates (`keyUntil`, `fullUntil`, `refreshBy`, con
   approves at the developer portal's `/activate` page (`FisicaEntitlement.defaultEndpoint`); the
   key arrives activated for this app and is stored. Only the bundle ID or PC hash is sent.
 - `release()` forgets the key activated here, deletes the stored state and returns the FRC1
-  code to enter in the developer portal, which frees the seat.
+  code to enter in the developer portal, which frees the seat. An answer that arrives after
+  `release()` or after another key was imported is dropped: a released key stays released and
+  the newer key stays.
 - `FisicaClient` applies the license to its session before each start, whenever the key
   changes and every 30 s. The SDK does not track its own use: the stored state is the signed key
   and the latest time seen.
@@ -69,6 +82,9 @@ app's or PC's target, the key's dates (`keyUntil`, `fullUntil`, `refreshBy`, con
   Command order, ACK waits, timeouts and recovery decisions are in the shared core.
 - Every callback and completion runs on the client's queue (default main). Read
   `frames` and call `report()` there.
+- Keep the client in a property until `close` completes. The transport's callbacks hold it
+  weakly, so a client nothing else holds is released mid-operation: it then closes the
+  transport and fails its pending completions with `cancelled`.
 - `connect` completes with the firmware probe; an unanswered probe does not prevent
   use. A transport that never becomes ready fails after `timeout` (default 15 s).
 - A rejected or unconfirmed command fails with `FisicaCommandError` (`code` is the SDK

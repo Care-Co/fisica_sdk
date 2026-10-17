@@ -177,7 +177,8 @@ python -m fisica_sdk license release   # 키 해제와 해제 코드
 - `endpoint`를 주지 않으면 네트워크를 전혀 쓰지 않는다. `online=False`로도 끌 수 있다.
 - `endpoint`가 있으면 새 키를 가져오는 즉시 백그라운드에서 활성화하고, 기능 사용 시점에 갱신할 때가 됐는지 본다.
   통신 실패는 `last_sync_error`에만 남고 라이선스를 바꾸지 않는다.
-- 키는 기본으로 사용자 앱 데이터 폴더에 회사+계약별 파일로 저장한다. `storage=경로` 또는 `None` 지정 가능.
+- 키는 기본으로 사용자 앱 데이터 폴더에 좌석별 파일(회사·계약·이 앱이나 PC의 대상으로 코어가 이름을 정함)로 저장한다.
+  `storage=디렉터리`(그 안에 좌석별 파일), `storage=파일 경로`, `None`(메모리만)을 지정할 수 있고, 키 없이 만들면 그곳에 저장된 키를 불러온다.
 - 기본 모드가 되는 이유와 경고는 `FisicaEntitlementWarning`으로 한 번씩 알린다. 원본 데이터를 요청하면
   `FisicaLicenseError`(코드 13)가 난다. 그 밖의 기술 오류는 기존 `FisicaError` 계열이다.
 

@@ -39,8 +39,11 @@ struct FisicaSession {
     void emit(uint32_t kind, uint32_t status=0, uint32_t error=0,
               uint32_t operation=0, const std::vector<uint8_t>& bytes={}) {
         if (events.size() >= 1024) {
-            // A host that does not poll loses old frames, never results or state changes.
-            const auto old=std::find_if(events.begin(),events.end(),[](const Event& e) { return e.meta[0]==FISICA_MEASUREMENT; });
+            // A host that does not poll loses old frames, then old unrequested responses (a device that
+            // floods answers), never results or state changes.
+            auto old=std::find_if(events.begin(),events.end(),[](const Event& e) { return e.meta[0]==FISICA_MEASUREMENT; });
+            if (old==events.end())
+                old=std::find_if(events.begin(),events.end(),[](const Event& e) { return e.meta[0]==FISICA_RESPONSE; });
             if (old==events.end()) throw std::overflow_error("Drain session events");
             events.erase(old);
         }
@@ -92,6 +95,8 @@ struct FisicaSession {
     }
     void clear_pending() { phase=NONE; pending.clear(); }
     void release() {
+        // A stop asked for before the close is done once nothing measures any more.
+        if (stop_requested) { stop_requested=false; emit(FISICA_RESULT,0,0,FISICA_END); }
         if (owned) { transition(FISICA_RELEASING); send(RELEASE,"SET_DEVICE_STOP"); }
         else {
             closing=false; stop_requested=false;
@@ -205,7 +210,10 @@ template<class F> int32_t protect(FisicaSession *s, F operation) noexcept {
         // An internal failure faults the session and says so: the host sees the state change and
         // the pending operation's result, and a later DISCONNECT is not refused as busy.
         const uint32_t op=s->phase!=NONE ? s->operation() : 0;
-        s->events.clear(); s->clear_pending();
+        // Results and state changes already produced stay; frames, responses and bytes to send go.
+        s->events.erase(std::remove_if(s->events.begin(),s->events.end(),[](const Event& e) {
+            return e.meta[0]!=FISICA_RESULT && e.meta[0]!=FISICA_STATE; }),s->events.end());
+        s->clear_pending();
         s->state=FISICA_FAULT; s->desired=false; s->closing=false; s->stop_requested=false;
         s->timer_active=false; s->measurement_deadline=0;
         try {
@@ -256,26 +264,29 @@ int32_t fisica_core_session_action(FisicaSession *s,uint32_t action,int64_t valu
                 break; // Outcome is uncertain: do not pretend device mode was released.
             }
             s->closing=action==FISICA_DISCONNECT;
-            s->stop_requested=action==FISICA_STOP;
+            s->stop_requested=s->stop_requested || action==FISICA_STOP;  // a STOP before a DISCONNECT still gets its result
             if (s->phase!=NONE) break; // Complete pending ACK before another command.
             if (s->state==FISICA_MEASURING) s->end();
             else if (s->closing) s->release();
             else { s->timer_active=false; s->measurement_deadline=0; s->stop_requested=false; s->emit(FISICA_RESULT,s->state==FISICA_RECOVERING ? FISICA_TRANSPORT_LOST : FISICA_OK,0,FISICA_END); }
             break;
         case FISICA_LOST: {
+            if (s->state==FISICA_DISCONNECTED) break;  // nothing left to lose
             const auto op=s->operation(); const bool pending=s->phase!=NONE;
+            const bool closing=s->closing || s->state==FISICA_RELEASING;
             s->uncertain = s->uncertain || s->owned || s->phase==MODE;
             if (s->state==FISICA_STARTING) s->desired=false;
             // Bytes not sent yet are void; results and frames already produced still count.
             s->clear_pending(); s->input.clear(); s->owned=false;
             s->events.erase(std::remove_if(s->events.begin(),s->events.end(),
                 [](const Event& e) { return e.meta[0]==FISICA_TRANSMIT; }),s->events.end());
+            // Lost while closing: the close ends here (the device's mode is uncertain); no reconnect.
             if (value) { s->desired=false; s->transition(FISICA_FAULT); }
-            else s->transition(FISICA_RECOVERING);
+            else s->transition(closing ? FISICA_DISCONNECTED : FISICA_RECOVERING);
             if (pending) s->emit(FISICA_RESULT,FISICA_TRANSPORT_LOST,0,op);
             if (s->stop_requested && op!=FISICA_END) s->emit(FISICA_RESULT,FISICA_TRANSPORT_LOST,0,FISICA_END);
-            if (s->closing && op!=FISICA_CLOSE) s->emit(FISICA_RESULT,FISICA_TRANSPORT_LOST,0,FISICA_CLOSE);
-            if (!value) s->emit(FISICA_RECONNECT);
+            if (closing && op!=FISICA_CLOSE) s->emit(FISICA_RESULT,FISICA_TRANSPORT_LOST,0,FISICA_CLOSE);
+            if (!value && !closing) s->emit(FISICA_RECONNECT);
             s->closing=false; s->stop_requested=false;
             break;
         }

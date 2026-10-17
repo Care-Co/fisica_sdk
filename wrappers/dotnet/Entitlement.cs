@@ -28,6 +28,8 @@ public sealed record EntitlementStatus(FisicaMode Mode, FisicaModeReason Reason,
     public bool Has(FisicaFeature feature) => feature!=0 && (Features&feature)==feature;
     /// <summary>What basic mode means for this reason and what to do; null in full mode.</summary>
     public string? Message => FisicaEntitlement.Explain(Reason);
+    /// <summary>A message for each raised warning bit, in bit order.</summary>
+    public IReadOnlyList<string> WarningMessages => FisicaLicenseMessages.Warnings(Warnings);
 }
 
 /// <summary>Result of one exchange with the server. Error is set for a failed exchange, which changes nothing.</summary>
@@ -62,7 +64,8 @@ public sealed class FisicaEntitlement : IDisposable {
     readonly SemaphoreSlim exchange=new(1,1);  // One exchange with the server at a time.
     long nextSync; int syncing;
     FisicaEntitlementWarning warned; (FisicaMode,FisicaModeReason,FisicaFeature,string,ulong)? noticed;
-    /// <summary>Raised with newly appeared warnings so the app can show or log them.</summary>
+    /// <summary>Raised with newly appeared warnings (one or more bits) so the app can show or log them;
+    /// FisicaLicenseMessages.Warnings(bits) gives a message for each.</summary>
     public event Action<FisicaEntitlementWarning,EntitlementStatus>? Warning;
     /// <summary>Raised when the mode, reason, open features or key changed (import, activation, renewal, release,
     /// restore, or the end of full mode noticed by CheckStatus). A FisicaClient applies the new license by itself.
@@ -193,7 +196,8 @@ public sealed class FisicaEntitlement : IDisposable {
     public string? ActivationCode() { lock(gate) { Open(); return OptionalText(FisicaEntitlementText.ActivationCode); } }
     /// <summary>Release the key activated here: the core forgets it, the stored key is deleted, and the FRC1 code to
     /// enter in the developer portal is returned. Online, the server is also told in the background, which frees the
-    /// seat at once (ReleaseAsync waits for that). FisicaException (InvalidState) without a key activated here.</summary>
+    /// seat at once (ReleaseAsync waits for that). An activation or renewal still on its way does not bring the key back.
+    /// FisicaException (InvalidState) without a key activated here.</summary>
     public string Release() {
         var (code,token)=ReleaseHere();
         if (token!=null) _=Task.Run(() => TellReleased(token));
@@ -207,6 +211,7 @@ public sealed class FisicaEntitlement : IDisposable {
     }
     (string Code,string? Token) ReleaseHere() {
         string code, token;
+        // Under the same lock as importing a server answer, which SyncAsync does only while its key is still loaded.
         lock(gate) {
             Open(); var file=StateFile(); token=Text(FisicaEntitlementText.Token); var data=new byte[1024];
             FisicaCore.Check(Native.fisica_core_entitlement_release(handle,data,(uint)data.Length,out uint length));
@@ -312,8 +317,8 @@ public sealed class FisicaEntitlement : IDisposable {
         }
     }
     /// <summary>Activate or renew with the server now when due (force: renew now). A failure changes no license state:
-    /// it is recorded in LastSyncError and Error, never thrown. When the server reports the key released, the stored
-    /// key is deleted.</summary>
+    /// it is recorded in LastSyncError and in the result's Error, never thrown. When the server reports the key released,
+    /// the stored key is deleted. An answer for a key released or replaced while it was on its way changes nothing.</summary>
     public async Task<EntitlementSync> SyncAsync(bool force=false) {
         if (!online || endpoint==null) return new(false,false,null);
         await exchange.WaitAsync().ConfigureAwait(false);
@@ -333,6 +338,9 @@ public sealed class FisicaEntitlement : IDisposable {
             var data=Encoding.UTF8.GetBytes(reply.RootElement.GetProperty("token").GetString() ?? throw new InvalidDataException("No key in the response"));
             lock(gate) {
                 if (handle.IsClosed) return new(false,false,null);
+                // The answer belongs to the key it was asked for. Released or replaced (Release, ImportToken, RestoreState)
+                // while it was on its way, it is dropped: a released key never comes back and a newer key stays.
+                if (Text(FisicaEntitlementText.Token)!=token) return new(false,false,null);
                 FisicaCore.Check(Native.fisica_core_entitlement_import(handle,data,(uint)data.Length,clock(),out uint outcome));
                 bool save=outcome==(uint)FisicaEntitlementOutcome.Accepted;
                 if (path==Activate) activated=save; else refreshed=save;
@@ -356,7 +364,11 @@ public sealed class FisicaEntitlement : IDisposable {
         if (!force && now<Interlocked.Read(ref nextSync)) return;
         if (Interlocked.CompareExchange(ref syncing,1,0)!=0) return;
         Interlocked.Exchange(ref nextSync,now+60_000);  // Until this attempt succeeds.
-        _=Task.Run(async () => { try { await SyncAsync(force).ConfigureAwait(false); } catch (Exception) { /* Recorded in LastSyncError. */ } finally { Volatile.Write(ref syncing,0); } });
+        _=Task.Run(async () => {
+            try { await SyncAsync(force).ConfigureAwait(false); } catch (Exception) { /* Recorded in LastSyncError. */ } finally { Volatile.Write(ref syncing,0); }
+            // A key imported during this exchange asked for its own (ImportToken makes one due at once).
+            if (Environment.TickCount64>=Interlocked.Read(ref nextSync)) Sync();
+        });
     }
     /// <summary>Opaque state for the host to store: the verified key and the latest time seen. Restoring verifies the key again.</summary>
     public byte[] ExportState() { lock(gate) {

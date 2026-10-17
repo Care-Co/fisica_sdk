@@ -102,6 +102,12 @@ Console.WriteLine("C# shared session and processing vectors passed");
         && license.Status() is { Mode: FisicaMode.Full, Key: "key_test_1", LastImport: FisicaEntitlementOutcome.RejectedTarget } && license.Status().Bind==target.Value
         && license.Status().Warnings.HasFlag(FisicaEntitlementWarning.ImportRejected),"a key activated elsewhere never replaces this PC's key");
     Require(changes.Count>=3 && changes[^1].IsFull && changes.Any(c => c.Reason==FisicaModeReason.NotActivated),"Changed events");
+    // The Warning event may pass several bits at once: the list form has a message for each.
+    var both=FisicaEntitlementWarning.TestKey|FisicaEntitlementWarning.ImportRejected;
+    Require(FisicaLicenseMessages.Warning(both)=="" && FisicaLicenseMessages.Warnings(both).SequenceEqual(new[]{
+        FisicaLicenseMessages.Warning(FisicaEntitlementWarning.ImportRejected),FisicaLicenseMessages.Warning(FisicaEntitlementWarning.TestKey)})
+        && FisicaLicenseMessages.Warnings(0).Count==0,"a message for each warning bit");
+    Require(license.Status().WarningMessages.SequenceEqual(FisicaLicenseMessages.Warnings(both)) && seen==both,"status warning messages");
     // Using the SDK leaves no trace: the stored state is the signed key and the latest time seen.
     Require(Encoding.ASCII.GetString(license.ExportState())==$"FSS1\nC {values["full"]}\nT {now}\n","no usage state");
     using var restored=License(); restored.RestoreState(license.ExportState());
@@ -178,8 +184,8 @@ MockTransport Scale(int frames=12) {
 }
 // A connected client the app forgets to close; only the returned weak reference remains.
 [MethodImpl(MethodImplOptions.NoInlining)]
-WeakReference<FisicaClient> Abandon() {
-    var client=new FisicaClient(core,Scale());
+WeakReference<FisicaClient> Abandon(FisicaEntitlement? license=null) {
+    var client=new FisicaClient(core,Scale(),license);
     client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
     return new(client);
 }
@@ -363,6 +369,18 @@ foreach (var (key,at) in new (string?,ulong)[]{(null,now),("unbound",now),("tamp
     }
 }
 {
+    // The same while its license lives on: Entitlement.Changed holds the client only weakly.
+    using var license=License("full_older");
+    var dropped=Abandon(license);
+    for (var deadline=DateTime.UtcNow.AddSeconds(10);;await Task.Delay(50)) {
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        if (!dropped.TryGetTarget(out _)) break;
+        Require(DateTime.UtcNow<deadline,"a client dropped without CloseAsync is collected while its license lives on");
+    }
+    // The next change reaches no client and lets go of the relay; the license carries on.
+    Require(license.ImportToken(values["full"])==FisicaEntitlementOutcome.Accepted && license.Status().VerifiedAt==now,"license after the client was collected");
+}
+{
     // A second close while the first waits for the Scale is Busy and leaves the first alone; once closed, close does nothing.
     var transport=Scale(); var release=core.Command("SET_DEVICE_STOP"); transport.Reply(release);  // never confirmed
     var client=new FisicaClient(core,transport);
@@ -410,6 +428,39 @@ foreach (var (key,at) in new (string?,ulong)[]{(null,now),("unbound",now),("tamp
     Require(port is { BaudRate: 115200, DataBits: 8, Parity: System.IO.Ports.Parity.None, StopBits: System.IO.Ports.StopBits.One,
         Handshake: System.IO.Ports.Handshake.None, DtrEnable: true, RtsEnable: true } && !port.IsOpen,"serial line settings");
 }
+{
+    // Serial transport over a stand-in port: opening it again raises Ready on the same port; a failed read
+    // closes and disposes the port, and the next open uses a new one.
+    var ports=new List<FakePort>();
+    var serial=new SerialTransport("fake") { Ports=() => { var created=new FakePort(new()); lock(ports) ports.Add(created); return created; } };
+    int ready=0, lost=0; serial.Ready+=() => Interlocked.Increment(ref ready); serial.Lost+=() => Interlocked.Increment(ref lost);
+    serial.Open(); serial.Open();
+    Require(ready==2 && ports.Count==1 && ports[0].IsOpen,"open again raises Ready on the same port");
+    ports[0].FailRead();
+    await Until(() => Volatile.Read(ref lost)==1 && ports[0].Disposed,"a failed read closes and disposes the port");
+    serial.Open();
+    Require(ready==3 && ports.Count==2 && ports[1].IsOpen && !ports[1].Disposed,"reopen after a failed read uses a new port");
+    serial.Close();
+    Require(ports[1].Disposed && lost==1,"close disposes the port and reports no loss");
+}
+{
+    // A failed write puts the session in Fault while the port stays open; ConnectAsync then reconnects at once.
+    var replies=new Dictionary<string,byte[]> { [Convert.ToHexString(core.Command("GET_FIRMWARE_VERSION"))]=Convert.FromHexString("24434701322e302e31fff0") };
+    foreach (var name in new[]{"SET_DEVICE_USB","START_CONTINUOUS_MEASUREMENT","STOP_CONTINUOUS_MEASUREMENT","SET_DEVICE_STOP"}) {
+        var command=core.Command(name); replies[Convert.ToHexString(command)]=new byte[]{0x24,command[1],command[2],1,0,0,0xff,0xf0};
+    }
+    var fake=new FakePort(replies);
+    var serial=new SerialTransport("fake") { Ports=() => fake };
+    var client=new FisicaClient(core,serial);
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    fake.FailWrites=true;
+    Require(await Failure(client.StartAsync()) is FisicaException or FisicaCommandException && client.State==FisicaSessionState.Fault,"start fails after a failed write: "+client.State);
+    fake.FailWrites=false;
+    var reconnect=await Failure(client.ConnectAsync(timeout: TimeSpan.FromSeconds(3)));
+    Require(reconnect==null && client.FirmwareVersion=="2.0.1","reconnect over the open port after a fault: "+reconnect);
+    await Failure(client.CloseAsync());
+    Require(fake.Disposed,"close releases the port");
+}
 #if WINDOWS
 {
     // Build machines have no Scale and usually no Bluetooth radio: every failure must arrive as an event.
@@ -431,29 +482,67 @@ foreach (var (key,at) in new (string?,ulong)[]{(null,now),("unbound",now),("tamp
     Console.WriteLine("C# Windows BLE transport: failure paths verified without a Scale");
 }
 #endif
-{
-    // A renewal that reports the key released lets go of it: the stored key is deleted. Local stand-in server.
+// A local stand-in for the developer portal: each request is answered with {"token": answer(path)}, as late as answer takes.
+(string Address,List<(string Path,string Authorization,string Body)> Requests,HttpListener Server) Portal(Func<string,Task<string>> answer) {
     var probe=new TcpListener(IPAddress.Loopback,0); probe.Start(); int port=((IPEndPoint)probe.LocalEndpoint).Port; probe.Stop();
-    using var server=new HttpListener(); server.Prefixes.Add($"http://127.0.0.1:{port}/"); server.Start();
+    var server=new HttpListener(); server.Prefixes.Add($"http://127.0.0.1:{port}/"); server.Start();
     var requests=new List<(string Path,string Authorization,string Body)>();
     _=Task.Run(async () => {
         while (server.IsListening) {
             HttpListenerContext context; try { context=await server.GetContextAsync(); } catch (Exception) { break; }
-            using var reader=new StreamReader(context.Request.InputStream); var body=await reader.ReadToEndAsync();
-            lock(requests) requests.Add((context.Request.Url!.AbsolutePath,context.Request.Headers["Authorization"] ?? "",body));
-            var reply=JsonSerializer.SerializeToUtf8Bytes(new { token=values["revoked"] });
-            context.Response.ContentType="application/json"; context.Response.ContentLength64=reply.Length;
-            await context.Response.OutputStream.WriteAsync(reply); context.Response.Close();
+            _=Task.Run(async () => {  // a held answer does not hold up the next request
+                try {
+                    using var reader=new StreamReader(context.Request.InputStream); var body=await reader.ReadToEndAsync();
+                    var path=context.Request.Url!.AbsolutePath;
+                    lock(requests) requests.Add((path,context.Request.Headers["Authorization"] ?? "",body));
+                    var reply=JsonSerializer.SerializeToUtf8Bytes(new { token=await answer(path) });
+                    context.Response.ContentType="application/json"; context.Response.ContentLength64=reply.Length;
+                    await context.Response.OutputStream.WriteAsync(reply); context.Response.Close();
+                } catch (Exception) { /* The test stopped the server first. */ }
+            });
         }
     });
+    return ($"http://127.0.0.1:{port}",requests,server);
+}
+{
+    // A renewal that reports the key released lets go of it: the stored key is deleted.
+    var (address,requests,server)=Portal(_ => Task.FromResult(values["revoked"]));
     var directory=Directory.CreateTempSubdirectory("fisica-dotnet-").FullName;
     try {
         ulong time=now+Day;
-        using var license=new FisicaEntitlement(core,() => time,$"http://127.0.0.1:{port}",directory);
+        using var license=new FisicaEntitlement(core,() => time,address,directory);
         Require(license.ImportToken(values["full"])==FisicaEntitlementOutcome.Accepted && Directory.GetFiles(directory).Length==1,"stored key");
         Require(await license.SyncAsync(force: true) is { Refreshed: true, Error: null },"renewal: "+license.LastSyncError);
         Require(license.Status() is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.Revoked } && Directory.GetFiles(directory).Length==0,"released key let go");
         lock(requests) Require(requests.Count==1 && requests[0]==("/sdk/v1/entitlement/refresh","Bearer "+values["full"],"{}"),"empty refresh with the key");
+    } finally { server.Stop(); Directory.Delete(directory,true); }
+}
+foreach (var replaced in new[]{false,true}) {
+    // A renewal answered only after the key was released, or after another key was imported, changes nothing:
+    // a released key does not come back (nor its stored state) and the newer key stays, stored as it is.
+    var answered=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var (address,requests,server)=Portal(async path => {
+        if (path.EndsWith("/refresh")) await answered.Task;
+        return replaced ? values["revoked"] : values["full"];  // either is accepted for the key it was asked for
+    });
+    var directory=Directory.CreateTempSubdirectory("fisica-dotnet-").FullName;
+    try {
+        ulong time=now+Day;
+        using var license=new FisicaEntitlement(core,() => time,address,directory);
+        Require(license.ImportToken(values[replaced ? "full_older" : "full"])==FisicaEntitlementOutcome.Accepted,"key before the renewal");
+        var renewal=license.SyncAsync(force: true);
+        await Until(() => { lock(requests) return requests.Any(r => r.Path.EndsWith("/refresh")); },"renewal on its way");
+        if (replaced) Require(license.ImportToken(values["full"])==FisicaEntitlementOutcome.Accepted,"another key while the answer is on its way");
+        else Require(license.Release().StartsWith("FRC1.") && Directory.GetFiles(directory).Length==0,"released while the answer is on its way");
+        answered.SetResult();
+        Require(await renewal.WaitAsync(TimeSpan.FromSeconds(5)) is { Activated: false, Refreshed: false, Error: null },"late answer dropped: "+license.LastSyncError);
+        var status=license.Status();
+        if (replaced) {
+            Require(status is { Mode: FisicaMode.Full, Key: "key_test_1" } && status.VerifiedAt==now && Directory.GetFiles(directory).Length==1,"the newer key stays");
+            using var reopened=new FisicaEntitlement(core,() => time,null,directory);
+            Require(reopened.Status() is { Mode: FisicaMode.Full } && reopened.Status().VerifiedAt==now,"the newer key stays stored");
+        } else Require(status is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.NoKey, Key: "" } && Directory.GetFiles(directory).Length==0,"the released key stays released");
+        lock(requests) Require(requests.Count(r => r.Path.EndsWith("/refresh"))==1,"one renewal");
     } finally { server.Stop(); Directory.Delete(directory,true); }
 }
 if (values.TryGetValue("endpoint",out var endpoint)) {
@@ -515,6 +604,26 @@ sealed class ThrowingTransport(MockTransport inner,byte[] refused) : IFisicaTran
     public void Open() => inner.Open();
     public void Send(byte[] bytes) { if (bytes.SequenceEqual(refused)) throw new IOException("write refused"); inner.Send(bytes); }
     public void Close() => inner.Close();
+}
+/// <summary>A serial port without hardware: replies to known requests, and fails reads or writes when told to.</summary>
+sealed class FakePort(Dictionary<string,byte[]> replies) : ISerialPort {
+    readonly BlockingCollection<byte[]> incoming=new();
+    volatile bool failRead, opened, disposed;
+    public volatile bool FailWrites;
+    public bool IsOpen => opened; public bool Disposed => disposed;
+    public void Open() => opened=true;
+    public int Read(byte[] buffer,int offset,int count) {
+        if (failRead || !opened) throw new IOException("device removed");
+        if (!incoming.TryTake(out var chunk,50)) throw new TimeoutException();
+        chunk.CopyTo(buffer,offset); return chunk.Length;  // replies are short
+    }
+    public void Write(byte[] buffer,int offset,int count) {
+        if (FailWrites || !opened) throw new IOException("write failed");
+        if (replies.TryGetValue(Convert.ToHexString(buffer,offset,count),out var reply)) incoming.Add(reply);
+    }
+    public void FailRead() => failRead=true;
+    public void Close() => opened=false;
+    public void Dispose() { opened=false; disposed=true; }
 }
 /// <summary>Counts what the client posts and runs it on the thread pool.</summary>
 sealed class CountingContext : SynchronizationContext {

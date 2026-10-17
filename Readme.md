@@ -63,8 +63,8 @@ session = NativeSession(core)
 # session.action(1, value=2)  # USB transport connected; 1 for BLE
 # Send kind=1 event payloads in order, feed received bytes, and tick regularly.
 # After firmware probe result, session.action(2, value=-1) starts continuous mode.
-# result = core.decode_packet(measurement_event['payload'])
-# result.raw_grid and result.sensor_matrix are separate data representations.
+# poll() hands out MEASUREMENT events with the frame already decoded (display grid and metrics).
+# core.decode_packet(packet, license) decodes a raw packet yourself and needs full mode.
 # action(3) stops; action(4) releases mode; await RESULT events, then close IO.
 # session.close() frees the handle, without performing IO.
 ```

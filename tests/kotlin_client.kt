@@ -50,6 +50,12 @@ fun abandon(core: FisicaCore, packet: ByteArray): java.lang.ref.WeakReference<Fi
     check(await<SessionEvent>("connect") { client.connect(FisicaLink.USB, completion = it) }.second == null)
     return java.lang.ref.WeakReference(client)
 }
+/** A license the app forgets to close; only the returned weak reference remains. */
+fun abandonLicense(core: FisicaCore, token: String, now: Long): java.lang.ref.WeakReference<FisicaEntitlement> {
+    val license = FisicaEntitlement(core, null, null, true) { now }
+    check(license.importToken(token) == FisicaEntitlementOutcome.ACCEPTED)
+    return java.lang.ref.WeakReference(license)
+}
 fun clientThreads() = Thread.getAllStackTraces().keys.count { it.name == "fisica-client" && it.isAlive }
 fun sha256(text: String) = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 /** The developer portal's check of an activation (FAC1) or release (FRC1) code; returns its JSON body. */
@@ -77,6 +83,21 @@ fun main(args: Array<String>) {
             if (name != null) check(context.importToken(vector(name)) == FisicaEntitlementOutcome.ACCEPTED) { name }
         }
     val temporary = java.nio.file.Files.createTempDirectory("fisica-kotlin-license").toFile()
+
+    // A license dropped without close(): its core context is freed once it is collected. First, while
+    // nothing else holds native memory, so the count is exact.
+    run {
+        check(NativeCleaner.pending == 0) { "native objects before the first test: ${NativeCleaner.pending}" }
+        val dropped = abandonLicense(core, vector("full"), now)
+        check(NativeCleaner.pending == 1) { "a license registers its core context" }
+        val deadline = System.nanoTime() + 10_000_000_000
+        while (dropped.get() != null || NativeCleaner.pending > 0) {
+            check(System.nanoTime() < deadline) { "abandoned license kept: ${dropped.get() != null}, contexts ${NativeCleaner.pending}" }
+            System.gc(); Thread.sleep(50)
+        }
+        license("full").close()
+        check(NativeCleaner.pending == 0) { "close frees the context at once" }
+    }
 
     // Basic mode (no key): connect -> measure -> stop -> report -> close. The 12 packets arrive
     // within one second, so one frame without raw data; the core still analyzes every packet.
@@ -408,6 +429,41 @@ fun main(args: Array<String>) {
             check(synchronized(requests) { requests.toList() } == listOf("/sdk/v1/entitlement/refresh {} Bearer ${vector("full")}"))
             context.close()
         } finally { server.stop(0) }
+    }
+    // A renewal answered only after the key was released, or after another key was imported, changes nothing:
+    // a released key does not come back (nor its stored state) and the newer key stays, stored as it is.
+    for (replaced in listOf(false, true)) {
+        val answered = CountDownLatch(1); val refreshes = java.util.concurrent.atomic.AtomicInteger()
+        val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+        val handlers = java.util.concurrent.Executors.newCachedThreadPool()
+        server.executor = handlers  // a held answer does not hold up the next request
+        server.createContext("/") { exchange ->
+            exchange.requestBody.readBytes()
+            if (exchange.requestURI.path.endsWith("/refresh")) { refreshes.incrementAndGet(); answered.await(5, TimeUnit.SECONDS) }
+            // Either is accepted for the key it was asked for.
+            val response = "{\"token\":\"${vector(if (replaced) "revoked" else "full")}\"}".toByteArray()
+            exchange.sendResponseHeaders(200, response.size.toLong()); exchange.responseBody.use { it.write(response) }
+        }
+        server.start()
+        try {
+            val directory = File(temporary, "late-$replaced")
+            val context = FisicaEntitlement(core, "http://127.0.0.1:${server.address.port}", directory) { now + DAY }
+            check(context.importToken(vector(if (replaced) "full_older" else "full")) == FisicaEntitlementOutcome.ACCEPTED)
+            var result: String? = "pending"
+            val renewal = Thread { result = context.syncNow(force = true) }.apply { start() }
+            waitFor("renewal on its way") { refreshes.get() == 1 }
+            if (replaced) check(context.importToken(vector("full")) == FisicaEntitlementOutcome.ACCEPTED)
+            else check(context.releaseNow().second && directory.listFiles().orEmpty().isEmpty()) { "release: ${context.lastSyncError}" }
+            answered.countDown(); renewal.join(5000)
+            check(!renewal.isAlive && result == null) { "late answer: $result" }
+            val status = context.status()
+            if (replaced) {
+                check(status.isFull && status.verifiedAt == now && directory.listFiles()!!.count { it.name.endsWith(".state") } == 1) { "the newer key stays: $status" }
+                FisicaEntitlement(core, null, directory) { now + DAY }.use { check(it.status().isFull && it.status().verifiedAt == now) { "stored" } }
+            } else check(status.reason == FisicaModeReason.NO_KEY && status.key == null && directory.listFiles().orEmpty().isEmpty()) { "released: $status" }
+            check(refreshes.get() == 1) { "${refreshes.get()} renewals" }
+            context.close()
+        } finally { server.stop(0); handlers.shutdownNow() }
     }
     // BLE write splitting follows the MTU actually negotiated (no Android device needed for the rule).
     run {

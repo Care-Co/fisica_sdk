@@ -113,7 +113,7 @@ BLE 측정 경로: 프로토콜 문서는 연속 측정(0x51)이 USB 전용이�
 ## 검증과 한계
 
 로컬은 2026-10-14 실행 결과(모바일 보강 후 다시 실행)다. "CI" 열은 지금 그 검사를 실행하는 작업이다.
-CI는 요청할 때만 수동으로 돌리며, 자체 호스팅 러너로 옮긴 뒤(2026-10-17) 아직 실행하지 않았다.
+CI는 요청할 때만 수동으로 돌린다. 자체 호스팅 러너로 옮긴 뒤 2026-10-17과 2026-10-18(main a3a9c2b)에 `linux`, `android`, `apple`이 모두 통과했다.
 그 전 GitHub 호스팅 러너(`windows-2022`, `macos-15`)에서의 결과는 기록으로만 적는다.
 
 | 항목 | 결과 | 확인한 곳 |
@@ -209,8 +209,8 @@ GitHub 호스팅 러너를 쓰지 않는다. 포털(developer-portal)의 빌드�
 
 | 작업 | 러너 라벨 | 러너 | 준비 |
 |---|---|---|---|
-| `linux`, `android` | `self-hosted, carenco` | mac-host-runner1~3 (Linux X64, colima) | 없음. 매번 새 `ubuntu:24.04` 컨테이너에서 apt로 도구(.NET 8 SDK `dotnet-sdk-8.0`, CMake 포함)를 깔고, Flutter·Android SDK·NDK 26.3·Gradle 8.14·pip·pub 캐시는 Docker 볼륨 `fisica-sdk-ci-cache`에 둔다 |
-| `apple` | `self-hosted, macOS` | Company-Mac (ARM64) | Xcode(iOS SDK 포함). 첫 단계에서 찾고 없으면 실패한다. 다른 직원이 올린 러너라 동의 전에는 실행하지 않는다 |
+| `linux`, `android` | `self-hosted, carenco` | mac-host-runner1~3 (Linux X64, colima) | 없음. 매번 새 `ubuntu:24.04` 컨테이너에서 apt로 도구(CMake, make 포함)를 깔고, .NET 8 SDK는 Microsoft 8.0.425 tarball을 체크섬 확인 후 받아 두고, Flutter·Android SDK·NDK 26.3·Gradle 8.14·pip·pub 캐시는 Docker 볼륨 `fisica-sdk-ci-cache`에 둔다 |
+| `apple` | `self-hosted, macOS` | Company-Mac (ARM64) | Xcode(iOS SDK 포함). 첫 단계에서 찾고 없으면 실패한다. 다른 직원의 Mac이라 주말과 평일 20시(KST) 이후에만 실행한다 |
 
 - `linux`: 개발 빌드와 pytest, C ABI 계약(UBSan), C# 계약(net8.0), Linux 휠·core ZIP을 release와 `--validation`으로
   빌드해 설치 검증(release는 테스트 서명 키 거절, validation은 전체 모드), 설치한 release 휠로 Python 샘플,
