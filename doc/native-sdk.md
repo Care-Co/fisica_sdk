@@ -87,26 +87,39 @@ python tools/build_release.py
 `CXX` may select a trusted compiler executable. macOS defaults to a host-architecture
 binary targeting macOS 11.0; set `MACOSX_DEPLOYMENT_TARGET` consistently if needed.
 Linux uses a native C++ compiler. Windows builds require an MSVC developer shell.
-macOS arm64 has been executed locally. Windows x64 now has a native MSVC build/CI
-path, PE architecture auditing and explicit trusted cross-build support; see
-[Windows distribution](windows-distribution.md) for commands and validation limits.
+macOS arm64 has been executed locally. Windows x64 has a native MSVC build path, PE
+architecture auditing and explicit trusted cross-build support; its CI is paused until a
+self-hosted Windows runner exists. See [Windows distribution](windows-distribution.md) for
+commands and validation limits.
 Other targets require their own build and real-device tests. Wheels use a platform tag matching the binary
 and a Python-independent `py3-none` ABI tag. Python requires 3.9 or newer.
 
-For Android/iOS cross-builds, generate metadata on the trusted build host, then use
-`native/CMakeLists.txt` with the appropriate NDK/Xcode toolchain. There is no automatic
-mobile binary publishing. Provide built libraries through an Android host package or
-an iOS signed framework/static-link host package; Flutter does not compile private
-sources on the customer's computer. iOS static linking requires a static CMake build
-and `DynamicLibrary.process()` with exported symbols retained by the host linker.
+The supported mobile and desktop binaries come from `tools/build_platforms.py` (one target
+per run: `apple`, `android`, `macosx_11_0_universal2`, `win_arm64`, `win_amd64`) and the partner
+packages from `tools/package_platforms.py`; both write every archive through
+`tools/release_packages.py` ([support matrix](platform-support.md)). For another toolchain,
+generate the release metadata on the trusted build host and use `native/CMakeLists.txt`:
 
-`tools/build_release.py` emits a Python wheel and a platform-specific core ZIP under
-`.build/releases/<sdk-version>/`. The core ZIP contains only a binary, public header
-and release metadata/license. A separately versioned Flutter ZIP contains public Dart
-bindings, package manifest and version policy, without test/build directories.
-The wheel contains public Python adapters and the compiled core.
-`tools/audit_artifacts.py` rejects core sources/debug artifacts and invalid macOS
-architecture tags. Source distributions intentionally fail; use `build --wheel`.
+```sh
+python tools/native_build.py --metadata-only          # .build/release-generated, production keys only
+cmake -S native -B .build/cmake -DCMAKE_TOOLCHAIN_FILE=/trusted/toolchain.cmake
+```
+
+CMake refuses metadata that trusts the test key (from the developer build or
+`--metadata-only --validation`) unless configured with `-DFISICA_VALIDATION=ON` for QA.
+There is no automatic mobile binary publishing. Flutter does not compile private sources on
+the customer's computer. iOS static linking requires a static CMake build and
+`DynamicLibrary.process()` with exported symbols retained by the host linker.
+
+`tools/build_release.py` empties `.build/releases/<sdk-version>/` and writes this host's Python
+wheel and core ZIP there. The core ZIP contains only a binary, public header, release metadata
+and the license. The wheel contains public Python adapters and the compiled core. The Flutter
+package with every platform's core is `fisica-flutter-<version>-platforms.zip` from
+`tools/package_platforms.py`. `tools/audit_artifacts.py` rejects core sources/debug artifacts,
+invalid macOS architecture tags, packages without their binaries, license or `release.json`,
+and (without `--validation`) cores that trust the test key, checked in `release.json` and in
+the compiled key table. Source distributions intentionally fail; use `build --wheel`, which
+also trusts production keys only.
 Keep all build output and source-baseline backups internal. Do not publish `native/`,
 `tools/`, `.build/`, samples or tests. New releases use the Fisica Scale SDK License
 for wrappers and core; rights to previously licensed source are not revoked.

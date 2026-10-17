@@ -13,11 +13,12 @@ without one the SDK runs in **basic mode** (see below). No device firmware chang
 python -m pip install /path/to/fisica-3.0.0-py3-none-PLATFORM.whl
 ```
 
-Use a wheel for your OS/architecture. Python 3.9+ is required. macOS universal2 and
-Windows x64/ARM64 binary build paths are available. Windows includes an MSVC CI build
-and Python installation matrix; see [Windows distribution](doc/windows-distribution.md)
-for commands and verification limits. Python packages for Linux/mobile are not supplied.
-Source distributions are intentionally disabled.
+Use a wheel for your OS/architecture. Python 3.9+ is required. Wheels are built for macOS
+universal2 and Windows x64/ARM64 (MSVC or a trusted cross compiler). The Windows CI build and
+Python installation matrix are paused until a self-hosted Windows runner exists; see
+[Windows distribution](doc/windows-distribution.md) for commands and verification limits.
+Python packages for Linux/mobile are not supplied (CI builds a Linux wheel only to test the
+packaging). Source distributions are intentionally disabled.
 
 [Partner installation guide](doc/partner-quickstart.md) covers every language and
 [minimal applications](examples/partner/README.md). Use the supplied binary packages;
@@ -91,11 +92,18 @@ python -m pytest -q
 python tools/build_release.py
 ```
 
-Build artifacts are written to `.build/releases/<sdk-version>/`. Native core ZIPs
-contain only compiled libraries, public C headers and release metadata. Python wheels
-include public adapters plus the binary; core implementation sources, tests, sample
-data and debug artifacts are excluded and audited. Do not distribute this source
-checkout or internal build directories.
+`tools/native_build.py` without flags is the developer build the tests use: its core also
+trusts the repository test key. Every customer build path trusts production keys only:
+`python -m build --wheel`, `tools/build_release.py`, `tools/build_platforms.py`,
+`tools/package_platforms.py` and the CMake build (`tools/native_build.py --metadata-only`).
+
+`tools/build_release.py` empties `.build/releases/<sdk-version>/` and writes this host's wheel
+and native core ZIP there. Native core ZIPs contain only compiled libraries, public C headers,
+release metadata and the license. Python wheels include public adapters plus the binary; core
+implementation sources, tests, sample data and debug artifacts are excluded and audited. The
+Swift, Kotlin, C#, Flutter and sample packages come from `tools/build_platforms.py` and
+`tools/package_platforms.py` ([support matrix](doc/platform-support.md)). Do not distribute this
+source checkout or internal build directories.
 
 Compiled distribution raises the cost of reverse engineering; it does not make
 host-side code or device communications impossible to inspect. No firmware-level
@@ -145,9 +153,11 @@ python tools/build_release.py --validation
 ```
 
 The trusted builder produces the same binary for every company, includes the license
-in each archive and writes a SHA-256 `artifact-manifest.json`. Customer builds (no
-`--validation`) trust only the production portal key; `--validation` builds also trust
-the repository test key for QA with test-signed tokens.
+and release metadata in each archive and writes a SHA-256 `artifact-manifest.json`. Customer
+builds (no `--validation`) trust only the production portal key; `--validation` builds also trust
+the repository test key for QA with test-signed tokens. `tools/audit_artifacts.py` and
+`tools/verify_wheel.py` reject an archive whose core trusts the test key unless they also run
+with `--validation`.
 Read `sdk.version_info()` for release information and
 `sdk.get_device_info()` for queried firmware and its verification state. Unverified
 firmware warns and continues without an opt-in flag.
