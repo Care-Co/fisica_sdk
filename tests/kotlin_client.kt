@@ -44,6 +44,13 @@ fun measure(core: FisicaCore, transport: MockTransport, license: FisicaEntitleme
     check(await<SessionEvent>("stop") { client.stop(it) }.second == null)
     return client to received
 }
+/** A connected client the app forgets to close; only the returned weak reference remains. */
+fun abandon(core: FisicaCore, packet: ByteArray): java.lang.ref.WeakReference<FisicaClient> {
+    val client = FisicaClient(core, scale(core, packet))
+    check(await<SessionEvent>("connect") { client.connect(FisicaLink.USB, completion = it) }.second == null)
+    return java.lang.ref.WeakReference(client)
+}
+fun clientThreads() = Thread.getAllStackTraces().keys.count { it.name == "fisica-client" && it.isAlive }
 fun sha256(text: String) = MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 /** The developer portal's check of an activation (FAC1) or release (FRC1) code; returns its JSON body. */
 fun readCode(code: String, prefix: String): String {
@@ -216,6 +223,67 @@ fun main(args: Array<String>) {
         check(await<SessionEvent>("start") { client.start(completion = it) }.second == null)
         check(transport.sent.any { it.contentEquals(core.command("SET_DEVICE_USB")) })
         await<SessionEvent>("close") { client.close(it) }
+    }
+    // A transport that does not declare its link must be given one; nothing is sent without it.
+    run {
+        val transport = scale(core, packet); val client = FisicaClient(core, transport)
+        val error = await<SessionEvent>("missing link") { client.connect(completion = it) }.second
+        check((error as FisicaException).code == FisicaStatus.INVALID_ARGUMENT && !transport.isOpen && transport.sent.isEmpty())
+        check(await<SessionEvent>("given link") { client.connect(FisicaLink.BLE, completion = it) }.second == null)
+        check(await<SessionEvent>("start") { client.start(completion = it) }.second == null)
+        check(transport.sent.any { it.contentEquals(core.command("SET_DEVICE_BLE")) })
+        await<SessionEvent>("close") { client.close(it) }
+    }
+    // Callbacks and completions that throw reach onError; every call completes, also after close.
+    run {
+        val transport = scale(core, packet); val client = FisicaClient(core, transport)
+        val errors = java.util.concurrent.ConcurrentLinkedQueue<String>()
+        client.onError = { errors.add(it.message ?: ""); throw IllegalStateException("error handler") }
+        client.onFrame = { throw IllegalStateException("frame handler") }
+        client.onEvent = { throw IllegalStateException("event handler") }
+        check(await<SessionEvent>("connect") { client.connect(FisicaLink.USB, completion = it) }.second == null)
+        check(await<SessionEvent>("start") { client.start(completion = it) }.second == null)
+        val stopped = CountDownLatch(1)
+        client.stop { _, _ -> stopped.countDown(); throw IllegalStateException("completion") }
+        check(stopped.await(5, TimeUnit.SECONDS))
+        waitFor("completion error") { "completion" in errors }
+        check(errors.containsAll(listOf("frame handler", "event handler")) && "error handler" !in errors) { "$errors" }
+        client.clearFrames()
+        check(await<SessionEvent>("close") { client.close(it) }.second == null)
+        // The report comes from the core's analysis, not from the frames, and outlives the session.
+        check(client.frames.isEmpty() && client.report()!!.weight == 70.5)
+        fun cancelled(error: Throwable?) = (error as? FisicaException)?.code == FisicaStatus.CANCELLED
+        check(cancelled(await<SessionEvent>("connect after close") { client.connect(FisicaLink.USB, completion = it) }.second))
+        check(cancelled(await<SessionEvent>("start after close") { client.start(completion = it) }.second))
+        check(cancelled(await<SessionEvent>("stop after close") { client.stop(it) }.second))
+        check(cancelled(await<Int>("battery after close") { client.readBattery(it) }.second))
+        check(await<SessionEvent>("close after close") { client.close(it) }.let { it.first == null && it.second == null })
+    }
+    // A second close while the first waits for the Scale is Busy; the first still releases everything.
+    run {
+        val transport = scale(core, packet).apply { reply(core.command("SET_DEVICE_STOP")) }  // never confirmed
+        val client = FisicaClient(core, transport)
+        check(await<SessionEvent>("connect") { client.connect(FisicaLink.USB, completion = it) }.second == null)
+        check(await<SessionEvent>("start") { client.start(completion = it) }.second == null)
+        check(await<SessionEvent>("stop") { client.stop(it) }.second == null)
+        val first = CountDownLatch(1)
+        client.close { _, _ -> first.countDown() }
+        val second = await<SessionEvent>("second close") { client.close(it) }.second
+        check((second as FisicaException).code == FisicaStatus.BUSY)
+        check(first.await(5, TimeUnit.SECONDS) && !transport.isOpen && client.report()!!.weight == 70.5)
+    }
+    // A client dropped without close(): the ticker does not keep it alive, so it is collected, its
+    // thread ends and its native session is freed.
+    run {
+        val threads = clientThreads(); val sessions = NativeCleaner.pending
+        val dropped = abandon(core, packet)
+        val deadline = System.nanoTime() + 10_000_000_000
+        while (dropped.get() != null || NativeCleaner.pending > sessions || clientThreads() > threads) {
+            check(System.nanoTime() < deadline) {
+                "abandoned client kept: ${dropped.get() != null}, sessions ${NativeCleaner.pending}/$sessions, threads ${clientThreads()}/$threads"
+            }
+            System.gc(); Thread.sleep(50)
+        }
     }
     // Start clears the previous measurement; frames stay bounded (full mode: every packet is a frame).
     run {

@@ -59,8 +59,9 @@ JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_command(JNIEnv *e,jo
 }
 JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_poll(JNIEnv *e,jobject,jlong h,jintArray meta) {
     if (e->GetArrayLength(meta)!=8) { checked(e,FISICA_INVALID_ARGUMENT); return nullptr; }
-    // EVENT_BYTES holds every event, including a full-mode MEASUREMENT (grids and packet).
-    std::array<uint32_t,8> event{}; std::vector<uint8_t> data(FISICA_LIMIT_EVENT_BYTES);
+    // EVENT_BYTES holds every event, including a full-mode MEASUREMENT (grids and packet). A stack
+    // buffer, not zero-filled: nothing is allocated per poll except the Java array of the payload.
+    std::array<uint32_t,8> event{}; std::array<uint8_t,FISICA_LIMIT_EVENT_BYTES> data;
     int status=fisica_core_session_poll(session(h),event.data(),event.size(),data.data(),data.size());
     if (status==FISICA_NO_RESULT) return nullptr; if (!checked(e,status)) return nullptr;
     e->SetIntArrayRegion(meta,0,8,reinterpret_cast<const jint*>(event.data())); return output(e,data.data(),event[7]);

@@ -36,22 +36,26 @@ ble.scan()
 - `FisicaClient` runs the clock, moves bytes and turns core events into callbacks on
   the executor you pass. Command order, ACK waits, timeouts and recovery decisions are
   in the shared core.
-- Completions receive either an event or an error. A rejected or unconfirmed command
-  is a `FisicaCommandException` (`code` SDK status, `deviceCode` the Scale's code).
+- Completions receive either an event or an error, and every call completes: after
+  `close`, with a `CANCELLED` error. A rejected or unconfirmed command is a
+  `FisicaCommandException` (`code` SDK status, `deviceCode` the Scale's code). A callback
+  or completion that throws is reported through `onError`.
 - `connect` completes with the firmware probe; an unanswered probe does not prevent
   use. A transport that never becomes ready fails after `timeoutMs` (default 15 s).
-- `close` releases resources even when the Scale does not confirm. On `onLinkLost`,
-  reopen the same Scale with `connect`.
-- `report()` returns unrounded weight and foot size from the core. A measurement at full rate
-  analyzes the collected frames; otherwise the core analyzes every packet it received since
-  the start, so basic mode gives the same result quality.
+- `close` releases resources even when the Scale does not confirm; a second `close` while
+  one is pending fails with `BUSY`. On `onLinkLost`, reopen the same Scale with `connect`.
+  A client or session dropped without `close` is still freed once it is collected.
+- `report()` returns unrounded weight and foot size from the core's analysis of every packet
+  it received since the start, in every mode, and still after `close`.
 - `start` clears the frames of the previous measurement once the core accepts it, so
   measuring several people in a row needs no `clearFrames()`. A reconnect keeps them.
   Only the latest `maxFrames` (at most `FisicaLimit.ANALYSIS_FRAMES`, the most one
   analysis accepts) are kept; `droppedFrames` counts the older ones dropped.
 - `connect(link)` takes `FisicaLink.BLE` or `FisicaLink.USB`. Without it the transport's
-  own link is used (`FisicaLinkTransport`; `BleTransport` is BLE), otherwise BLE. A link
-  other than the transport's fails with `INVALID_ARGUMENT` before anything is sent.
+  own link is used (`FisicaLinkTransport`; `BleTransport` is BLE); a transport that does
+  not declare one (a plain `FisicaTransport`, `MockTransport` unless set) must be given it.
+  A missing link, or one other than the transport's, fails with `INVALID_ARGUMENT` before
+  anything is sent.
 - Codes are generated constants: `FisicaStatus`, `FisicaSessionState`, `FisicaSessionEvent`, ...
 
 Transports: `BleTransport` (Android GATT), `MockTransport` (scripted, no hardware; runs
