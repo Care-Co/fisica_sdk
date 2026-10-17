@@ -44,3 +44,6 @@ examples/partner/flutter/*.iml
 examples/partner/flutter/.idea/
 examples/partner/flutter/test/
 examples/partner/flutter/analysis_options.yaml
+
+# Developer portal (developer.fisicahealthcare.com): moves to its own repository later.
+developer-portal/
