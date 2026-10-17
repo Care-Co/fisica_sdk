@@ -89,6 +89,11 @@ the stored key and returns the code to enter in the portal. The activated key is
 per company and contract under LocalApplicationData by default (`storage`) and wins over
 an older original key file. A failed exchange only sets `LastSyncError`; it never changes
 the license or throws. `Warning` and `Changed` report new warnings and license changes.
+The key stored for this app or PC (paired or imported earlier) is loaded when the
+`FisicaEntitlement` is created; importing the original key file again then reports
+`IgnoredOlder`. Without a key, `await PairAsync(code => ...)` shows a code that an owner or
+admin approves at the developer portal's `/activate` page (`DefaultEndpoint`); the key arrives
+activated for this app or PC and is stored. Only the target is sent.
 Pass the license to `FisicaClient`: it is applied to the session before every start,
 every 30 seconds and whenever it changes. The SDK does not track its own use; the stored
 state is the signed key and the latest time seen. See `doc/licensing-plan.md`.

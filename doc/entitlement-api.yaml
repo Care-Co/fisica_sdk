@@ -1,18 +1,21 @@
 openapi: 3.0.3
 info:
   title: Fisica SDK license API
-  version: 0.2.0-draft
+  version: 0.3.0-draft
   description: |
     Contract between the SDK and the Care&Co server (policy of 2026-10-17: SDK keys as seats,
     basic and full mode). The server is the Fisica developer portal (Care-Co/developer-portal) at
     https://developer.fisicahealthcare.com; `tools/entitlement_dev.py` is the reference mock used by
     the tests.
 
-    The SDK calls two endpoints: activate (once per key, sending the key and this app's or PC's
-    target) and refresh (renewal of the same key, empty body). There is no usage, activity or
-    telemetry endpoint. Trial, extension and contract requests, approval, creating keys, offline
-    activation files, renewal files and release codes happen in the developer portal, authenticated
-    as a company user; they are not SDK calls and are not specified here.
+    The SDK calls four endpoints: activate (once per key, sending the key and this app's or PC's
+    target), refresh (renewal of the same key, empty body), and pairing and pairing token for an
+    SDK without a key (device authorization as in RFC 8628: the SDK sends only its target, shows a
+    code, and receives a key that an owner or admin approved in the portal). There is no usage,
+    activity or telemetry endpoint. Trial, extension and contract requests, approval, creating keys,
+    approving pairing codes (`/activate`), offline activation files, renewal files and release codes
+    happen in the developer portal, authenticated as a company user; they are not SDK calls and are
+    not specified here.
 
     Rules the server must keep:
     - No SDK usage tracking. The server does not receive, derive or store whether the SDK was
@@ -25,7 +28,12 @@ info:
     - The company, contract and key are taken ONLY from the verified bearer token. Identifiers in a
       request body are never trusted; the activation body carries the target only.
     - The token ships inside partner apps. Treat it as a credential for its own seat: it
-      authorizes activating and renewing itself and nothing else. Rate-limit both endpoints.
+      authorizes activating and renewing itself and nothing else. Rate-limit every endpoint.
+    - Pairing is unauthenticated. The device code is a secret only the SDK holds (the server keeps
+      its hash); the user code is short-lived (10 minutes), single-use and shown to the approver with
+      the target (an app ID, or only the first 8 characters of a PC hash) and the request time. The
+      approver must be an owner or admin of the organization the key comes from; seat, move-cap and
+      trial rules are those of activation.
     - The SDK core decides the mode from signed fields only. A refused or failed request leaves
       the SDK with the key it had; the SDK never treats a network failure as an expiry, a release
       or a revocation.
@@ -86,6 +94,58 @@ paths:
         '401': {description: Missing token, bad signature, unknown signing key or unknown contract., content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
         '429': {description: Rate limited. The SDK keeps what it had.}
         '503': {description: Temporarily unavailable. The SDK keeps what it had.}
+  /sdk/v1/pairing:
+    post:
+      summary: Start pairing an SDK without a key; answers the codes.
+      security: []
+      description: |
+        The body is the SDK core's activation request (`Target`), exactly as for activate. The answer
+        holds `device_code` (kept by the SDK, sent only to the token endpoint), `user_code`
+        (`XXXX-XXXX`, consonants only, shown to the person), `verification_uri` (the portal's
+        `/activate` page), `verification_uri_complete` (the same with `?code=`), `expires_in` (600)
+        and `interval` (seconds between polls, 5).
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/Target'}}}
+      responses:
+        '200':
+          description: The codes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval]
+                properties:
+                  device_code: {type: string}
+                  user_code: {type: string, pattern: '^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$'}
+                  verification_uri: {type: string}
+                  verification_uri_complete: {type: string}
+                  expires_in: {type: integer}
+                  interval: {type: integer}
+        '400': {description: '`invalid_json`, `unexpected_body` or `invalid_target`.', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '429': {description: Rate limited; retry after the `Retry-After` header.}
+  /sdk/v1/pairing/token:
+    post:
+      summary: Poll for the key approved for a pairing.
+      security: []
+      description: |
+        Body `{"device_code": "..."}` and nothing else. Until an owner or admin approves the user code
+        the answer is 400 `authorization_pending`; polling faster than `interval` gives `slow_down`
+        (add 5 seconds to the interval). A denied code gives `access_denied`; an expired, unknown or
+        already used device code gives `expired_token`. Approval activates a key (new, or an unbound
+        one of the chosen trial or contract) for the target, so the 200 answer is a key bound to this
+        app or PC. It is given once. A key approved just before the code expired can still be
+        received for a short while; a key released in the portal before it was received gives
+        `access_denied`.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {type: object, additionalProperties: false, required: [device_code], properties: {device_code: {type: string}}}}}
+      responses:
+        '200':
+          description: The approved key, activated for the target.
+          content: {application/json: {schema: {type: object, required: [token], properties: {token: {$ref: '#/components/schemas/Token'}}}}}
+        '400': {description: '`authorization_pending`, `slow_down`, `access_denied`, `expired_token`, `invalid_json` or `unexpected_body`.', content: {application/json: {schema: {$ref: '#/components/schemas/Error'}}}}
+        '429': {description: Rate limited; retry after the `Retry-After` header.}
 components:
   securitySchemes:
     sdkKey: {type: http, scheme: bearer, bearerFormat: FSE1}

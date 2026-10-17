@@ -41,6 +41,7 @@ class FisicaSDK:
         - get_all_reports(): Retrieve all previous session reports stored in memory.
         - export_report(report: Optional[Union[SessionReport, list]], output: Optional[str]): Save the current or specified report(s) to a JSON file.
         - configure_entitlement(token=..., file=..., endpoint=...): Use an SDK key for full mode.
+        - pair_device(): Get an SDK key by approving a code in the developer portal (no key needed).
         - entitlement_status(): Full or basic mode, why, and the key's dates.
         - activation_code() / release_key(): Offline activation code, and releasing the key on this app or PC.
         - reset_session(): Clear the current session's metadata and frame data.
@@ -86,6 +87,7 @@ class FisicaSDK:
         self._debug = debug
         self._last_error = None
         self._entitlement = None
+        self._looked_for_key = False
         self._unverified_notice = False
         log.level = self._debug
 
@@ -100,6 +102,7 @@ class FisicaSDK:
         Parameters:
             token (str): SDK key from the developer portal.
             file (str): Path of a key file (an activation or renewal file from the portal works on a PC that is never online).
+                Without token and file, the key stored for this app or PC (paired or imported earlier) is used.
             endpoint (str): Server URL for activation and renewal. No network is used without it.
             online (bool): Set False to keep a configured endpoint unused.
 
@@ -113,27 +116,77 @@ class FisicaSDK:
             Online, a new key is activated here automatically and renewed before it expires.
         """
         from .entitlement import Entitlement
-        previous, self._entitlement = self._entitlement, Entitlement(
-            token=token, file=file, endpoint=endpoint, online=online, **options)
+        self._use(Entitlement(token=token, file=file, endpoint=endpoint, online=online, **options))
+        return self._entitlement.status()
+
+    def pair_device(self, endpoint=None, on_code=None, timeout=None, **options):
+        """
+    Fisica SDK: pair_device
+
+        Parameters:
+            endpoint (str): Developer portal URL. Default: https://developer.fisicahealthcare.com
+            on_code (callable): Called with a dict holding 'user_code', 'verification_uri',
+                'verification_uri_complete' and 'expires_in'. Without it the code is printed.
+            timeout (float): Seconds to wait at most. Default: until the code expires (10 minutes).
+
+        Returns:
+            dict: entitlement_status() plus 'pairing': 'approved', 'denied', 'expired' or 'cancelled'.
+
+        Notes:
+            For an app or PC without an SDK key. The SDK shows a code; an owner or admin of the
+            organization enters it in the developer portal (/activate) and approves it with a new or
+            unused key. The key arrives already activated for this app or PC and is stored, so later
+            runs use it without configure_entitlement(). Only the app ID or PC hash is sent.
+            On a PC, `python -m fisica_sdk license pair` does the same from a terminal.
+        """
+        from .entitlement import DEFAULT_ENDPOINT, Entitlement
+        entitlement = Entitlement(endpoint=endpoint or DEFAULT_ENDPOINT, **options)
+        try:
+            outcome = entitlement.pair(on_code=on_code, timeout=timeout)
+        except Exception:
+            entitlement.close()
+            raise
+        self._use(entitlement)
+        return {**entitlement.status(), 'pairing': outcome}
+
+    def _use(self, entitlement):
+        previous, self._entitlement = self._entitlement, entitlement
+        self._looked_for_key = True
         if previous:
             previous.close()
         self._apply_license()
-        return self._entitlement.status()
+
+    def _stored_entitlement(self):
+        """Without configure_entitlement(): the key stored for this app or PC, looked up once."""
+        if self._entitlement is None and not self._looked_for_key:
+            self._looked_for_key = True
+            from .entitlement import DEFAULT_ENDPOINT, Entitlement, default_storage_directory
+            try:
+                stored = any(default_storage_directory().glob('entitlement-*.state'))
+            except OSError:
+                stored = False
+            if stored:
+                entitlement = Entitlement(endpoint=DEFAULT_ENDPOINT)
+                if entitlement.status()['key']:
+                    self._use(entitlement)
+                else:
+                    entitlement.close()
+        return self._entitlement
 
     def entitlement_status(self):
         """Full or basic mode, the reason for basic mode, open features and the key's dates."""
-        if self._entitlement:
+        if self._stored_entitlement():
             return self._entitlement.status()
         from .entitlement import NO_KEY_STATUS
         return dict(NO_KEY_STATUS)
 
     def activation_code(self):
         """Code to enter in the developer portal to activate the loaded key for a device that is never online."""
-        return self._entitlement.activation_code() if self._entitlement else None
+        return self._entitlement.activation_code() if self._stored_entitlement() else None
 
     def release_key(self):
         """Release the SDK key on this app or PC; returns the code to enter in the developer portal."""
-        if not self._entitlement:
+        if not self._stored_entitlement():
             raise RuntimeError('No SDK key is configured')
         code = self._entitlement.release()
         self._apply_license()
@@ -150,7 +203,7 @@ class FisicaSDK:
 
     def _has_feature(self, name):
         try:
-            return bool(self._entitlement and self._entitlement.has_feature(name))
+            return bool(self._stored_entitlement() and self._entitlement.has_feature(name))
         except Exception:
             return False
 
@@ -158,7 +211,7 @@ class FisicaSDK:
         # Status notice only; nothing about the use is recorded. Problems here must never
         # reach the measurement path.
         try:
-            if self._entitlement:
+            if self._stored_entitlement():
                 self._entitlement.check_status()
             elif not self._unverified_notice:
                 self._unverified_notice = True

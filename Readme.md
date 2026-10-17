@@ -124,7 +124,12 @@ sdk.configure_entitlement(file='sdk-key.fse', endpoint='https://developer.fisica
 print(sdk.entitlement_status())   # mode, reason, features, key and trial/contract dates
 sdk.activation_code()             # offline PCs: enter this code in the portal, import the file it gives
 sdk.release_key()                 # free the seat on this app or PC; returns the portal release code
+sdk.pair_device()                 # no key: show a code, an owner or admin approves it in the portal
 ```
+
+Without a key, `python -m fisica_sdk license pair` shows a code, opens the portal's approval page
+and stores the key it receives for this PC; scripts on this PC then find it without
+`configure_entitlement()` (`license status`, `import`, `code` and `release` manage it).
 
 The core decides the mode ([licensing plan](doc/licensing-plan.md), sections 2 and 4.5).
 **Full mode** needs a key activated for this app's ID or this PC, within the key's expiry

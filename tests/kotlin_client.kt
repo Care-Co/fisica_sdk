@@ -313,8 +313,9 @@ fun main(args: Array<String>) {
         val file = File(temporary, "activated.fse").apply { writeText(vector("full") + "\n") }  // from the portal
         check(original.importFile(file) == FisicaEntitlementOutcome.ACCEPTED && original.status().isFull)
         check(original.syncNow() == null)  // no endpoint: nothing leaves the device
-        val reopened = license("unbound_older", directory)
+        val reopened = license(null, directory)  // a later start loads the activated key by itself
         check(reopened.status().isFull && reopened.status().bind == target)
+        check(reopened.importToken(vector("unbound_older")) == FisicaEntitlementOutcome.IGNORED_OLDER && reopened.status().isFull)
         original.close(); reopened.close()
     }
     // A renewal that reports the key released or revoked: the device lets go of it.
@@ -370,10 +371,20 @@ fun main(args: Array<String>) {
         val (client, received) = measure(core, transport, context)
         check(received == 12 && client.report()!!.weight == 70.5)
         await<SessionEvent>("close") { client.close(it) }
-        // A later start with the original key file finds the activated key stored for this company and contract.
+        // A later start finds the activated key stored for this PC; the original key file does not replace it.
         val reopened = FisicaEntitlement(core, null, directory) { clock }
-        check(reopened.importToken(vector("unbound")) == FisicaEntitlementOutcome.ACCEPTED)
         check(reopened.status().isFull && reopened.status().bind == target)
+        check(reopened.importToken(vector("unbound")) == FisicaEntitlementOutcome.IGNORED_OLDER && reopened.status().isFull)
+        // Pairing without a key: the mock portal approves every code at once with an unbound key of the contract.
+        val paired = File(directory, "paired")
+        FisicaEntitlement(core, endpoint, paired) { clock }.use { fresh ->
+            check(fresh.status().reason == FisicaModeReason.NO_KEY)
+            var shown: PairingCode? = null
+            check(fresh.pair({ shown = it }) == PairingResult.APPROVED) { "pairing failed: ${fresh.lastSyncError}" }
+            check(shown?.userCode?.length == 9 && fresh.status().key == "key_pair_1" && fresh.status().bind == target)
+        }
+        FisicaEntitlement(core, null, paired) { clock }.use { later -> check(later.status().isFull && later.status().key == "key_pair_1") }
+        check(runCatching { license().pair({}) }.exceptionOrNull() is IllegalStateException)  // no endpoint
         // A communication failure is recorded, raises nothing and changes no license.
         val offline = FisicaEntitlement(core, "http://127.0.0.1:9", File(directory, "offline")) { clock }
         check(offline.importToken(vector("unbound")) == FisicaEntitlementOutcome.ACCEPTED); offline.checkStatus()

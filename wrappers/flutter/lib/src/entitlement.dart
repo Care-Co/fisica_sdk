@@ -39,6 +39,8 @@ const _warningMessages = <int, String>{
 };
 const _activatePath = '/sdk/v1/entitlement/activate';
 const _refreshPath = '/sdk/v1/entitlement/refresh';
+const _pairingPath = '/sdk/v1/pairing';
+const _pairingTokenPath = '/sdk/v1/pairing/token';
 
 /// The license as the core decides it now: full or basic mode, why, the open
 /// features and the SDK key's dates. Codes follow the generated classes
@@ -141,6 +143,23 @@ class EntitlementStatus {
 /// renewed, or the problem. A problem never changes the license.
 typedef EntitlementSync = ({bool activated, bool refreshed, String? error});
 
+/// What to show while pairing: an owner or admin enters [userCode] at
+/// [verificationUri] ([verificationUriComplete] already holds the code). The
+/// code is valid for [expiresIn] seconds.
+class PairingCode {
+  final String userCode, verificationUri, verificationUriComplete;
+  final int expiresIn;
+  const PairingCode({
+    required this.userCode,
+    required this.verificationUri,
+    required this.verificationUriComplete,
+    required this.expiresIn,
+  });
+}
+
+/// How pairing ended. [approved]: the key is loaded and stored.
+enum PairingResult { approved, denied, expired, cancelled }
+
 typedef _EntitlementBytesNative =
     Int32 Function(Pointer<Void>, Pointer<Uint8>, Uint32, Pointer<Uint32>);
 typedef _EntitlementBytesDart =
@@ -186,11 +205,12 @@ class FisicaEntitlement {
   /// Last storage or network problem, or null. Never a license state.
   String? lastSyncError;
 
-  /// [endpoint]: server base URL for activation and renewal; without it no
-  /// network is used. [storageDirectory]: directory for the stored state (for
-  /// example the app's support directory), one file per company and
-  /// contract; null keeps it in memory only, so an online app activates its
-  /// key again after each launch. [clock]: wall-clock Unix seconds.
+  /// [endpoint]: server base URL for activation, renewal and [pair]; without
+  /// it no network is used. [storageDirectory]: directory for the stored
+  /// state (for example the app's support directory), one file per seat;
+  /// null keeps it in memory only, so an online app activates its key again
+  /// after each launch. The key stored there for this app or PC (paired or
+  /// imported earlier) is loaded at once. [clock]: wall-clock Unix seconds.
   FisicaEntitlement(
     this.core, {
     int Function()? clock,
@@ -201,6 +221,19 @@ class FisicaEntitlement {
   }) : _clock = clock ?? (() => DateTime.now().millisecondsSinceEpoch ~/ 1000),
        _endpoint = endpoint?.replaceAll(RegExp(r'/+$'), ''),
        _storageDirectory = storageDirectory {
+    _handle = _create();
+    if (_loadStored()) {
+      _notify();
+      _autoSync();
+    } else {
+      _notify();
+    }
+  }
+
+  /// The developer portal, for [pair].
+  static const defaultEndpoint = 'https://developer.fisicahealthcare.com';
+
+  Pointer<Void> _create() {
     final output = calloc<Pointer<Void>>();
     try {
       core._check(
@@ -209,11 +242,61 @@ class FisicaEntitlement {
           int Function(Pointer<Pointer<Void>>)
         >('fisica_core_entitlement_create')(output),
       );
-      _handle = output.value;
+      return output.value;
     } finally {
       calloc.free(output);
     }
-    _notify();
+  }
+
+  void _destroy(Pointer<Void> context) => core._library.lookupFunction<
+    Void Function(Pointer<Void>),
+    void Function(Pointer<Void>)
+  >('fisica_core_entitlement_destroy')(context);
+
+  /// The key stored for this app or PC, if any. The core names a state file
+  /// from the company, the contract and the target, so a file it names again
+  /// after restoring it belongs here. With several, a full-mode key wins,
+  /// then the most recently verified one.
+  bool _loadStored() {
+    final directory = _storageDirectory;
+    if (directory == null) return false;
+    final List<File> files;
+    try {
+      files = Directory(directory).listSync().whereType<File>().where((file) {
+        final name = file.uri.pathSegments.last;
+        return name.startsWith('entitlement-') && name.endsWith('.state');
+      }).toList()..sort((a, b) => a.path.compareTo(b.path));
+    } on FileSystemException {
+      return false;
+    }
+    ({bool full, int verified, Uint8List state})? best;
+    for (final file in files) {
+      final probe = _create();
+      try {
+        final state = file.readAsBytesSync();
+        _restore(state, probe);
+        if (_text(FisicaEntitlementText.stateName, probe) != file.uri.pathSegments.last) continue;
+        final values = _values(probe);
+        final full = values[0] == FisicaMode.full;
+        final current = best;
+        if (current == null || (full && !current.full) ||
+            (full == current.full && values[8] > current.verified)) {
+          best = (full: full, verified: values[8], state: state);
+        }
+      } on Object catch (_) {
+        // Unreadable or foreign state: not this app's or PC's key.
+      } finally {
+        _destroy(probe);
+      }
+    }
+    final chosen = best;
+    if (chosen == null) return false;
+    try {
+      _restore(chosen.state);
+      return true;
+    } on Object catch (_) {
+      return false;
+    }
   }
 
   /// Emits the status whenever the license changes: mode, reason, features,
@@ -223,10 +306,7 @@ class FisicaEntitlement {
 
   void close() {
     if (_handle == nullptr) return;
-    core._library.lookupFunction<
-      Void Function(Pointer<Void>),
-      void Function(Pointer<Void>)
-    >('fisica_core_entitlement_destroy')(_handle);
+    _destroy(_handle);
     _handle = nullptr;
     unawaited(_changes.close());
   }
@@ -343,7 +423,7 @@ class FisicaEntitlement {
     }
   }
 
-  String _text(int field) {
+  String _text(int field, [Pointer<Void>? context]) {
     final output = calloc<Uint8>(FisicaLimit.tokenBytes);
     final length = calloc<Uint32>();
     try {
@@ -351,7 +431,7 @@ class FisicaEntitlement {
         core._library.lookupFunction<
           Int32 Function(Pointer<Void>, Uint32, Pointer<Uint8>, Uint32, Pointer<Uint32>),
           int Function(Pointer<Void>, int, Pointer<Uint8>, int, Pointer<Uint32>)
-        >('fisica_core_entitlement_text')(_open, field, output, FisicaLimit.tokenBytes, length),
+        >('fisica_core_entitlement_text')(context ?? _open, field, output, FisicaLimit.tokenBytes, length),
       );
       return utf8.decode(output.asTypedList(length.value));
     } finally {
@@ -370,14 +450,14 @@ class FisicaEntitlement {
     }
   }
 
-  List<int> _values() {
+  List<int> _values([Pointer<Void>? context]) {
     final values = calloc<Uint64>(FisicaLimit.statusFields);
     try {
       core._check(
         core._library.lookupFunction<
           Int32 Function(Pointer<Void>, Uint64, Pointer<Uint64>, Uint32),
           int Function(Pointer<Void>, int, Pointer<Uint64>, int)
-        >('fisica_core_entitlement_status')(_open, _now(), values, FisicaLimit.statusFields),
+        >('fisica_core_entitlement_status')(context ?? _open, _now(), values, FisicaLimit.statusFields),
       );
       return values.asTypedList(FisicaLimit.statusFields).toList();
     } finally {
@@ -503,9 +583,9 @@ class FisicaEntitlement {
     return force ? (path: _refreshPath, token: token, body: '{}') : null;
   }
 
-  Future<Map<String, dynamic>> _post(
+  Future<({int status, String text})> _send(
     String path,
-    String token,
+    String? token,
     String body,
   ) async {
     final client = HttpClient()..connectionTimeout = timeout;
@@ -513,7 +593,9 @@ class FisicaEntitlement {
       final request = await client
           .postUrl(Uri.parse('$_endpoint$path'))
           .timeout(timeout);
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      if (token != null) {
+        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+      }
       request.headers.contentType = ContentType.json;
       final bytes = utf8.encode(body);
       request.contentLength = bytes.length;
@@ -523,15 +605,94 @@ class FisicaEntitlement {
           .bind(response)
           .join()
           .timeout(timeout);
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        // A refused activation (key in use elsewhere, released, trial used) is reported.
-        throw HttpException(
-          '${response.statusCode} ${text.length > 200 ? text.substring(0, 200) : text}',
-        );
-      }
-      return jsonDecode(text) as Map<String, dynamic>;
+      return (status: response.statusCode, text: text);
     } finally {
       client.close(force: true);
+    }
+  }
+
+  Future<Map<String, dynamic>> _post(
+    String path,
+    String? token,
+    String body,
+  ) async {
+    final (:status, :text) = await _send(path, token, body);
+    if (status < 200 || status >= 300) {
+      // A refused activation (key in use elsewhere, released, trial used) is reported.
+      throw HttpException(
+        '$status ${text.length > 200 ? text.substring(0, 200) : text}',
+      );
+    }
+    return jsonDecode(text) as Map<String, dynamic>;
+  }
+
+  /// Get a key without one: the developer portal approves a code shown here
+  /// (device authorization).
+  ///
+  /// Only this app's ID or this PC's hash is sent. [onCode] receives the code
+  /// to show; an owner or admin of the organization enters it at
+  /// [PairingCode.verificationUri] and approves it with a new or unused key.
+  /// The key, already activated for this app or PC, then arrives, is loaded
+  /// and stored, and later instances load it by themselves. Completes when
+  /// the code is approved, denied or expires, or [cancel] completes. Throws
+  /// [FisicaStateError] without an endpoint or a readable app ID or PC, and
+  /// [HttpException] or [SocketException] when pairing cannot start.
+  Future<PairingResult> pair(
+    void Function(PairingCode code) onCode, {
+    Future<void>? cancel,
+  }) async {
+    if (_endpoint == null) {
+      throw FisicaStateError(6, 'Pairing needs the developer portal endpoint');
+    }
+    final request = _optionalText(FisicaEntitlementText.activationRequest);
+    if (request == null) {
+      throw FisicaStateError(6, _reasonMessages[FisicaModeReason.noTarget]!);
+    }
+    final device = await _post(_pairingPath, null, request);
+    final code = PairingCode(
+      userCode: device['user_code'] as String,
+      verificationUri: device['verification_uri'] as String,
+      verificationUriComplete: device['verification_uri_complete'] as String,
+      expiresIn: (device['expires_in'] as num).toInt(),
+    );
+    onCode(code);
+    final body = jsonEncode({'device_code': device['device_code']});
+    var interval = ((device['interval'] as num?) ?? 5).toDouble();
+    var cancelled = false;
+    unawaited(cancel?.then((_) => cancelled = true));
+    // A key approved just before the code expires can still be received for a short while.
+    final deadline = DateTime.now().add(Duration(seconds: code.expiresIn + 30));
+    while (true) {
+      var wait = Duration(milliseconds: (interval * 1000).round());
+      final left = deadline.difference(DateTime.now());
+      if (left < wait) wait = left.isNegative ? Duration.zero : left;
+      final waiting = Future<void>.delayed(wait);
+      await (cancel == null ? waiting : Future.any([waiting, cancel]));
+      if (cancelled) return PairingResult.cancelled;
+      try {
+        final (:status, :text) = await _send(_pairingTokenPath, null, body);
+        final answer = jsonDecode(text);
+        if (status == 200 && answer is Map && answer['token'] is String) {
+          final outcome = importToken(answer['token'] as String);
+          if (outcome != FisicaEntitlementOutcome.accepted) {
+            throw FisicaStateError(6, 'The paired key was not accepted here ($outcome)');
+          }
+          return PairingResult.approved;
+        }
+        switch (answer is Map ? answer['error'] : null) {
+          case 'access_denied':
+            return PairingResult.denied;
+          case 'expired_token':
+            return PairingResult.expired;
+          case 'slow_down':
+            interval += 5;
+        }
+      } on FisicaStateError {
+        rethrow;
+      } on Object catch (problem) {
+        lastSyncError = 'network: $problem'; // keep polling until the code expires
+      }
+      if (!DateTime.now().isBefore(deadline)) return PairingResult.expired;
     }
   }
 
@@ -601,7 +762,7 @@ class FisicaEntitlement {
   Uint8List exportState() =>
       _read('fisica_core_entitlement_export', 262144);
 
-  void _restore(Uint8List state) {
+  void _restore(Uint8List state, [Pointer<Void>? context]) {
     final input = calloc<Uint8>(state.isEmpty ? 1 : state.length);
     try {
       input.asTypedList(state.length).setAll(0, state);
@@ -609,7 +770,7 @@ class FisicaEntitlement {
         core._library.lookupFunction<
           Int32 Function(Pointer<Void>, Pointer<Uint8>, Uint32),
           int Function(Pointer<Void>, Pointer<Uint8>, int)
-        >('fisica_core_entitlement_restore')(_open, input, state.length),
+        >('fisica_core_entitlement_restore')(context ?? _open, input, state.length),
       );
     } finally {
       calloc.free(input);

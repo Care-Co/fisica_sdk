@@ -179,9 +179,10 @@ final class LicenseTests: XCTestCase {
         XCTAssertEqual(try original.importFile(file), .accepted)
         XCTAssertEqual(try original.status().mode, .full)
         XCTAssertEqual(original.syncNow(), EntitlementSyncResult(activated: false, refreshed: false, error: nil))  // no endpoint: nothing leaves the PC
-        // A later start with the original key file still finds the activated key.
+        // A later start finds the activated key; the original key file does not replace it.
         let reopened = try FisicaEntitlement(core: core, storage: storage, clock: { now })
-        XCTAssertEqual(try reopened.importToken(try Vectors.string("unbound_older")), .accepted)
+        XCTAssertEqual(try reopened.status().mode, .full)
+        XCTAssertEqual(try reopened.importToken(try Vectors.string("unbound_older")), .ignoredOlder)
         XCTAssertEqual(try reopened.status().mode, .full); XCTAssertEqual(try reopened.status().bind, target)
     }
     func testStatusAndWarningsAreAnnouncedOnce() throws {
@@ -420,10 +421,25 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(status.mode, .full, entitlement.lastSyncError ?? ""); XCTAssertEqual(status.bindType, .pc); XCTAssertEqual(status.bind, target)
         XCTAssertEqual(status.verifiedAt, serverNow); XCTAssertEqual(status.keyUntil, serverNow + 90 * Vectors.day)
         XCTAssertNil(entitlement.lastSyncError)
-        // A later start with the original key file finds the activated key stored for this contract.
+        // A later start finds the activated key stored for this PC; the original key file does not replace it.
         let reopened = try FisicaEntitlement(core: core, storage: storage, clock: { serverNow })
-        XCTAssertEqual(try reopened.importToken(unbound), .accepted)
+        XCTAssertEqual(try reopened.status().mode, .full)
+        XCTAssertEqual(try reopened.importToken(unbound), .ignoredOlder)
         XCTAssertEqual(try reopened.status().mode, .full); XCTAssertEqual(try reopened.status().bind, target)
+        // Pairing without a key: the mock portal approves every code at once with an unbound key of the contract.
+        let paired = storage.appendingPathComponent("paired", isDirectory: true)
+        let fresh = try FisicaEntitlement(core: core, endpoint: endpoint, storage: paired, clock: { serverNow })
+        XCTAssertEqual(try fresh.status().reason, .noKey)
+        var shown: PairingCode?
+        XCTAssertEqual(try fresh.pairNow(onCode: { shown = $0 }), .approved)
+        XCTAssertEqual(shown?.userCode.count, 9)
+        XCTAssertEqual(try fresh.status().key, "key_pair_1"); XCTAssertEqual(try fresh.status().bind, target)
+        let later = try FisicaEntitlement(core: core, storage: paired, clock: { serverNow })
+        XCTAssertEqual(try later.status().mode, .full); XCTAssertEqual(try later.status().key, "key_pair_1")
+        let asynchronous = try FisicaEntitlement(core: core, endpoint: endpoint, storage: nil, clock: { serverNow })
+        let result = try awaitResult { try await asynchronous.pair(onCode: { _ in }) }
+        XCTAssertEqual(result, .approved)
+        XCTAssertThrowsError(try FisicaEntitlement(core: core, storage: nil, clock: { serverNow }).pairNow(onCode: { _ in }))
         // 30 days after the last confirmation a renewal is due: an empty refresh.
         clock = serverNow + 31 * Vectors.day
         XCTAssertTrue(try entitlement.status().warnings.contains(.renewDue))
@@ -439,4 +455,13 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(failed.error?.hasPrefix("network:"), true); XCTAssertFalse(failed.activated)
         XCTAssertEqual(try offline.status().reason, .notActivated); XCTAssertEqual(offline.lastSyncError, failed.error)
     }
+}
+
+/// Runs an async call from a synchronous test.
+private func awaitResult<T>(_ body: @escaping () async throws -> T) throws -> T {
+    let done = DispatchSemaphore(value: 0)
+    var result: Result<T, Error>!
+    Task { do { result = .success(try await body()) } catch { result = .failure(error) }; done.signal() }
+    done.wait()
+    return try result.get()
 }

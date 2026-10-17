@@ -46,6 +46,16 @@ public struct EntitlementSyncResult: Equatable {
     public let error: String?
 }
 
+/// What to show while pairing: an owner or admin enters `userCode` at `verificationURI`
+/// (`verificationURIComplete` already holds the code). The code is valid for `expiresIn` seconds.
+public struct PairingCode: Equatable {
+    public let userCode: String, verificationURI: String, verificationURIComplete: String
+    public let expiresIn: Int
+}
+
+/// How pairing ended. `.approved`: the key is loaded and stored.
+public enum PairingResult: Equatable { case approved, denied, expired, cancelled }
+
 public extension FisicaModeReason {
     /// Why the SDK is in basic mode and what to do; nil for `.none` (full mode).
     var message: String? {
@@ -87,7 +97,7 @@ public extension FisicaEntitlementWarning {
 /// and renewed before it expires. Offline, enter `activationCode()` in the developer portal and
 /// import the key file it gives. Network failures never change the license.
 /// It does not track SDK use: the stored state is the signed key and the latest time seen.
-public final class FisicaEntitlement {
+public final class FisicaEntitlement: @unchecked Sendable {  // every use of the context is under its lock
     private var handle: OpaquePointer?
     private let lock = NSRecursiveLock()
     private let clock: () -> UInt64
@@ -102,6 +112,9 @@ public final class FisicaEntitlement {
     /// Changes whenever the loaded key may have changed, so a client applies it again.
     private(set) var revision = 0
     private static let activatePath = "/sdk/v1/entitlement/activate", refreshPath = "/sdk/v1/entitlement/refresh"
+    private static let pairingPath = "/sdk/v1/pairing", pairingTokenPath = "/sdk/v1/pairing/token"
+    /// The developer portal, for pairing.
+    public static let defaultEndpoint = URL(string: "https://developer.fisicahealthcare.com")!
 
     /// Called when the status changes (import, activation, renewal, release, or time passing as
     /// seen by `checkStatus`), possibly on a background queue.
@@ -122,14 +135,45 @@ public final class FisicaEntitlement {
     }
 
     /// - Parameters:
-    ///   - endpoint: Server base URL for activation and renewal. Without it no network is used.
-    ///   - storage: Directory for the state file (one per company and contract); nil keeps state in memory only.
+    ///   - endpoint: Server base URL for activation, renewal and pairing. Without it no network is used.
+    ///   - storage: Directory for the state file (one per seat); nil keeps state in memory only. The key stored
+    ///     there for this app or PC (paired or imported earlier) is loaded at once.
     ///   - online: false keeps a configured endpoint unused.
     ///   - timeout: Seconds per server request.
     public init(core: FisicaCore, endpoint: URL? = nil, storage: URL? = FisicaEntitlement.defaultStorage, online: Bool = true,
                 timeout: TimeInterval = 5, clock: @escaping () -> UInt64 = { UInt64(max(0, Date().timeIntervalSince1970)) }) throws {
         self.clock = clock; self.endpoint = endpoint; self.storage = storage; self.online = online; self.timeout = timeout
         try check(fisica_core_entitlement_create(&handle))
+        if loadStored() { notify(); sync() }
+    }
+    /// The key stored for this app or PC, if any. The core names a state file from the company, the
+    /// contract and the target, so a file it names again after restoring it belongs here. With several,
+    /// a full-mode key wins, then the most recently verified one.
+    private func loadStored() -> Bool {
+        guard let storage, let files = try? FileManager.default.contentsOfDirectory(at: storage, includingPropertiesForKeys: nil) else { return false }
+        var best: (full: Bool, verified: UInt64, state: [UInt8])?
+        for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
+            where file.lastPathComponent.hasPrefix("entitlement-") && file.pathExtension == "state" {
+            guard let data = try? Data(contentsOf: file) else { continue }
+            let state = [UInt8](data)
+            var probe: OpaquePointer?
+            guard fisica_core_entitlement_create(&probe) == 0 else { continue }
+            defer { fisica_core_entitlement_destroy(probe) }
+            var name = [UInt8](repeating: 0, count: 256), length: UInt32 = 0
+            var values = [UInt64](repeating: 0, count: Int(FisicaLimit.statusFields.rawValue))
+            guard fisica_core_entitlement_restore(probe, state, UInt32(state.count)) == 0,
+                  fisica_core_entitlement_text(probe, FisicaEntitlementText.stateName.rawValue, &name, UInt32(name.count), &length) == 0,
+                  String(decoding: name.prefix(Int(length)), as: UTF8.self) == file.lastPathComponent,
+                  fisica_core_entitlement_status(probe, clock(), &values, UInt32(values.count)) == 0 else { continue }
+            let full = values[0] == UInt64(FisicaMode.full.rawValue)
+            if let current = best, (current.full && !full) || (current.full == full && current.verified >= values[8]) { continue }
+            best = (full, values[8], state)
+        }
+        lock.lock(); defer { lock.unlock() }
+        guard let best, let handle else { return false }
+        guard fisica_core_entitlement_restore(handle, best.state, UInt32(best.state.count)) == 0 else { return false }
+        revision += 1
+        return true
     }
     deinit { close() }
     public func close() {
@@ -277,28 +321,93 @@ public final class FisicaEntitlement {
         sync()
     }
 
-    private func post(_ path: String, token: String, body: Data) throws -> Data {
+    private func send(_ path: String, token: String?, body: Data) throws -> (status: Int, data: Data) {
         guard let endpoint, let url = URL(string: endpoint.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + path) else {
             throw FisicaError(code: 1001, message: "Invalid endpoint")
         }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: timeout)
         request.httpMethod = "POST"; request.httpBody = body
-        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         let done = DispatchSemaphore(value: 0)
-        var result: Result<Data, Error> = .failure(FisicaError(code: 1001, message: "No response"))
+        var result: Result<(Int, Data), Error> = .failure(FisicaError(code: 1001, message: "No response"))
         URLSession.shared.dataTask(with: request) { data, response, error in
             if let error { result = .failure(error) }
-            else if let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) { result = .success(data ?? Data()) }
-            else {
-                // A refused activation (key in use elsewhere, released, trial already used) is reported.
-                let detail = String(decoding: (data ?? Data()).prefix(200), as: UTF8.self)
-                result = .failure(FisicaError(code: 1001, message: "HTTP \((response as? HTTPURLResponse)?.statusCode ?? 0) \(detail)"))
-            }
+            else { result = .success(((response as? HTTPURLResponse)?.statusCode ?? 0, data ?? Data())) }
             done.signal()
         }.resume()
         done.wait()
         return try result.get()
+    }
+    private func post(_ path: String, token: String?, body: Data) throws -> Data {
+        let (status, data) = try send(path, token: token, body: body)
+        guard (200..<300).contains(status) else {
+            // A refused activation (key in use elsewhere, released, trial already used) is reported.
+            throw FisicaError(code: 1001, message: "HTTP \(status) \(String(decoding: data.prefix(200), as: UTF8.self))")
+        }
+        return data
+    }
+
+    /// Get a key without one: the developer portal approves a code shown here (device authorization).
+    ///
+    /// Only this app's ID or this PC's hash is sent. `onCode` receives the code to show; an owner or
+    /// admin of the organization enters it at `verificationURI` and approves it with a new or unused
+    /// key. The key, already activated for this app or PC, then arrives, is loaded and stored, and later
+    /// instances load it by themselves. Blocks until the code is approved, denied or expires, or
+    /// `isCancelled` returns true; do not call it on the main thread (see the async `pair`). Throws
+    /// without an endpoint, without a readable app ID or PC, or when pairing cannot start.
+    public func pairNow(onCode: (PairingCode) -> Void, isCancelled: () -> Bool = { false }) throws -> PairingResult {
+        guard endpoint != nil else { throw FisicaError(code: 6, message: "Pairing needs the developer portal endpoint") }
+        let request: String? = { lock.lock(); defer { lock.unlock() }; return optionalText(.activationRequest) }()
+        guard let request else { throw FisicaError(code: 6, message: FisicaModeReason.noTarget.message ?? "No target") }
+        guard let device = try JSONSerialization.jsonObject(with: try post(FisicaEntitlement.pairingPath, token: nil, body: Data(request.utf8))) as? [String: Any],
+              let deviceCode = device["device_code"] as? String, let userCode = device["user_code"] as? String,
+              let page = device["verification_uri"] as? String, let complete = device["verification_uri_complete"] as? String,
+              let expiresIn = device["expires_in"] as? Int else { throw FisicaError(code: 1001, message: "Unexpected server response") }
+        onCode(PairingCode(userCode: userCode, verificationURI: page, verificationURIComplete: complete, expiresIn: expiresIn))
+        let body = try JSONSerialization.data(withJSONObject: ["device_code": deviceCode])
+        var interval = max(0, (device["interval"] as? NSNumber)?.doubleValue ?? 5)
+        // A key approved just before the code expires can still be received for a short while.
+        let deadline = Date().addingTimeInterval(TimeInterval(expiresIn + 30))
+        while true {
+            var waited = 0.0, wait = max(0, min(interval, deadline.timeIntervalSinceNow))
+            repeat {
+                if isCancelled() { return .cancelled }
+                let step = min(0.2, wait - waited)
+                if step > 0 { Thread.sleep(forTimeInterval: step) }
+                waited += step
+            } while waited < wait
+            if isCancelled() { return .cancelled }
+            if let reply = try? send(FisicaEntitlement.pairingTokenPath, token: nil, body: body) {
+                let answer = (try? JSONSerialization.jsonObject(with: reply.data)) as? [String: Any]
+                if reply.status == 200, let token = answer?["token"] as? String {
+                    let outcome = try importToken(token)
+                    guard outcome == .accepted else { throw FisicaError(code: 6, message: "The paired key was not accepted here (\(outcome))") }
+                    return .approved
+                }
+                switch answer?["error"] as? String {
+                case "access_denied": return .denied
+                case "expired_token": return .expired
+                case "slow_down": interval += 5
+                default: break
+                }
+            } else {
+                lock.lock(); syncError = "network: pairing poll failed"; lock.unlock()  // keep polling until the code expires
+            }
+            if Date() >= deadline { return .expired }
+        }
+    }
+    /// `pairNow` off the calling thread; cancelling the task stops waiting (`.cancelled`).
+    @available(macOS 10.15, iOS 13.0, *)
+    public func pair(onCode: @escaping (PairingCode) -> Void) async throws -> PairingResult {
+        let cancelled = PairingCancel()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    continuation.resume(with: Result { try self.pairNow(onCode: onCode, isCancelled: { cancelled.isSet }) })
+                }
+            }
+        } onCancel: { cancelled.set() }
     }
     /// What the server should do now: activate (with the core's request body), renew, or nothing.
     private func due(force: Bool) -> (path: String, token: String, body: Data)? {
@@ -378,4 +487,11 @@ public final class FisicaEntitlement {
         }
         notify()
     }
+}
+
+/// A cancellation flag shared between a task and the thread that waits for pairing.
+private final class PairingCancel: @unchecked Sendable {
+    private let lock = NSLock(); private var value = false
+    var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
+    func set() { lock.lock(); value = true; lock.unlock() }
 }

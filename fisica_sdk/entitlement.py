@@ -2,7 +2,8 @@
 
 Signature checks, the app/PC the key is activated for and the full/basic decision are made by
 the native core, which also limits what a measurement session hands out. This module stores the
-key, activates it online, renews it and reports the status.
+key, activates it online, renews it, pairs a device without a key (the portal approves a code)
+and reports the status.
 
 The SDK does not track its own use: nothing here records or reports whether, when or how often
 it is used. The stored state is the signed key and the latest time seen, kept for offline checks.
@@ -22,6 +23,7 @@ from .errors import FisicaEntitlementWarning
 from .native import NativeEntitlement
 
 AUTO = object()
+DEFAULT_ENDPOINT = 'https://developer.fisicahealthcare.com'
 # Names follow the shared C header (fisica_sdk/codes.py is generated from it).
 _names = lambda enum: {member.value: member.name.lower() for member in enum}
 MODE = _names(codes.FisicaMode)
@@ -77,8 +79,9 @@ class Entitlement:
     token/file: an SDK key from the developer portal, or a key file the portal made for this
     device (activation or renewal file; works on a PC that is never online). endpoint: server
     base URL; without it no network is used. online=False keeps a configured endpoint unused.
-    storage: state file path, None for memory only, or by default a per-company/contract file
-    in the user's application-data directory. Contexts are never shared between instances.
+    storage: state file path, None for memory only, or by default a per-seat file in the user's
+    application-data directory; there, without token and file, the key stored for this app or PC
+    (paired or imported earlier) is loaded. Contexts are never shared between instances.
 
     Online, an unactivated key is activated for this app or PC automatically, and a key is
     renewed before it expires. Network failures never change the license.
@@ -102,6 +105,9 @@ class Entitlement:
             token = Path(file).read_text(encoding='ascii', errors='replace')
         if token is not None:
             self.import_token(token)
+        elif storage is AUTO and self._load_stored():
+            self._notify()
+            self.sync()
         else:
             self._notify()
 
@@ -132,6 +138,40 @@ class Entitlement:
                 os.replace(temporary, path)
         except OSError as error:
             self.last_sync_error = 'storage: ' + str(error)
+
+    def _load_stored(self):
+        """Without a key: load the key stored for this app or PC (paired or imported earlier), if any.
+
+        State files are named by the core from the company, the contract and the target, so a file
+        whose name the core gives again after restoring it belongs to this app or PC. With several,
+        a full-mode key wins, then the most recently verified one.
+        """
+        try:
+            paths = sorted(default_storage_directory().glob('entitlement-*.state'))
+        except OSError:
+            return False
+        best = None
+        for path in paths:
+            try:
+                state = path.read_bytes()
+                with NativeEntitlement(self._native.core) as probe:
+                    probe.restore_state(state)
+                    if probe.state_name() != path.name:
+                        continue
+                    raw = probe.status(self._now())
+            except (OSError, ValueError, RuntimeError):
+                continue
+            rank = (MODE[raw['mode']] == 'full', raw['verified_at'])
+            if best is None or rank > best[0]:
+                best = (rank, state)
+        if best is None:
+            return False
+        with self._lock:
+            try:
+                self._native.restore_state(best[1])
+            except (ValueError, RuntimeError):
+                return False
+        return True
 
     def import_token(self, token):
         """Import a key or key file content. Returns the outcome name; never raises on a bad key."""
@@ -247,9 +287,75 @@ class Entitlement:
             self._notify()
         return code
 
+    def pair(self, on_code=None, timeout=None, cancel=None):
+        """Get a key without one: the developer portal approves a code shown here (device authorization).
+
+        The SDK sends only this app's ID or this PC's hash and receives a code. on_code(info) is called
+        with 'user_code', 'verification_uri', 'verification_uri_complete' and 'expires_in' (seconds);
+        without it the code is printed. An owner or admin of the organization enters the code at
+        verification_uri and approves it; the key, already activated for this app or PC, then arrives
+        here, is stored and is found again by Entitlement() without a key.
+
+        Blocks until the code is approved, denied or expired (or timeout seconds, or cancel, a
+        threading.Event, is set). Returns 'approved', 'denied', 'expired' or 'cancelled'. Raises
+        RuntimeError without an endpoint, without a readable app ID or PC, or when the server cannot
+        be reached to start.
+        """
+        if not self._endpoint:
+            raise RuntimeError('Pairing needs the developer portal endpoint')
+        with self._lock:
+            request = self._native.activation_request()
+        if not request:
+            raise RuntimeError(REASON_MESSAGES['no_target'])
+        try:
+            device = self._post('/sdk/v1/pairing', None, request)
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(f"Pairing refused: {error.code} {error.read().decode('utf-8', 'replace')[:200]}") from None
+        except OSError as error:
+            raise RuntimeError(f'Pairing could not reach {self._endpoint}: {error}') from None
+        info = {name: device[name] for name in ('user_code', 'verification_uri', 'verification_uri_complete', 'expires_in')}
+        if on_code:
+            on_code(info)
+        else:
+            print(f"Fisica SDK: open {info['verification_uri']} and enter the code {info['user_code']} "
+                  f"(valid for {info['expires_in'] // 60} minutes).", file=sys.stderr, flush=True)
+        cancel = cancel or threading.Event()
+        interval = max(0.0, float(device.get('interval', 5)))
+        # A key approved just before the code expires can still be received for a short while.
+        limit = info['expires_in'] + 30 if timeout is None else min(timeout, info['expires_in'] + 30)
+        deadline = time.monotonic() + limit
+        while True:
+            if cancel.wait(min(interval, max(0.0, deadline - time.monotonic()))):
+                return 'cancelled'
+            try:
+                answer = self._post('/sdk/v1/pairing/token', None, {'device_code': device['device_code']})
+            except urllib.error.HTTPError as error:
+                try:
+                    code = json.loads(error.read() or b'{}').get('error')
+                except ValueError:
+                    code = None
+                if code == 'access_denied':
+                    return 'denied'
+                if code == 'expired_token':
+                    return 'expired'
+                if code == 'slow_down':
+                    interval += 5
+            except OSError as error:
+                self.last_sync_error = 'network: ' + str(error)  # keep polling until the code expires
+            else:
+                outcome = self.import_token(answer['token'])
+                if outcome != 'accepted':
+                    raise RuntimeError(f'The paired key was not accepted here ({outcome})')
+                return 'approved'
+            if time.monotonic() >= deadline:
+                return 'expired'
+
     def _post(self, path, token, body):
+        headers = {'Content-Type': 'application/json'}
+        if token:
+            headers['Authorization'] = 'Bearer ' + token
         request = urllib.request.Request(self._endpoint + path, data=body.encode() if isinstance(body, str) else json.dumps(body).encode(),
-                                         headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'}, method='POST')
+                                         headers=headers, method='POST')
         with urllib.request.urlopen(request, timeout=self._timeout) as response:
             data = response.read()
             return json.loads(data) if data else None

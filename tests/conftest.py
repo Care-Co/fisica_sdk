@@ -1,4 +1,5 @@
-"""Shared test license: an SDK key activated for this host's PC, signed with the TEST key.
+"""Shared test license: an SDK key activated for this host's PC, signed with the TEST key, and a
+temporary directory for stored keys.
 
 Raw and processed grids, full-rate frames and full report exports need full mode, so tests of
 those features use this key. It is signed at the real current time, so calls that read the
@@ -10,6 +11,14 @@ from fisica_sdk import NativeEntitlement
 from tools.entitlement_dev import issue_token
 
 DAY = 86400
+
+
+@pytest.fixture(autouse=True)
+def key_storage(tmp_path, monkeypatch):
+    """Stored keys live in a temporary directory: tests never read or write this user's keys."""
+    directory = tmp_path / 'fisica-keys'
+    monkeypatch.setattr('fisica_sdk.entitlement.default_storage_directory', lambda: directory)
+    return directory
 
 
 def host_target():

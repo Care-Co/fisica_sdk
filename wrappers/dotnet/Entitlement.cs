@@ -33,6 +33,13 @@ public sealed record EntitlementStatus(FisicaMode Mode, FisicaModeReason Reason,
 /// <summary>Result of one exchange with the server. Error is set for a failed exchange, which changes nothing.</summary>
 public sealed record EntitlementSync(bool Activated, bool Refreshed, string? Error);
 
+/// <summary>What to show while pairing: an owner or admin enters UserCode at VerificationUri
+/// (VerificationUriComplete already holds the code). The code is valid for ExpiresIn seconds.</summary>
+public sealed record PairingCode(string UserCode, string VerificationUri, string VerificationUriComplete, int ExpiresIn);
+
+/// <summary>How pairing ended. Approved: the key is loaded and stored.</summary>
+public enum PairingResult { Approved, Denied, Expired, Cancelled }
+
 internal sealed class EntitlementHandle : SafeHandleZeroOrMinusOneIsInvalid {
     internal EntitlementHandle() : base(true) { FisicaCore.Check(Native.fisica_core_entitlement_create(out var pointer)); SetHandle(pointer); }
     protected override bool ReleaseHandle() { Native.fisica_core_entitlement_destroy(handle); return true; }
@@ -59,7 +66,8 @@ public sealed class FisicaEntitlement : IDisposable {
         [FisicaModeReason.FullEnded]="The trial or contract of this SDK key has ended."+BasicMode,
     };
     internal static string? Explain(FisicaModeReason reason) => reasons.GetValueOrDefault(reason);
-    const string Activate="/sdk/v1/entitlement/activate", Refresh="/sdk/v1/entitlement/refresh";
+    const string Activate="/sdk/v1/entitlement/activate", Refresh="/sdk/v1/entitlement/refresh",
+        Pairing="/sdk/v1/pairing", PairingToken="/sdk/v1/pairing/token";
     static readonly HttpClient http=new() { Timeout=TimeSpan.FromSeconds(5) };
     readonly EntitlementHandle handle=new(); readonly object gate=new(); readonly Func<ulong> clock; readonly FisicaCore owner;
     readonly string? endpoint, storage; readonly bool online;
@@ -77,12 +85,42 @@ public sealed class FisicaEntitlement : IDisposable {
     /// <param name="clock">Wall-clock Unix seconds; the system clock by default.</param>
     /// <param name="endpoint">Developer portal base URL for activation and renewal. Without it no network is used.</param>
     /// <param name="storage">Directory for the stored key, AutoStorage for the default location, or null for memory only.
-    /// SDK use is not tracked: only the signed key and the latest time seen are stored.</param>
+    /// The key stored there for this app or PC (paired or imported earlier) is loaded at once, so an app needs no key
+    /// of its own after pairing. SDK use is not tracked: only the signed key and the latest time seen are stored.</param>
     /// <param name="online">False keeps a configured endpoint unused.</param>
     public FisicaEntitlement(FisicaCore core,Func<ulong>? clock=null,string? endpoint=null,string? storage=AutoStorage,bool online=true) {
         owner=core; this.clock=clock ?? (() => (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         this.endpoint=endpoint?.TrimEnd('/'); this.online=online;
         this.storage=storage==AutoStorage ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Fisica","sdk") : storage;
+        if (LoadStored()) { Notify(); Sync(); }
+    }
+    /// <summary>The developer portal, for pairing when no endpoint is given.</summary>
+    public const string DefaultEndpoint="https://developer.fisicahealthcare.com";
+
+    // The key stored for this app or PC, if any. The core names a state file from the company, the contract and the
+    // target, so a file it names again after restoring it belongs here. With several, a full-mode key wins, then the
+    // most recently verified one.
+    bool LoadStored() {
+        if (storage==null) return false;
+        string[] files;
+        try { files=Directory.Exists(storage) ? Directory.GetFiles(storage,"entitlement-*.state") : []; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return false; }
+        (bool Full,ulong Verified)? best=null; byte[]? chosen=null;
+        foreach (var file in files.Order(StringComparer.Ordinal)) {
+            try {
+                var state=File.ReadAllBytes(file);
+                using var probe=new EntitlementHandle();
+                if (Native.fisica_core_entitlement_restore(probe,state,(uint)state.Length)!=0) continue;
+                var name=new byte[256];
+                if (Native.fisica_core_entitlement_text(probe,(uint)FisicaEntitlementText.StateName,name,(uint)name.Length,out uint length)!=0
+                    || Encoding.UTF8.GetString(name,0,(int)length)!=Path.GetFileName(file)) continue;
+                var values=new ulong[(int)FisicaLimit.StatusFields];
+                if (Native.fisica_core_entitlement_status(probe,clock(),values,(uint)values.Length)!=0) continue;
+                var rank=((FisicaMode)values[0]==FisicaMode.Full,values[8]);
+                if (best==null || rank.CompareTo(best.Value)>0) { best=rank; chosen=state; }
+            } catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
+        lock(gate) return chosen!=null && Native.fisica_core_entitlement_restore(handle,chosen,(uint)chosen.Length)==0;
     }
     public void Dispose() { lock(gate) handle.Dispose(); }
     void Open() { if(handle.IsClosed) throw new ObjectDisposedException(nameof(FisicaEntitlement)); }
@@ -194,14 +232,63 @@ public sealed class FisicaEntitlement : IDisposable {
         try { Notify(); Sync(); } catch (Exception error) { LastSyncError="check: "+error.Message; }
     }
 
-    async Task<byte[]> Post(string path,string token,byte[] body) {
+    async Task<(int Status,byte[] Data)> Send(string path,string? token,byte[] body) {
         using var request=new HttpRequestMessage(HttpMethod.Post,endpoint+path) { Content=new ByteArrayContent(body) };
-        request.Headers.Authorization=new("Bearer",token); request.Content.Headers.ContentType=new("application/json");
+        if (token!=null) request.Headers.Authorization=new("Bearer",token);
+        request.Content.Headers.ContentType=new("application/json");
         using var response=await http.SendAsync(request).ConfigureAwait(false);
-        var data=await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+        return ((int)response.StatusCode,await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false));
+    }
+    async Task<byte[]> Post(string path,string? token,byte[] body) {
+        var (status,data)=await Send(path,token,body).ConfigureAwait(false);
         // A refused activation (key in use elsewhere, released, trial already used) is reported with the server's answer.
-        if (!response.IsSuccessStatusCode) { var text=Encoding.UTF8.GetString(data); throw new HttpRequestException($"{(int)response.StatusCode} {text[..Math.Min(200,text.Length)]}"); }
+        if (status is < 200 or > 299) { var text=Encoding.UTF8.GetString(data); throw new HttpRequestException($"{status} {text[..Math.Min(200,text.Length)]}"); }
         return data;
+    }
+
+    /// <summary>Get a key without one: the developer portal approves a code shown here (device authorization).
+    /// Only this app's ID or this PC's hash is sent. onCode receives the code to show; an owner or admin of the
+    /// organization enters it at VerificationUri and approves it with a new or unused key. The key, already activated
+    /// for this app or PC, then arrives, is loaded and stored, and later instances load it by themselves.
+    /// Waits until the code is approved, denied or expires, or cancel is set. Throws InvalidOperationException without
+    /// an endpoint or a readable app ID or PC, and HttpRequestException when pairing cannot start.</summary>
+    public async Task<PairingResult> PairAsync(Action<PairingCode> onCode,CancellationToken cancel=default) {
+        if (endpoint==null) throw new InvalidOperationException("Pairing needs the developer portal endpoint");
+        string request;
+        lock(gate) { Open(); request=OptionalText(FisicaEntitlementText.ActivationRequest) ?? throw new InvalidOperationException(Explain(FisicaModeReason.NoTarget)); }
+        using var device=JsonDocument.Parse(await Post(Pairing,null,Encoding.UTF8.GetBytes(request)).ConfigureAwait(false));
+        var root=device.RootElement;
+        var code=new PairingCode(root.GetProperty("user_code").GetString()!,root.GetProperty("verification_uri").GetString()!,
+            root.GetProperty("verification_uri_complete").GetString()!,root.GetProperty("expires_in").GetInt32());
+        onCode(code);
+        var body=JsonSerializer.SerializeToUtf8Bytes(new Dictionary<string,string> { ["device_code"]=root.GetProperty("device_code").GetString()! });
+        double interval=root.TryGetProperty("interval",out var given) ? Math.Max(0,given.GetDouble()) : 5;
+        // A key approved just before the code expires can still be received for a short while.
+        var deadline=DateTimeOffset.UtcNow.AddSeconds(code.ExpiresIn+30);
+        while (true) {
+            var wait=TimeSpan.FromSeconds(Math.Max(0,Math.Min(interval,(deadline-DateTimeOffset.UtcNow).TotalSeconds)));
+            try { await Task.Delay(wait,cancel).ConfigureAwait(false); } catch (OperationCanceledException) { return PairingResult.Cancelled; }
+            (int Status,byte[] Data) answer;
+            try { answer=await Send(PairingToken,null,body).ConfigureAwait(false); }
+            catch (Exception failure) when (failure is HttpRequestException or TaskCanceledException) {
+                LastSyncError="network: "+failure.Message; answer=(0,[]);  // keep polling until the code expires
+            }
+            if (answer.Status==200) {
+                using var reply=JsonDocument.Parse(answer.Data);
+                var outcome=ImportToken(reply.RootElement.GetProperty("token").GetString()!);
+                if (outcome!=FisicaEntitlementOutcome.Accepted) throw new InvalidDataException($"The paired key was not accepted here ({outcome})");
+                return PairingResult.Approved;
+            }
+            if (answer.Status==400) {
+                string? error=null;
+                try { using var reply=JsonDocument.Parse(answer.Data); error=reply.RootElement.GetProperty("error").GetString(); }
+                catch (Exception failure) when (failure is JsonException or KeyNotFoundException or InvalidOperationException) { }
+                if (error=="access_denied") return PairingResult.Denied;
+                if (error=="expired_token") return PairingResult.Expired;
+                if (error=="slow_down") interval+=5;
+            }
+            if (DateTimeOffset.UtcNow>=deadline) return PairingResult.Expired;
+        }
     }
     // What the server should do now: activate an unactivated key, renew one that is due, or nothing.
     (string? Path,string Token,byte[] Body) Due(bool force) {
