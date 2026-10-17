@@ -12,9 +12,9 @@ concurrency:
   cancel-in-progress: true
 jobs:
   linux:
-    # Everything that does not need macOS or Windows runs here. Self-hosted Linux runner (on the
-    # company Intel Mac): every step runs in a fresh Ubuntu container, so nothing is installed on the
-    # runner itself; downloaded toolchains stay in the fisica-sdk-ci-cache Docker volume.
+    # Everything that does not need macOS or Windows runs here. Self-hosted Linux X64 runners
+    # (mac-host-runner1-3, colima VMs): every step runs in a fresh Ubuntu container, so nothing is
+    # installed on the runner itself; downloaded toolchains stay in the fisica-sdk-ci-cache Docker volume.
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, carenco]
     container:
