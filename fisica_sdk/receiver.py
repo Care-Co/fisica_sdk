@@ -11,12 +11,12 @@ from .serial_handler import SerialHandler
 from .utils import log
 from .device import scan
 from .native import NativeSession, get_core
-from .parser import parse_frame_from_chunk
+from .parser import frame_from_event
 from .errors import FisicaFirmwareWarning, FisicaTransportError, FisicaCommandError, FisicaArgumentError
 
 
 class Receiver:
-    def __init__(self, device, callback, transport=None, record_callback=None):
+    def __init__(self, device, callback, transport=None, record_callback=None, license=None):
         self._notice_recovery = True
         self.loop_alive = self.heartbeat = False
         self.check_thread = self._thread = self._handler = self._uart = None
@@ -43,6 +43,10 @@ class Receiver:
         self._next_reconnect = 0
         self._worker_error = None
         self._send_error = None
+        # Callable returning the SDK's Entitlement (or None: basic mode); applied to the session.
+        self._license = license or (lambda: None)
+        self._license_applied = 0.0
+        self.full_rate = False
 
     def _request(self, operation, call):
         with self._api_lock:
@@ -77,6 +81,8 @@ class Receiver:
         value = -1 if duration is None or duration == 0 else int(duration * 1000)
         self._refresh_battery()  # so this measurement's report carries a current reading
         self._stop_event.clear()
+        with self._condition:
+            self.apply_license()
         self._request(2, lambda: self._session.action(2, value))
         log.info('Measurement start acknowledged.')
 
@@ -121,12 +127,27 @@ class Receiver:
                     self._notifications.put(('error', FisicaCommandError(event)) if event['status'] else
                                             ('stop', None) if operation == 3 else ('started', None))
             elif kind == 4:
-                frame = parse_frame_from_chunk(event['payload'].hex())
+                frame = frame_from_event(event)
                 if self._record_callback:
                     self._record_callback(frame)
                 self._notifications.put(('frame', frame))
             elif kind == 6:
                 self._reconnect = True
+
+    def apply_license(self):
+        """Copy the current license into the session (call with the condition held)."""
+        entitlement = self._license()
+        if entitlement is None:
+            self._session.license(None)
+        else:
+            entitlement.license_session(self._session)
+        self.full_rate = bool(entitlement and entitlement.full_rate())
+        self._license_applied = time.monotonic()
+
+    def analyze(self):
+        """Weight and foot size from every packet of the last measurement, in any mode."""
+        with self._condition:
+            return self._session.analyze()
 
     def _pump_loop(self):
         self.heartbeat = True
@@ -134,6 +155,8 @@ class Receiver:
             while not self._shutdown.wait(0.01):
                 with self._condition:
                     self._session.tick()
+                    if time.monotonic() - self._license_applied > 30:
+                        self.apply_license()  # picks up renewals, activation and the end of full mode
                     if self._handler:
                         self.loop_alive = bool(self._handler._listening and self._handler.listen_thread and
                                                self._handler.listen_thread.is_alive())
@@ -215,7 +238,6 @@ class Receiver:
                 raise FisicaTransportError('Bluetooth connection failed')
         else:
             raise ValueError('Device type must be Serial or Bluetooth')
-        self._handler.session_input = True
         self._handler.start_listening()
         if not self._handler._listening:
             raise FisicaTransportError('Cannot start device receive loop')

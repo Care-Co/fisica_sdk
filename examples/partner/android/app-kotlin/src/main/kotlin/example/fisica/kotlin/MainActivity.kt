@@ -16,7 +16,16 @@ import com.carenco.fisica.*
 import java.util.concurrent.Executor
 
 class MainActivity : Activity() {
+    companion object {
+        /** Paste an SDK key from the developer portal for full mode; empty runs in basic mode. */
+        const val SDK_KEY = ""
+        /** Activates the key for this app and renews it (needs the INTERNET permission). */
+        const val PORTAL = "https://developer.fisicahealthcare.com"
+    }
     private lateinit var status: TextView
+    private lateinit var licenseText: TextView
+    private lateinit var core: FisicaCore
+    private lateinit var license: FisicaEntitlement
     private lateinit var devices: LinearLayout
     private lateinit var ble: BleTransport
     private val main = Handler(Looper.getMainLooper())
@@ -30,13 +39,20 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         val layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         status = TextView(this).apply { text = "Grant Bluetooth access, scan, then choose a Scale" }
+        licenseText = TextView(this)
         devices = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        layout.addView(status)
+        layout.addView(licenseText); layout.addView(status)
         layout.addView(Button(this).apply { text = "Scan BLE"; setOnClickListener {
             if (permissions.any { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }) requestPermissions(permissions, 1)
             else scan()
         } })
         layout.addView(devices); setContentView(layout)
+        core = FisicaCore()
+        // Basic mode without a key: measurement, weight and foot size; one frame a second, no raw data.
+        license = FisicaEntitlement(core, PORTAL, filesDir)
+        license.onStatus = { runOnUiThread { showLicense() } }
+        if (SDK_KEY.isNotEmpty()) license.importToken(SDK_KEY)
+        showLicense()
         ble = BleTransport(this, getSystemService(BluetoothManager::class.java)?.adapter)
         ble.onError = { status.text = it.message }
         ble.onDevice = { result ->
@@ -45,6 +61,10 @@ class MainActivity : Activity() {
                 devices.addView(Button(this).apply { text = "${device.name}: ${device.address}"; setOnClickListener { measure(device) } })
             }
         }
+    }
+    private fun showLicense() {
+        val current = license.status()
+        licenseText.text = "License: $current" + (current.activationCode?.let { "\nActivation code: $it" } ?: "")
     }
     private fun scan() {
         seen.clear(); devices.removeAllViews(); ble.scan(); status.text = "Scanning for 5 seconds"
@@ -58,7 +78,7 @@ class MainActivity : Activity() {
     private fun measure(device: BluetoothDevice) {
         if (client != null) return
         ble.stopScan(); ble.select(device)
-        val current = FisicaClient(FisicaCore(), ble, callbacks = Executor { runOnUiThread(it) })
+        val current = FisicaClient(core, ble, license, Executor { runOnUiThread(it) })
         client = current
         fun failed(error: Throwable) { status.text = error.message; current.close { _, _ -> client = null } }
         current.onError = { failed(it) }
@@ -71,7 +91,8 @@ class MainActivity : Activity() {
                     try {
                         if (stopError != null) throw stopError
                         val report = current.report()
-                        status.text = report?.let { "Weight: ${it.weight} kg; frames: ${it.frameCount}" } ?: "No stable result"
+                        status.text = report?.let { "Weight: ${it.weight} kg; frames: ${it.frameCount} (${license.status().modeName} mode)" }
+                            ?: "No stable result"
                     } catch (failure: Throwable) { status.text = failure.message }
                     finally { current.close { _, _ -> client = null } }
                 } }, 5000)
@@ -80,6 +101,7 @@ class MainActivity : Activity() {
     }
     override fun onDestroy() {
         main.removeCallbacksAndMessages(null); ble.stopScan(); client?.close { _, _ -> }
+        license.close()
         super.onDestroy()
     }
 }

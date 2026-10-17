@@ -5,5 +5,5 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
   </PropertyGroup>
-  <ItemGroup><PackageReference Include="CareCo.Fisica.Scale" Version="0.2.0" /></ItemGroup>
+  <ItemGroup><PackageReference Include="CareCo.Fisica.Scale" Version="0.3.0" /></ItemGroup>
 </Project>

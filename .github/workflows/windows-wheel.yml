@@ -108,8 +108,8 @@ jobs:
           $wheel = Get-ChildItem artifacts -Recurse -Filter '*-win_amd64.whl'
           if ($wheel.Count -ne 1) { throw 'Expected exactly one Windows x64 wheel' }
           python tools/verify_wheel.py $wheel.FullName
-      - name: Verify visualization and GUI extras
+      - name: Verify the visualization extra
         if: matrix.python == '3.11'
         run: |
           $wheel = Get-ChildItem artifacts -Recurse -Filter '*-win_amd64.whl'
-          python tools/verify_wheel.py $wheel.FullName --extras gui
+          python tools/verify_wheel.py $wheel.FullName --extras visualization

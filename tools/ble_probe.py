@@ -34,7 +34,19 @@ STATE = {member.value: member.name for member in codes.FisicaSessionState}
 STATUS = {member.value: member.name for member in codes.FisicaStatus}
 
 
-async def drive(write, incoming, seconds, clock=time.monotonic):
+def test_license():
+    """A full-mode key for this PC signed with the TEST key, so every frame is counted.
+
+    Basic mode hands out one frame a second. This development tool needs a core that trusts
+    test keys (any build without --release keys)."""
+    from fisica_sdk import NativeEntitlement
+    from tools.entitlement_dev import host_pc_vectors
+    context = NativeEntitlement()
+    context.import_token(host_pc_vectors(int(time.time()))['full'])
+    return context
+
+
+async def drive(write, incoming, seconds, clock=time.monotonic, license=None):
     """Run connect -> start -> wait -> stop -> release through the core and log every step."""
     log, frames = [], []
     origin = clock()
@@ -70,6 +82,7 @@ async def drive(write, incoming, seconds, clock=time.monotonic):
         return results.pop(operation, None)
 
     with NativeSession() as session:
+        session.license(license, now_ms=now())
         session.action(codes.FisicaSessionAction.CONNECTED, 1, now_ms=now())  # 1 = BLE profile
         await pump(session)
         probe = await until(session, codes.FisicaSessionOperation.PROBE, 3)
@@ -177,7 +190,7 @@ async def probe(args):
         await client.start_notify(profile['notify'], lambda _, data: incoming.put_nowait(bytes(data)))
         write = lambda data: client.write_gatt_char(profile['write'], data)
         if args.sequence in ('continuous', 'both'):
-            report['continuous'] = await drive(write, incoming, args.seconds)
+            report['continuous'] = await drive(write, incoming, args.seconds, license=test_license())
         if args.sequence in ('single', 'both'):
             while not incoming.empty():
                 incoming.get_nowait()

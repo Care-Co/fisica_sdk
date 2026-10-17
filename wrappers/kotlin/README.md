@@ -14,13 +14,16 @@ marshaler source is public; private algorithm and state sources are absent.
 
 ```kotlin
 val core = FisicaCore()
+// SDK key from the developer portal; without one the SDK runs in basic mode.
+val license = FisicaEntitlement(core, "https://developer.fisicahealthcare.com", context.filesDir)
+license.importToken(sdkKey)                       // activated for this app online, then stored
 val ble = BleTransport(context, bluetoothManager.adapter)
 ble.onDevice = { result ->
     if (result.device.name?.contains(FisicaBleProfile.NAME_CONTAINS) == true) {
         ble.stopScan()
         ble.select(result.device)                 // default profile; pass your own if needed
-        val client = FisicaClient(core, ble, callbacks = ContextCompat.getMainExecutor(context))
-        client.onFrame = { frame -> /* frame.weight, frame.display (29x29), frame.raw (29x22) */ }
+        val client = FisicaClient(core, ble, license, ContextCompat.getMainExecutor(context))
+        client.onFrame = { frame -> /* frame.weight, frame.display (29x29); full mode: frame.raw (29x22), frame.packet */ }
         client.connect(FisicaLink.BLE) { _, error ->
             if (error == null) client.start(5000) { _, _ -> }
         }
@@ -39,7 +42,9 @@ ble.scan()
   use. A transport that never becomes ready fails after `timeoutMs` (default 15 s).
 - `close` releases resources even when the Scale does not confirm. On `onLinkLost`,
   reopen the same Scale with `connect`.
-- `report()` analyzes the collected packets in the core and returns unrounded values.
+- `report()` returns unrounded weight and foot size from the core. A measurement at full rate
+  analyzes the collected frames; otherwise the core analyzes every packet it received since
+  the start, so basic mode gives the same result quality.
 - `start` clears the frames of the previous measurement once the core accepts it, so
   measuring several people in a row needs no `clearFrames()`. A reconnect keeps them.
   Only the latest `maxFrames` (at most `FisicaLimit.ANALYSIS_FRAMES`, the most one
@@ -56,23 +61,45 @@ before discovery, splits writes by the negotiated MTU, falls back to 23 when the
 request is refused and resets on reconnect (the splitting rule is unit-tested on a JVM). `FisicaBleProfile.SCALE` comes from the
 existing Python SDK and is not yet confirmed on production firmware
 (`FisicaBleProfile.VERIFIED` is false). Grant BLUETOOTH_SCAN/CONNECT on Android 12+ and
-the legacy location permissions where required. Online entitlement refresh needs the
-INTERNET permission in the app; the AAR does not declare it.
+the legacy location permissions where required.
 
-Entitlement: `FisicaEntitlement` imports a server-signed token or file and reports
-three separate values (base license, confirmation freshness, contract state) plus
-warning bits through `onWarning`. Pass it to `FisicaClient` so warnings appear when features are used.
-It never blocks a feature. Pass `storage` (for example `context.filesDir`) to keep the
-signed token across launches for offline verification. With `endpoint` it refreshes the
-information in the background (`sync()`, or `syncNow()` on a worker thread); without an
-endpoint no network is used. A failed exchange only sets `lastSyncError`. The SDK does
-not track its own use; see `doc/entitlement.md`.
+License: an SDK key from the developer portal is a seat that is activated for one app
+(on Android the package name, which the core reads itself; on a desktop JVM the PC).
+The core decides the mode and limits what it hands out; the wrapper cannot widen it.
 
-Keep `com.carenco.fisica.Bridge` and the `FisicaException` constructor in R8 (consumer
-rules are included). The low-level `FisicaSession` remains available.
+- Full mode: a key activated for this app, within its key expiry and its trial or
+  contract. Every frame, plus raw data (`Measurement.raw`, `Measurement.packet`,
+  `FisicaCore.decode`) when the key's features include it.
+- Basic mode: everything else (no key, not activated, another app, expired, trial or
+  contract ended, released, clock set back). Connection, measurement, settings, battery,
+  weight and foot size work; frames arrive at most once a second without raw data, and
+  `FisicaCore.decode` throws `FisicaLicenseException` (`FEATURE_NOT_LICENSED`).
 
-Verified: shared vectors, client, entitlement (including online refresh and storage
-against the mock server) and MTU write splitting on a JVM through JNI;
-`BleTransport` compiles against android-35. Not verified: any Android device, real
-BLE, MTU negotiation with a Scale, and BLE continuous measurement, which the protocol
-document describes as USB-only. Android USB and Wi-Fi adapters are not supplied.
+`FisicaEntitlement(core, endpoint, storage)` holds the key. `importToken`/`importFile`
+take a key or a key file (activation or renewal file from the portal). With `endpoint`, a
+key that is not activated yet is activated for this app in the background and a key is
+renewed before it expires (`sync()`, or `syncNow()` on a worker thread); the server only
+receives the core's activation request and empty renewals. Without an endpoint no network
+is used: show `activationCode()` (FAC1), enter it in the portal and import the file it
+gives. `status()` gives the mode, the reason for basic mode, open features, the key and
+its dates; `onStatus` and `onWarning` report changes. `release()` forgets the key and
+returns the FRC1 code that frees the seat in the portal. Pass `storage` (for example
+`context.filesDir`) to keep the activated key across launches; it wins over the original
+key file the app imports again. Network and storage failures never change the license and
+only set `lastSyncError`. Online use needs the INTERNET permission in the app; the AAR
+does not declare it. The SDK does not track its own use; see `doc/entitlement.md`.
+
+Pass the license to `FisicaClient`: it applies it to the measurement session before every
+start, whenever it changes and every 30 seconds (`licenseFeatures`). With the low-level
+`FisicaSession`, call `license(entitlement, nowMs)` yourself and read frames with
+`Measurement.fromEvent`; `analyze()` covers every packet since the start.
+
+Keep `com.carenco.fisica.Bridge` and the `FisicaException`/`FisicaLicenseException`
+constructors in R8 (consumer rules are included).
+
+Verified: shared vectors, client, license (modes, gated decoding, frames by mode, release
+codes, storage, online activation and renewal against the mock portal) and MTU write
+splitting on a JVM through JNI; `BleTransport` compiles against android-35. Not verified:
+any Android device (including the package-name target), real BLE, MTU negotiation with a
+Scale, and BLE continuous measurement, which the protocol document describes as USB-only.
+Android USB and Wi-Fi adapters are not supplied.

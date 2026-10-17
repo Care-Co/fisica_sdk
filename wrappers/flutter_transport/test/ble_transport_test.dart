@@ -271,8 +271,10 @@ void main() {
       expect((await client.start()).state, FisicaSessionState.measuring);
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect((await client.stop()).state, FisicaSessionState.idle);
+      // No SDK key: basic mode hands out one frame for the 12 packets that
+      // arrive within a second, and the report analyzes all of them.
       expect(client.report()!.weight, 70.5);
-      expect(client.frames.length, 12);
+      expect(client.frames.length, 1);
     } finally {
       await client.close();
     }

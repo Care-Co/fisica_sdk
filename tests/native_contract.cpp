@@ -6,25 +6,36 @@
 #include <cstring>
 
 int main() {
-    assert((fisica_core_abi_version() >> 16) == 1);
+    assert((fisica_core_abi_version() >> 16) == 2);
     std::array<uint8_t,645> packet{};
     packet[638]=packet[643]=0xf0; packet[639]=packet[644]=0x0f;
     packet[641]=2; packet[642]=193;
     std::array<double,639> raw{}; raw.fill(42);
     std::array<double,841> display{};
     std::array<double,2> metrics{};
-    assert(fisica_core_decode_packet(packet.data(),645,raw.data(),637,display.data(),841,metrics.data(),2)==FISICA_BUFFER_TOO_SMALL);
+    assert(fisica_core_decode_packet(nullptr,0,packet.data(),645,raw.data(),637,display.data(),841,metrics.data(),2)==FISICA_BUFFER_TOO_SMALL);
     for (auto value:raw) assert(value==42);
-    assert(fisica_core_decode_packet(packet.data(),645,raw.data(),638,display.data(),841,metrics.data(),2)==FISICA_OK);
-    assert(raw[638]==42 && metrics[0]==70.5);
-    assert(fisica_core_decode_packet(nullptr,645,raw.data(),638,display.data(),841,metrics.data(),2)==FISICA_INVALID_ARGUMENT);
+    // Raw and processed grids need full mode: without a license nothing is written.
+    assert(fisica_core_decode_packet(nullptr,0,packet.data(),645,raw.data(),638,display.data(),841,metrics.data(),2)==FISICA_FEATURE_NOT_LICENSED);
+    for (auto value:raw) assert(value==42);
+    FisicaEntitlement *basic=nullptr;
+    assert(fisica_core_entitlement_create(&basic)==FISICA_OK);
+    assert(fisica_core_decode_packet(basic,1800000000,packet.data(),645,raw.data(),638,display.data(),841,metrics.data(),2)==FISICA_FEATURE_NOT_LICENSED);
+    assert(fisica_core_display_grid(basic,1800000000,raw.data(),7,display.data(),841)==FISICA_FEATURE_NOT_LICENSED);
+    assert(fisica_core_preprocess(basic,1800000000,raw.data(),29,22,display.data(),841)==FISICA_FEATURE_NOT_LICENSED);
+    fisica_core_entitlement_destroy(basic);
+    assert(std::strstr(fisica_core_error_message(FISICA_FEATURE_NOT_LICENSED),"full mode"));
+    assert(fisica_core_decode_packet(nullptr,0,nullptr,645,raw.data(),638,display.data(),841,metrics.data(),2)==FISICA_INVALID_ARGUMENT);
     uint32_t consumed=0,kind=0,length=0;
     std::array<uint8_t,645> result{};
     assert(fisica_core_next_packet(packet.data(),645,&consumed,&kind,result.data(),644,&length)==FISICA_BUFFER_TOO_SMALL);
     assert(consumed==0 && length==645);
     assert(fisica_core_next_packet(packet.data(),645,&consumed,&kind,result.data(),645,&length)==FISICA_OK);
     assert(consumed==645 && kind==1 && std::memcmp(packet.data(),result.data(),645)==0);
-    assert(fisica_core_preprocess(raw.data(),UINT32_MAX,UINT32_MAX,display.data(),841)==FISICA_INVALID_ARGUMENT);
+    assert(fisica_core_preprocess(nullptr,0,raw.data(),UINT32_MAX,UINT32_MAX,display.data(),841)==FISICA_INVALID_ARGUMENT);
+    // Weight and foot size need no license.
+    double size[5];
+    assert(fisica_core_analyze_packets(packet.data(),1,size,5)==FISICA_NO_RESULT || size[0]>=0);
     const double invalid[]={NAN,0};
     assert(fisica_core_cop(invalid,1,2,1,1,metrics.data(),2)==FISICA_INVALID_ARGUMENT);
     double analysis[5];

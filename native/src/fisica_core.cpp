@@ -1,4 +1,5 @@
 #include "fisica_core.h"
+#include "fisica_license.h"
 #include "fisica_release.h"
 
 #include <algorithm>
@@ -145,6 +146,18 @@ std::vector<uint8_t> variable(uint8_t header, uint8_t type, const uint8_t *data,
 }
 } // namespace
 
+namespace fisica {
+static_assert(packet_size==::packet_size && raw_cells==cells_raw && display_cells==cells_display, "shared packet layout");
+void decode_measurement(const uint8_t *packet, double *raw, double *display, double *metrics) {
+    for (uint32_t i=0;i<cells_raw;++i) raw[i]=packet[i+1];
+    std::array<double,cells_raw> processed{};
+    preprocess(raw,rows_raw,cols_raw,processed.data());
+    display_grid(processed.data(),7,display);
+    metrics[0]=((uint16_t(packet[641])<<8)|packet[642])/10.0;
+    metrics[1]=99.0; // Legacy placeholder; no new firmware assumption.
+}
+}
+
 extern "C" {
 const char *fisica_core_version(void) { return FISICA_CORE_VERSION; }
 uint32_t fisica_core_abi_version(void) { return (FISICA_ABI_MAJOR<<16)|FISICA_ABI_MINOR; }
@@ -163,34 +176,32 @@ const char *fisica_core_error_message(int32_t status) {
     case FISICA_DEVICE_REJECTED: return "Device rejected the command";
     case FISICA_CANCELLED: return "Operation was cancelled";
     case FISICA_TRANSPORT_LOST: return "Transport was lost during a command";
+    case FISICA_FEATURE_NOT_LICENSED: return "This feature needs full mode: an SDK key activated for this app or PC";
     default: return "Native core internal error";
     }
 }
-int32_t fisica_core_preprocess(const double *grid,uint32_t rows,uint32_t cols,double *output,uint32_t capacity) {
+int32_t fisica_core_preprocess(FisicaEntitlement *license,uint64_t now_s,const double *grid,uint32_t rows,uint32_t cols,
+    double *output,uint32_t capacity) {
     if (!output || !valid_grid(grid,rows,cols)) return FISICA_INVALID_ARGUMENT;
     if (uint64_t(rows)*cols>capacity) return FISICA_BUFFER_TOO_SMALL;
+    if (!fisica_license_raw(license,now_s)) return FISICA_FEATURE_NOT_LICENSED;
     return protect([&]() -> int32_t { preprocess(grid,rows,cols,output); return FISICA_OK; });
 }
-int32_t fisica_core_display_grid(const double *grid,uint32_t gap,double *output,uint32_t capacity) {
+int32_t fisica_core_display_grid(FisicaEntitlement *license,uint64_t now_s,const double *grid,uint32_t gap,
+    double *output,uint32_t capacity) {
     if (!output || gap>1024 || !valid_grid(grid,rows_raw,cols_raw)) return FISICA_INVALID_ARGUMENT;
     if (rows_raw*(cols_raw+gap)>capacity) return FISICA_BUFFER_TOO_SMALL;
+    if (!fisica_license_raw(license,now_s)) return FISICA_FEATURE_NOT_LICENSED;
     display_grid(grid,gap,output); return FISICA_OK;
 }
-int32_t fisica_core_decode_packet(const uint8_t *packet,uint32_t length,double *raw,uint32_t raw_capacity,
-    double *display,uint32_t display_capacity,double *metrics,uint32_t metrics_capacity) {
+int32_t fisica_core_decode_packet(FisicaEntitlement *license,uint64_t now_s,const uint8_t *packet,uint32_t length,
+    double *raw,uint32_t raw_capacity,double *display,uint32_t display_capacity,double *metrics,uint32_t metrics_capacity) {
     // Preserve the legacy decode-only contract; stream framing validates footers.
     if (!packet || length!=packet_size || !raw || !display || !metrics)
         return FISICA_INVALID_ARGUMENT;
     if (raw_capacity<cells_raw || display_capacity<cells_display || metrics_capacity<2) return FISICA_BUFFER_TOO_SMALL;
-    return protect([&]() -> int32_t {
-        for (uint32_t i=0;i<cells_raw;++i) raw[i]=packet[i+1];
-        std::array<double,cells_raw> processed{};
-        preprocess(raw,rows_raw,cols_raw,processed.data());
-        display_grid(processed.data(),7,display);
-        metrics[0]=((uint16_t(packet[641])<<8)|packet[642])/10.0;
-        metrics[1]=99.0; // Legacy placeholder; no new firmware assumption.
-        return FISICA_OK;
-    });
+    if (!fisica_license_raw(license,now_s)) return FISICA_FEATURE_NOT_LICENSED;
+    return protect([&]() -> int32_t { fisica::decode_measurement(packet,raw,display,metrics); return FISICA_OK; });
 }
 int32_t fisica_core_next_packet(const uint8_t *buffer,uint32_t length,uint32_t *consumed,uint32_t *kind,
     uint8_t *packet,uint32_t capacity,uint32_t *packet_length) {
@@ -255,9 +266,7 @@ int32_t fisica_core_analyze_packets(const uint8_t *packets,uint32_t count,double
         std::vector<double> matrices(uint64_t(count)*cells_display), weights(count);
         std::array<double,cells_raw> raw{}; std::array<double,2> metrics{};
         for (uint32_t i=0;i<count;++i) {
-            const auto status=fisica_core_decode_packet(packets+uint64_t(i)*packet_size,packet_size,raw.data(),cells_raw,
-                matrices.data()+uint64_t(i)*cells_display,cells_display,metrics.data(),2);
-            if (status) return status;
+            fisica::decode_measurement(packets+uint64_t(i)*packet_size,raw.data(),matrices.data()+uint64_t(i)*cells_display,metrics.data());
             weights[i]=metrics[0];
         }
         return fisica_core_analyze(matrices.data(),weights.data(),count,rows_raw,cols_display,result,capacity);

@@ -1,9 +1,10 @@
 # 다중 플랫폼·언어 SDK 지원
 
-2026-10-13 구현 기준: SDK/Python 2.4.0, core 1.4.0, ABI 1.4,
-Dart/Flutter core 0.5.0, Flutter transport 0.1.0, Swift/Kotlin/C# 각각 0.2.0. 펌웨어 변경 없음.
+2026-10-17 구현 기준: SDK/Python 3.0.0, core 2.0.0, C ABI 2.0(라이선스: 기본·전체 모드),
+Dart/Flutter core 0.6.0, Flutter transport 0.1.0, Swift/Kotlin/C# 각각 0.3.0. 펌웨어 변경 없음.
+아래 표의 테스트 수 등 일부 검증 기록은 2026-10-13 시점 값이다.
 코어 소스는 비공개이며 모든 플랫폼이 같은 C++17 코어를 C ABI로 사용한다.
-회사가 달라도 플랫폼·아키텍처·코어 버전이 같으면 바이너리가 같다([확인 정보](entitlement.md)).
+회사가 달라도 플랫폼·아키텍처·코어 버전이 같으면 바이너리가 같다([라이선스와 SDK 키](entitlement.md)).
 
 ## 지원 구성
 
@@ -20,9 +21,9 @@ Flutter 앱은 macOS 12.0, iOS 15.0 이상을 대상으로 한다. Xcode 27은 m
 때문이다. 따라서 Flutter 앱은 iOS 13/14 기기를 더 이상 지원하지 않는다. Swift package
 (`.macOS(.v11)`, `.iOS(.v13)`)는 Xcode가 지원 범위로 올려 빌드하므로 Xcode 27에서도 그대로 빌드되지만,
 Xcode 27로 빌드하는 iOS 앱 자체는 15.0 이상만 대상으로 할 수 있다.
-.NET은 .NET 8 자체의 OS 지원 조건도 충족해야 한다. Python GUI extra의 PyQt5/
-OpenCV 등 플랫폼별 바이너리 의존성은 별도 확인 대상이다. Windows ARM64 측정
-SDK wheel과 GUI extra의 설치 가능성을 같은 지원 수준으로 표시하지 않는다.
+.NET은 .NET 8 자체의 OS 지원 조건도 충족해야 한다. Python 시각화 extra의
+OpenCV·Pillow 등 플랫폼별 바이너리 의존성은 별도 확인 대상이다. Windows ARM64 측정
+SDK wheel과 시각화 extra의 설치 가능성을 같은 지원 수준으로 표시하지 않는다.
 모바일 USB, Wi-Fi, JS/Web, MCU 포팅은 이번 범위에 포함하지 않았다.
 
 ## 언어와 확장 방식

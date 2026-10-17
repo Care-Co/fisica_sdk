@@ -17,7 +17,14 @@ import kotlin.Unit;
 import java.util.HashSet;
 
 public class MainActivity extends Activity {
+    /** Paste an SDK key from the developer portal for full mode; empty runs in basic mode. */
+    private static final String SDK_KEY = "";
+    /** Activates the key for this app and renews it (needs the INTERNET permission). */
+    private static final String PORTAL = "https://developer.fisicahealthcare.com";
     private TextView status;
+    private TextView licenseText;
+    private FisicaCore core;
+    private FisicaEntitlement license;
     private LinearLayout devices;
     private BleTransport ble;
     private FisicaClient client;
@@ -32,6 +39,7 @@ public class MainActivity extends Activity {
         super.onCreate(saved);
         LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         status = new TextView(this); status.setText("Grant Bluetooth access, scan, then choose a Scale");
+        licenseText = new TextView(this);
         devices = new LinearLayout(this); devices.setOrientation(LinearLayout.VERTICAL);
         Button scan = new Button(this); scan.setText("Scan BLE"); scan.setOnClickListener(view -> {
             for (String permission : permissions()) {
@@ -39,7 +47,13 @@ public class MainActivity extends Activity {
             }
             scan();
         });
-        layout.addView(status); layout.addView(scan); layout.addView(devices); setContentView(layout);
+        layout.addView(licenseText); layout.addView(status); layout.addView(scan); layout.addView(devices); setContentView(layout);
+        core = new FisicaCore(null, message -> { System.err.println(message); return Unit.INSTANCE; });
+        // Basic mode without a key: measurement, weight and foot size; one frame a second, no raw data.
+        license = new FisicaEntitlement(core, PORTAL, getFilesDir());
+        license.setOnStatus(current -> { runOnUiThread(this::showLicense); return Unit.INSTANCE; });
+        if (!SDK_KEY.isEmpty()) license.importToken(SDK_KEY);
+        showLicense();
         BluetoothManager manager = getSystemService(BluetoothManager.class);
         ble = new BleTransport(this, manager == null ? null : manager.getAdapter());
         ble.setOnError(error -> { status.setText(error.getMessage()); return Unit.INSTANCE; });
@@ -52,6 +66,11 @@ public class MainActivity extends Activity {
             }
             return Unit.INSTANCE;
         });
+    }
+    private void showLicense() {
+        EntitlementStatus current = license.status();
+        String code = current.getActivationCode();
+        licenseText.setText("License: " + current + (code == null ? "" : "\nActivation code: " + code));
     }
     private void scan() {
         seen.clear(); devices.removeAllViews(); ble.scan(); status.setText("Scanning for 5 seconds");
@@ -70,8 +89,7 @@ public class MainActivity extends Activity {
     private void measure(BluetoothDevice device) {
         if (client != null) return;
         ble.stopScan(); ble.select(device);
-        FisicaClient current = new FisicaClient(new FisicaCore(null, message -> { System.err.println(message); return Unit.INSTANCE; }),
-            ble, null, runnable -> runOnUiThread(runnable));
+        FisicaClient current = new FisicaClient(core, ble, license, runnable -> runOnUiThread(runnable));
         client = current;
         current.setOnError(error -> { failed(error, current); return Unit.INSTANCE; });
         current.connect(FisicaLink.BLE, 15000, (event, error) -> {
@@ -84,7 +102,8 @@ public class MainActivity extends Activity {
                         if (stopError != null) { status.setText(stopError.getMessage()); }
                         else {
                             SessionReport report = current.report();
-                            status.setText(report == null ? "No stable result" : "Weight: " + report.getWeight() + " kg; frames: " + report.getFrameCount());
+                            status.setText(report == null ? "No stable result" : "Weight: " + report.getWeight() + " kg; frames: "
+                                + report.getFrameCount() + " (" + license.status().getModeName() + " mode)");
                         }
                     } finally { current.close((closed, closeError) -> { client = null; return Unit.INSTANCE; }); }
                     return Unit.INSTANCE;
@@ -97,6 +116,7 @@ public class MainActivity extends Activity {
     @Override public void onDestroy() {
         main.removeCallbacksAndMessages(null); ble.stopScan();
         if (client != null) client.close((event, error) -> Unit.INSTANCE);
+        license.close();
         super.onDestroy();
     }
 }

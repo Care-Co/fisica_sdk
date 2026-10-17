@@ -1,16 +1,43 @@
 using CareCo.Fisica;
-using System.Text.Json;
+using System.Net;
+using System.Net.Sockets;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 var core=new FisicaCore(args[0]);
+// Shared vectors plus keys activated for this PC (flat key=value from tools/verify_bindings.py).
+var values=File.ReadAllLines(args[2]).Select(line => line.Split('=',2)).ToDictionary(p => p[0],p => p[1]);
+void Require(bool condition,string what) { if(!condition) throw new Exception("C# contract failed: "+what); }
+Exception? Catch(Action action) { try { action(); return null; } catch(Exception error) { return error; } }
+const ulong Day=86400;
+ulong now=ulong.Parse(values["now"]);
+byte[] packet=Convert.FromHexString(values["packet"]);
+var target=(Type: values["target_type"]=="pc" ? FisicaBindType.Pc : FisicaBindType.App, Value: values["target"]);
+// A license in memory at the vectors' time, holding one of the vectors' keys.
+FisicaEntitlement License(string? key=null,ulong? at=null) {
+    ulong time=at ?? now; var license=new FisicaEntitlement(core,() => time,storage: null);
+    if (key!=null) Require(license.ImportToken(values[key])==FisicaEntitlementOutcome.Accepted,key+" accepted");
+    return license;
+}
+// The developer portal's check of an activation (FAC1) or release (FRC1) code; returns its members.
+Dictionary<string,string> ReadCode(string code,string prefix) {
+    var parts=code.Split('.');
+    Require(parts.Length==3 && parts[0]==prefix,prefix+" code format");
+    var check=Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes((prefix=="FRC1" ? "fisica-release-code-v1|" : "")+prefix+"."+parts[1])));
+    Require(parts[2]==check[..8].ToLowerInvariant(),prefix+" check value");
+    var body=parts[1].Replace('-','+').Replace('_','/'); body=body.PadRight(body.Length+(4-body.Length%4)%4,'=');
+    return JsonSerializer.Deserialize<Dictionary<string,string>>(Convert.FromBase64String(body))!;
+}
+
 using var vectors=JsonDocument.Parse(File.ReadAllText(args[1]+"/sessions.json"));
 foreach(var vector in vectors.RootElement.EnumerateArray()) {
     using var session=new FisicaSession(core);
     foreach(var step in vector.GetProperty("steps").EnumerateArray()) {
-        long now=step.GetProperty("now_ms").GetInt64();
-        if(step.TryGetProperty("action",out var action)) session.Action(action.GetUInt32(),step.GetProperty("value").GetInt64(),now);
-        else if(step.TryGetProperty("feed_hex",out var feed)) session.Feed(Convert.FromHexString(feed.GetString()!),now);
-        else if(step.TryGetProperty("command",out var command)) session.Command(command.GetString()!,now);
-        else session.Tick(now);
+        long ms=step.GetProperty("now_ms").GetInt64();
+        if(step.TryGetProperty("action",out var action)) session.Action(action.GetUInt32(),step.GetProperty("value").GetInt64(),ms);
+        else if(step.TryGetProperty("feed_hex",out var feed)) session.Feed(Convert.FromHexString(feed.GetString()!),ms);
+        else if(step.TryGetProperty("command",out var command)) session.Command(command.GetString()!,ms);
+        else session.Tick(ms);
         var events=session.Drain(); var expected=step.GetProperty("events");
         if(events.Count!=expected.GetArrayLength()) throw new Exception("event count mismatch");
         for(int i=0;i<events.Count;i++) {
@@ -19,22 +46,122 @@ foreach(var vector in vectors.RootElement.EnumerateArray()) {
         }
     }
 }
-using var packets=JsonDocument.Parse(File.ReadAllText(args[1]+"/legacy-processing.json"));
-foreach(var v in packets.RootElement.EnumerateArray()) {
-    var m=core.Decode(Convert.FromHexString(v.GetProperty("packet_hex").GetString()!));
-    if(m.Weight!=v.GetProperty("weight").GetDouble()) throw new Exception("weight mismatch");
-    byte[] data=new byte[m.Display.Length*8];Buffer.BlockCopy(m.Display,0,data,0,data.Length);
-    if(Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant()!=v.GetProperty("display_sha256").GetString()) throw new Exception("display mismatch");
+Measurement reference;
+using (var full=License("full")) {
+    // Decoding a packet yourself returns raw data: it needs full mode.
+    using var packets=JsonDocument.Parse(File.ReadAllText(args[1]+"/legacy-processing.json"));
+    foreach(var v in packets.RootElement.EnumerateArray()) {
+        var m=core.Decode(Convert.FromHexString(v.GetProperty("packet_hex").GetString()!),full);
+        if(m.Weight!=v.GetProperty("weight").GetDouble()) throw new Exception("weight mismatch");
+        byte[] data=new byte[m.Display.Length*8];Buffer.BlockCopy(m.Display,0,data,0,data.Length);
+        if(Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant()!=v.GetProperty("display_sha256").GetString()) throw new Exception("display mismatch");
+    }
+    reference=core.Decode(packet,full);
+    Require(reference is { Weight: 70.5, Raw.Length: 638, Display.Length: 841, Packet.Length: 645 },"decode in full mode");
 }
+Require(Catch(() => core.Decode(packet)) is FisicaLicenseException { Code: (int)FisicaStatus.FeatureNotLicensed },"decode without a license");
+using (var basic=License("unbound")) Require(Catch(() => core.Decode(packet,basic)) is FisicaLicenseException,"decode in basic mode");
+using (var limited=License("limited")) Require(Catch(() => core.Decode(packet,limited)) is FisicaLicenseException,"decode without the raw data feature");
 var grid=new double[841];grid[4*29+3]=grid[4*29+20]=100;
 var analysis=core.Analyze(Enumerable.Range(0,12).SelectMany(_=>grid).ToArray(),Enumerable.Repeat(70.5,12).ToArray(),29,29);
 if(analysis==null || !analysis.SequenceEqual(new double[]{70.5,1,1,1,1})) throw new Exception("analysis mismatch");
 Console.WriteLine("C# shared session and processing vectors passed");
 
-// High-level client, transports and entitlement against the same core, without hardware.
-var values=File.ReadAllLines(args[2]).Select(line => line.Split('=',2)).ToDictionary(p => p[0],p => p[1]);
-byte[] packet=Convert.FromHexString(values["packet"]);
-void Require(bool condition,string what) { if(!condition) throw new Exception("C# client contract failed: "+what); }
+{
+    // License states, decided by the core from signed keys and this PC, which the core reads itself.
+    FisicaEntitlementWarning seen=0; var changes=new List<EntitlementStatus>();
+    using var license=License(); license.Warning+=(fresh,_) => seen|=fresh; license.Changed+=changes.Add;
+    var status=license.Status();
+    Require(status is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.NoKey, Features: 0, Contract: FisicaContract.Unverified, Company: "", Key: "", ActivationCode: null }
+        && status.Message!.Contains("Basic mode") && !status.IsFull,"no key is basic mode");
+    Require(status.TargetType==target.Type && status.Target==target.Value,"the core reads this PC");
+    Require(license.ActivationCode()==null && Catch(() => license.Release()) is FisicaException { Code: (int)FisicaStatus.InvalidState },"nothing to activate or release");
+    Require(license.ImportToken(values["tampered"])==FisicaEntitlementOutcome.RejectedSignature && license.Status() is { Reason: FisicaModeReason.NoKey, Company: "" }
+        && seen.HasFlag(FisicaEntitlementWarning.ImportRejected),"tampered key rejected");
+    Require(license.ImportToken(values["unknown_key"])==FisicaEntitlementOutcome.RejectedKey,"unknown signing key");
+    Require(license.ImportToken(values["legacy"])==FisicaEntitlementOutcome.Accepted
+        && license.Status() is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.LegacyToken, Contract: FisicaContract.Active, Company: "acme" },"a contract token is not an SDK key");
+    Require(license.ImportToken(values["unbound"])==FisicaEntitlementOutcome.Accepted,"unbound key");
+    status=license.Status();
+    Require(status is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.NotActivated, Features: 0, BindType: FisicaBindType.None, Key: "key_test_1",
+        Track: FisicaTrack.Trial, KeyEnvironment: FisicaKeyEnvironment.Test } && status.Warnings.HasFlag(FisicaEntitlementWarning.TestKey),"unactivated key is basic mode");
+    var code=ReadCode(status.ActivationCode!,"FAC1");
+    Require(code["k"]=="key_test_1" && code["t"]==values["target_type"] && code["b"]==target.Value && license.ActivationCode()==status.ActivationCode,"FAC1 code for this PC");
+    Require(Catch(() => license.Release()) is FisicaException { Code: (int)FisicaStatus.InvalidState },"an unactivated key cannot be released");
+    Require(license.ImportToken(values["unbound_older"])==FisicaEntitlementOutcome.IgnoredOlder,"older key file ignored");
+    Require(license.ImportToken(values["full"])==FisicaEntitlementOutcome.Accepted,"activated key");
+    status=license.Status();
+    Require(status is { Mode: FisicaMode.Full, Reason: FisicaModeReason.None, Company: "acme", ContractReference: "ctr-1", Key: "key_test_1",
+        Track: FisicaTrack.Trial, Contract: FisicaContract.Active, ActivationCode: null, Message: null }
+        && status.Features==(FisicaFeature.RawData|FisicaFeature.Export|FisicaFeature.Advanced|FisicaFeature.FullRate) && status.Has(FisicaFeature.RawData|FisicaFeature.FullRate)
+        && status.BindType==target.Type && status.Bind==target.Value && status.VerifiedAt==now && status.KeyUntil==now+90*Day && status.FullUntil==now+14*Day,"activated key is full mode with every feature");
+    Require(license.ImportToken(values["full_older"])==FisicaEntitlementOutcome.IgnoredOlder,"older activated key ignored");
+    Require(license.ImportToken(values["other_target"])==FisicaEntitlementOutcome.RejectedTarget
+        && license.Status() is { Mode: FisicaMode.Full, Key: "key_test_1", LastImport: FisicaEntitlementOutcome.RejectedTarget } && license.Status().Bind==target.Value
+        && license.Status().Warnings.HasFlag(FisicaEntitlementWarning.ImportRejected),"a key activated elsewhere never replaces this PC's key");
+    Require(changes.Count>=3 && changes[^1].IsFull && changes.Any(c => c.Reason==FisicaModeReason.NotActivated),"Changed events");
+    // Using the SDK leaves no trace: the stored state is the signed key and the latest time seen.
+    Require(Encoding.ASCII.GetString(license.ExportState())==$"FSS1\nC {values["full"]}\nT {now}\n","no usage state");
+    using var restored=License(); restored.RestoreState(license.ExportState());
+    Require(restored.Status() is { Mode: FisicaMode.Full, Key: "key_test_1" },"restore verifies the stored key");
+}
+{
+    // Every basic reason and limit comes from signed dates and features.
+    using (var limited=License("limited"))
+        Require(limited.Status() is { Mode: FisicaMode.Full } s && s.Features==(FisicaFeature.Export|FisicaFeature.FullRate) && !s.Has(FisicaFeature.RawData),"features narrow full mode");
+    using (var revoked=License("revoked",now+Day)) Require(revoked.Status() is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.Revoked, RevokedAt: > 0 },"released key");
+    using (var other=License()) {
+        Require(other.ImportToken(values["other_target"])==FisicaEntitlementOutcome.RejectedTarget && other.Status() is { Reason: FisicaModeReason.NoKey },"other PC's key is never loaded");
+    }
+    ulong time=now; using var license=new FisicaEntitlement(core,() => time,storage: null); license.ImportToken(values["full"]);
+    time=now+8*Day; Require(license.Status() is { Mode: FisicaMode.Full } ending && ending.Warnings.HasFlag(FisicaEntitlementWarning.FullEnding),"full mode ending soon");
+    time=now+15*Day; Require(license.Status() is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.FullEnded, Features: 0 },"trial ended");
+    time=now+15*Day-1800; Require(license.Status().Reason==FisicaModeReason.FullEnded,"a clock correction is not a rollback");
+    time=now+13*Day; Require(license.Status() is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.ClockRollback },"clock set back more than an hour");
+}
+{
+    // The stored key wins over an older original key file; release gives the portal code and forgets the key.
+    var directory=Directory.CreateTempSubdirectory("fisica-dotnet-").FullName;
+    try {
+        using (var original=new FisicaEntitlement(core,() => now,storage: directory)) {
+            var file=Path.Combine(directory,"activated.fse"); File.WriteAllText(file,values["full"]+"\n");
+            Require(original.ImportFile(file)==FisicaEntitlementOutcome.Accepted && original.Status().IsFull,"key file import");
+            File.Delete(file);
+        }
+        Require(Directory.GetFiles(directory).Length==1,"activated key stored");
+        using var reopened=new FisicaEntitlement(core,() => now,storage: directory);
+        Require(reopened.ImportToken(values["full_older"])==FisicaEntitlementOutcome.Accepted && reopened.Status() is { Mode: FisicaMode.Full, VerifiedAt: var at } && at==now,"stored key wins");
+        var released=ReadCode(reopened.Release(),"FRC1");
+        Require(released["k"]=="key_test_1" && released["t"]==values["target_type"] && released["b"]==target.Value,"FRC1 release code");
+        Require(reopened.Status() is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.NoKey, Key: "" } && Directory.GetFiles(directory).Length==0,"release forgets the key");
+    } finally { Directory.Delete(directory,true); }
+}
+{
+    // The session hands out frames by mode: basic at most one per 1000 ms of session time without raw data, full every packet.
+    foreach (var mode in new[]{"basic","full"}) {
+        using var license=License(mode=="full" ? "full" : null);
+        using var session=new FisicaSession(core);
+        long ms=1000;
+        session.Action((uint)FisicaSessionAction.Connected,(long)FisicaLink.Usb,ms); session.Drain();
+        session.Feed(Convert.FromHexString("24434701322e302e31fff0"),ms); session.Drain();
+        session.License(license,ms);
+        session.Action((uint)FisicaSessionAction.Start,-1,ms); session.Drain();
+        foreach (var name in new[]{"SET_DEVICE_USB","START_CONTINUOUS_MEASUREMENT"}) {
+            var command=core.Command(name); session.Feed(new byte[]{0x24,command[1],command[2],1,0,0,0xff,0xf0},ms); session.Drain();
+        }
+        var frames=new List<Measurement>();
+        for (int i=0;i<10;i++) {
+            ms+=300; session.Feed(packet,ms);
+            frames.AddRange(session.Drain().Where(e => e.Kind==(uint)FisicaSessionEvent.Measurement).Select(e => Measurement.FromPayload(e.Payload)));
+        }
+        Require(frames.Count==(mode=="full" ? 10 : 3),mode+" frame rate: "+frames.Count);
+        Require(frames.All(f => f.Weight==reference.Weight && f.Display.SequenceEqual(reference.Display)),mode+" frames carry weight and display");
+        Require(mode=="full" ? frames.All(f => f.Packet!.SequenceEqual(packet) && f.Raw!.SequenceEqual(reference.Raw!)) : frames.All(f => f.Packet==null && f.Raw==null),mode+" raw data");
+        Require(session.Analyze()![0]==reference.Weight,mode+" analysis of every packet");
+    }
+}
+
+// High-level client and transports against the same core, without hardware.
 MockTransport Scale(int frames=12) {
     var transport=new MockTransport();
     transport.Reply(core.Command("GET_FIRMWARE_VERSION"),Convert.FromHexString("24434701322e302e31fff0"));
@@ -46,20 +173,67 @@ MockTransport Scale(int frames=12) {
     return transport;
 }
 async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.FromSeconds(5)); return null; } catch(Exception error) { return error; } }
+async Task Until(Func<bool> condition,string what) {
+    for (var deadline=DateTime.UtcNow.AddSeconds(5);!condition();await Task.Delay(10)) Require(DateTime.UtcNow<deadline,what);
+}
 {
+    // Basic mode (no key): the 12 packets arrive at once, so one frame without raw data; the core analyzes all of them.
     var transport=Scale(); var client=new FisicaClient(core,transport); int received=0; client.Frame+=_ => Interlocked.Increment(ref received);
     await client.ConnectAsync(FisicaLink.Usb).WaitAsync(TimeSpan.FromSeconds(5));
     Require(client.FirmwareVersion=="2.0.1","firmware");
     await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
     Require(client.State==FisicaSessionState.Measuring,"measuring state");
     await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
-    Require(received==12 && client.Frames.Count==12,"frames");
+    Require(received==1 && client.Frames.Count==1,"basic frames: "+received);
     var report=client.Report()!;
-    Require(report.Weight==70.5 && report.FrameCount==12,"report");
-    Require(report.Frames[0].Raw.Length==638 && report.Frames[0].Display.Length==841 && report.Frames[0].Packet.Length==645,"frame shapes");
+    Require(report.Weight==70.5 && report.FrameCount==1,"basic report");
+    Require(report.Frames[0] is { Raw: null, Packet: null, Weight: 70.5, Display.Length: 841 },"basic frame shape");
     await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(client.Report()?.Weight==70.5,"report after close");
     Require(!transport.IsOpen && transport.Sent[^1].SequenceEqual(core.Command("SET_DEVICE_STOP")),"release");
     Require(transport.Sent.Any(s => s.SequenceEqual(core.Command("SET_DEVICE_USB"))),"usb mode");
+}
+foreach (var (key,frames,raw) in new[]{("full",12,true),("limited",12,false)}) {
+    // Full mode: every packet; raw data only when the key opens it.
+    using var license=License(key);
+    var transport=Scale(); var client=new FisicaClient(core,transport,license);
+    await client.ConnectAsync(FisicaLink.Usb).WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    var report=client.Report()!;
+    Require(report.Weight==70.5 && report.FrameCount==frames,key+" frames: "+report.FrameCount);
+    Require(raw ? report.Frames.All(f => f.Raw!.Length==638 && f.Packet!.SequenceEqual(packet)) : report.Frames.All(f => f.Raw==null && f.Packet==null),key+" raw data");
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+}
+{
+    // The client applies a license that changes during a measurement: import, then release.
+    using var license=License(); var transport=Scale(); var client=new FisicaClient(core,transport,license);
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await Until(() => client.Frames.Count==1,"basic before the key");
+    license.ImportToken(values["full"]);
+    transport.Feed(Enumerable.Repeat(packet,12).SelectMany(p => p).ToArray());
+    await Until(() => client.Frames.Count==13,"full after the key: "+client.Frames.Count);
+    Require(client.Frames.Skip(1).All(f => f.Raw!=null && f.Packet!=null),"raw data after the key");
+    var released=ReadCode(license.Release(),"FRC1");
+    Require(released["k"]=="key_test_1" && license.Status() is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.NoKey },"release");
+    transport.Feed(Enumerable.Repeat(packet,12).SelectMany(p => p).ToArray());
+    await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));  // Queued after the packets.
+    Require(client.Frames.Count is 13 or 14 && client.Frames.Skip(13).All(f => f.Raw==null),"basic after the release: "+client.Frames.Count);
+    // The measurement was not full-rate throughout: the core analyzed all 36 packets.
+    Require(client.Report() is { Weight: 70.5 } summary && summary.FrameCount==client.Frames.Count,"report over every packet");
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+}
+foreach (var (key,at) in new (string?,ulong)[]{(null,now),("unbound",now),("tampered",now),("revoked",now+Day),("full",now+14*Day),("full",now)}) {
+    // Connect, measure and analyze work in every license state.
+    using var license=new FisicaEntitlement(core,() => at,storage: null); if (key!=null) license.ImportToken(values[key]);
+    var client=new FisicaClient(core,Scale(),license);
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    bool full=license.Status().IsFull;
+    Require(client.Report() is { Weight: 70.5 } report && report.FrameCount==(full ? 12 : 1),$"measurement with {key} at {at}");
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
 }
 {
     // Packets carry no battery field: the level comes from GET_BATTERY_LEVEL, idle or measuring.
@@ -117,8 +291,9 @@ async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.
     Require(new SerialTransport("COM9").Link==FisicaLink.Usb && ((IFisicaTransport)new MockTransport()).Link==null,"transport links");
 }
 {
-    // Start clears the previous measurement; frames stay bounded.
-    var transport=Scale(8); var client=new FisicaClient(core,transport);
+    // Start clears the previous measurement; frames stay bounded (full mode hands out every packet).
+    using var license=License("full");
+    var transport=Scale(8); var client=new FisicaClient(core,transport,license);
     Require(await Failure(Task.Run(() => client.MaxFrames=(int)FisicaLimit.AnalysisFrames+1)) is ArgumentOutOfRangeException,"frame limit");
     client.MaxFrames=5;
     await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -129,31 +304,6 @@ async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.
     await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
     Require(client.Frames.Count==0 && client.DroppedFrames==0,"start clears frames");
     await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
-}
-{
-    ulong now=ulong.Parse(values["now"]),clock=now; FisicaEntitlementWarning seen=0;
-    using var entitlement=new FisicaEntitlement(core,() => clock,storage: null); entitlement.Warning+=(fresh,_) => seen|=fresh;
-    Require(entitlement.Status().Contract==FisicaContract.Unverified,"unverified");
-    Require(entitlement.ImportToken(values["tampered"])==FisicaEntitlementOutcome.RejectedSignature && entitlement.Status().Company=="","tampered");
-    Require(entitlement.ImportToken(values["valid"])==FisicaEntitlementOutcome.Accepted,"valid");
-    var status=entitlement.Status();
-    Require(status is { BaseLicense: FisicaBaseLicense.Granted, Verification: FisicaVerification.Fresh, Contract: FisicaContract.Active, Company: "acme", ContractReference: "ctr-1", KeyEnvironment: FisicaKeyEnvironment.Test },"fresh status");
-    Require(entitlement.ImportToken(values["older"])==FisicaEntitlementOutcome.IgnoredOlder,"older ignored");
-    clock=now+31*86400; status=entitlement.Status();
-    Require(status is { BaseLicense: FisicaBaseLicense.Granted, Verification: FisicaVerification.RefreshDue, Contract: FisicaContract.Active },"refresh due is not expiry");
-    Require(entitlement.ImportToken(values["revoked"])==FisicaEntitlementOutcome.Accepted && entitlement.Status().Contract==FisicaContract.Revoked,"revoked");
-    var transport=Scale(); var client=new FisicaClient(core,transport,entitlement);
-    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
-    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
-    await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
-    Require(client.Report()!.Weight==70.5,"measurement with revoked contract");
-    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
-    // Using the SDK leaves no trace: the stored state is still only the signed token.
-    Require(System.Text.Encoding.ASCII.GetString(entitlement.ExportState())=="FSS1\nC "+values["revoked"]+"\n","no usage state");
-    using var restored=new FisicaEntitlement(core,() => clock,storage: null); restored.RestoreState(entitlement.ExportState());
-    Require(restored.Status().Company=="acme","restore");
-    var expected=FisicaEntitlementWarning.ImportRejected|FisicaEntitlementWarning.TestKey|FisicaEntitlementWarning.ContractRevoked;
-    Require((seen&expected)==expected,"warnings");
 }
 {
     // Serial transport: a missing port is reported as an error and a loss, never thrown into the caller.
@@ -187,23 +337,54 @@ async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.
     Console.WriteLine("C# Windows BLE transport: failure paths verified without a Scale");
 }
 #endif
+{
+    // A renewal that reports the key released lets go of it: the stored key is deleted. Local stand-in server.
+    var probe=new TcpListener(IPAddress.Loopback,0); probe.Start(); int port=((IPEndPoint)probe.LocalEndpoint).Port; probe.Stop();
+    using var server=new HttpListener(); server.Prefixes.Add($"http://127.0.0.1:{port}/"); server.Start();
+    var requests=new List<(string Path,string Authorization,string Body)>();
+    _=Task.Run(async () => {
+        while (server.IsListening) {
+            HttpListenerContext context; try { context=await server.GetContextAsync(); } catch (Exception) { break; }
+            using var reader=new StreamReader(context.Request.InputStream); var body=await reader.ReadToEndAsync();
+            lock(requests) requests.Add((context.Request.Url!.AbsolutePath,context.Request.Headers["Authorization"] ?? "",body));
+            var reply=JsonSerializer.SerializeToUtf8Bytes(new { token=values["revoked"] });
+            context.Response.ContentType="application/json"; context.Response.ContentLength64=reply.Length;
+            await context.Response.OutputStream.WriteAsync(reply); context.Response.Close();
+        }
+    });
+    var directory=Directory.CreateTempSubdirectory("fisica-dotnet-").FullName;
+    try {
+        ulong time=now+Day;
+        using var license=new FisicaEntitlement(core,() => time,$"http://127.0.0.1:{port}",directory);
+        Require(license.ImportToken(values["full"])==FisicaEntitlementOutcome.Accepted && Directory.GetFiles(directory).Length==1,"stored key");
+        Require(await license.SyncAsync(force: true) is { Refreshed: true, Error: null },"renewal: "+license.LastSyncError);
+        Require(license.Status() is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.Revoked } && Directory.GetFiles(directory).Length==0,"released key let go");
+        lock(requests) Require(requests.Count==1 && requests[0]==("/sdk/v1/entitlement/refresh","Bearer "+values["full"],"{}"),"empty refresh with the key");
+    } finally { server.Stop(); Directory.Delete(directory,true); }
+}
 if (values.TryGetValue("endpoint",out var endpoint)) {
-    // Online confirmation and token storage against the reference mock server.
+    // Online activation and renewal against the reference mock developer portal, which holds the unactivated key.
     ulong clock=ulong.Parse(values["server_now"]); string directory=values["storage"];
     using var entitlement=new FisicaEntitlement(core,() => clock,endpoint,directory);
-    Require(entitlement.ImportToken(values["valid"])==FisicaEntitlementOutcome.Accepted,"online import");
-    Require(await entitlement.SyncAsync()==null,"sync: "+entitlement.LastSyncError);
-    Require(entitlement.Status().VerifiedAt==clock,"refresh adopts the server-signed time");
+    Require(entitlement.ImportToken(values["unbound"])==FisicaEntitlementOutcome.Accepted,"online import");
+    // Importing a new key starts its activation in the background; SyncAsync waits for the exchange.
+    Require(await entitlement.SyncAsync() is { Error: null },"activation: "+entitlement.LastSyncError);
+    var status=entitlement.Status();
+    Require(status is { Mode: FisicaMode.Full, Reason: FisicaModeReason.None, Key: "key_test_1" } && status.BindType==target.Type && status.Bind==target.Value
+        && status.VerifiedAt==clock && status.KeyUntil==clock+90*Day,"activated online for this PC");
+    Require(await entitlement.SyncAsync() is { Activated: false, Refreshed: false, Error: null },"nothing due");
     entitlement.CheckStatus();
-    Require(await entitlement.SyncAsync()==null,"second refresh");
-    // A later start with the app's older token still finds the newer stored confirmation.
+    Require(await entitlement.SyncAsync(force: true) is { Refreshed: true, Error: null },"forced renewal: "+entitlement.LastSyncError);
+    // A later start with the original key file still finds the activated key.
     using var reopened=new FisicaEntitlement(core,() => clock,null,directory);
-    reopened.ImportToken(values["valid"]);
-    Require(reopened.Status().VerifiedAt==clock,"stored confirmation restored");
+    Require(reopened.ImportToken(values["unbound"])==FisicaEntitlementOutcome.Accepted && reopened.Status() is { Mode: FisicaMode.Full, VerifiedAt: var verified } && verified==clock,"stored activated key restored");
     // A communication failure is recorded, raises nothing and changes no state.
     using var offline=new FisicaEntitlement(core,() => clock,"http://127.0.0.1:9",Path.Combine(directory,"offline"));
-    offline.ImportToken(values["valid"]); offline.CheckStatus();
-    Require((await offline.SyncAsync())!.StartsWith("network:"),"network failure recorded");
-    Require(offline.Status() is { Contract: FisicaContract.Active, Verification: FisicaVerification.Fresh },"failure is not expiry");
+    offline.ImportToken(values["unbound"]); offline.CheckStatus();
+    Require((await offline.SyncAsync()).Error is {} problem && problem.StartsWith("network:") && offline.LastSyncError!.StartsWith("network:"),"network failure recorded");
+    Require(offline.Status() is { Mode: FisicaMode.Basic, Reason: FisicaModeReason.NotActivated },"failure is not a license change");
+    // Renewal when due: the trial ended, so the key is refreshed (the server's contract decides).
+    clock+=14*Day;
+    Require(await entitlement.SyncAsync() is { Refreshed: true, Error: null } && entitlement.Status().Reason==FisicaModeReason.FullEnded,"renewal when due");
 }
-Console.WriteLine("C# client, transports and entitlement contract passed");
+Console.WriteLine("C# client, transports and license contract passed");

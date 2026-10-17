@@ -54,7 +54,9 @@ public sealed class FisicaCommandException(SessionEvent sessionEvent)
     public uint DeviceCode => Event.DeviceError;
 }
 
-/// <summary>Result of the shared analysis over the collected frames. Centimetres use the nominal 1 cm cell; not clinically calibrated.</summary>
+/// <summary>Result of the shared analysis. Centimetres use the nominal 1 cm cell; not clinically calibrated.
+/// Weight and foot size come in every mode; in basic mode Frames holds about one frame a second while the core
+/// analyzed every packet of the measurement.</summary>
 public sealed record SessionReport(double Weight,double LeftWidth,double LeftLength,double RightWidth,double RightLength,IReadOnlyList<Measurement> Frames) {
     public int FrameCount => Frames.Count;
     /// <summary>The client's last ReadBatteryAsync reading in percent, or null. Packets carry no battery field.</summary>
@@ -62,11 +64,15 @@ public sealed record SessionReport(double Weight,double LeftWidth,double LeftLen
     public bool BatteryValid => Battery is not null;
 }
 
-/// <summary>Connect, measure, stop and report over any transport. Command order, ACK waits, timeouts and recovery
-/// decisions live in the shared core; this class only runs the clock, moves bytes and turns core events into
-/// tasks and events. Work is serialized internally; events are raised on the thread that delivered the input.</summary>
+/// <summary>Connect, measure, stop and report over any transport. Command order, ACK waits, timeouts, recovery
+/// decisions and license limits live in the shared core; this class only runs the clock, moves bytes and turns core
+/// events into tasks and events. Work is serialized internally; events are raised on the thread that delivered the input.
+/// Without an Entitlement holding an SDK key activated for this app or PC the client runs in basic mode: connection,
+/// measurement, settings, weight and foot size work, frames arrive at most once a second without Raw and Packet.</summary>
 public sealed class FisicaClient : IAsyncDisposable {
-    public FisicaCore Core { get; } public IFisicaTransport Transport { get; } public FisicaEntitlement? Entitlement { get; }
+    public FisicaCore Core { get; } public IFisicaTransport Transport { get; }
+    /// <summary>The license applied to the session before every start, every 30 seconds and whenever it changes.</summary>
+    public FisicaEntitlement? Entitlement { get; }
     public event Action<Measurement>? Frame;
     public event Action<SessionEvent>? Event;
     /// <summary>The link dropped. Reopen the same Scale with ConnectAsync; the core resumes a measurement it still wants.</summary>
@@ -83,9 +89,15 @@ public sealed class FisicaClient : IAsyncDisposable {
     readonly Queue<Measurement> frames=new(); int dropped, maxFrames=(int)FisicaLimit.AnalysisFrames;
     Timer? ticker; CancellationTokenSource? readyDeadline; bool linkReady, closed, wired;
     FisicaLink link;
+    const long LicenseInterval=30_000;
+    long licenseApplied; bool fullRate;
+    // True while every packet of the current measurement became a frame (full mode with FULL_RATE throughout).
+    volatile bool everyFrame;
+    double[]? closedAnalysis;
 
     public FisicaClient(FisicaCore core,IFisicaTransport transport,FisicaEntitlement? entitlement=null) {
         Core=core; Transport=transport; Entitlement=entitlement; session=new FisicaSession(core);
+        if (entitlement!=null) entitlement.Changed+=OnLicenseChanged;
     }
 
     /// <summary>Frames of the current measurement. StartAsync clears them; a reconnect keeps them.
@@ -151,7 +163,7 @@ public sealed class FisicaClient : IAsyncDisposable {
     void OnReady() => Post(() => {
         if (closed || linkReady) return;
         linkReady=true; readyDeadline?.Cancel();
-        ticker ??= new Timer(_ => Post(() => Step(() => session.Tick(clock.ElapsedMilliseconds))),null,20,20);
+        ticker ??= new Timer(_ => Post(Pulse),null,20,20);
         Step(() => session.Action((uint)FisicaSessionAction.Connected,(long)link,clock.ElapsedMilliseconds));
     });
     void OnBytes(byte[] bytes) => Post(() => {
@@ -173,6 +185,26 @@ public sealed class FisicaClient : IAsyncDisposable {
         Step(() => session.Action((uint)FisicaSessionAction.Lost,sendFailure ? 1 : 0,clock.ElapsedMilliseconds));
     }
 
+    void Pulse() {
+        Step(() => session.Tick(clock.ElapsedMilliseconds));
+        // Picks up renewals and activation, and notices the end of full mode.
+        if (!closed && clock.ElapsedMilliseconds-licenseApplied>=LicenseInterval) { Entitlement?.CheckStatus(); ApplyLicense(); }
+    }
+    void OnLicenseChanged(EntitlementStatus status) => Post(ApplyLicense);
+    /// <summary>Copy the current license into the session; the core then limits what it hands out.</summary>
+    void ApplyLicense() {
+        if (closed) return;
+        long now=clock.ElapsedMilliseconds; bool every=false; licenseApplied=now;
+        try {
+            session.License(Entitlement,now);
+            every=Entitlement?.Status().Has(FisicaFeature.FullRate)==true;
+        } catch (Exception error) when (error is ObjectDisposedException or FisicaException) {
+            // A license that cannot be read is basic mode; measuring goes on.
+            session.License(null,now); if (error is FisicaException) Error?.Invoke(error);
+        }
+        fullRate=every; if (!every) everyFrame=false;
+    }
+
     /// <summary>Run one core call, then deliver everything it produced.</summary>
     void Step(Action call) {
         if (closed) return;
@@ -183,7 +215,7 @@ public sealed class FisicaClient : IAsyncDisposable {
         switch ((FisicaSessionEvent)e.Kind) {
         case FisicaSessionEvent.Transmit: Transport.Send(e.Payload); break;
         case FisicaSessionEvent.Measurement:
-            var frame=Core.Decode(e.Payload); lock(frames) { frames.Enqueue(frame); Trim(); } Frame?.Invoke(frame); break;
+            var frame=Measurement.FromPayload(e.Payload); lock(frames) { frames.Enqueue(frame); Trim(); } Frame?.Invoke(frame); break;
         case FisicaSessionEvent.Result:
             var operation=(FisicaSessionOperation)e.Operation; bool probe=operation==FisicaSessionOperation.Probe;
             if (probe && e.Status==0) { var version=Encoding.UTF8.GetString(Core.ResponsePayload(e.Payload)).Trim('\0',' ','\r','\n'); FirmwareVersion=version.Length==0 ? null : version; }
@@ -195,21 +227,22 @@ public sealed class FisicaClient : IAsyncDisposable {
         Event?.Invoke(e);
     }
 
-    Task<SessionEvent> Request(FisicaSessionAction action,long value,FisicaSessionOperation waitFor,Action? accepted=null) {
+    Task<SessionEvent> Request(FisicaSessionAction action,long value,FisicaSessionOperation waitFor,Action? before=null,Action? accepted=null) {
         var waiter=Waiter();
         Post(() => {
             if (closed || waiters.ContainsKey(waitFor)) { waiter.TrySetException(new FisicaException((int)FisicaStatus.Busy,"Another operation is pending")); return; }
             waiters[waitFor]=waiter;
-            try { session.Action((uint)action,value,clock.ElapsedMilliseconds); accepted?.Invoke(); foreach (var next in session.Drain()) Deliver(next); }
+            try { before?.Invoke(); session.Action((uint)action,value,clock.ElapsedMilliseconds); accepted?.Invoke(); foreach (var next in session.Drain()) Deliver(next); }
             catch (Exception error) { Finish(waitFor,null,error); }
         });
         return waiter.Task;
     }
     /// <summary>Start measuring; null duration measures until StopAsync. Completes when the Scale confirmed the start.
-    /// Frames of the previous measurement are cleared once the core accepts the start.</summary>
+    /// The current license is applied first. Frames of the previous measurement are cleared once the core accepts the start.</summary>
     public Task<SessionEvent> StartAsync(TimeSpan? duration=null) {
         Entitlement?.CheckStatus();
-        return Request(FisicaSessionAction.Start,duration is {} d ? (long)d.TotalMilliseconds : -1,FisicaSessionOperation.Begin,ClearFrames);
+        return Request(FisicaSessionAction.Start,duration is {} d ? (long)d.TotalMilliseconds : -1,FisicaSessionOperation.Begin,
+            ApplyLicense,() => { ClearFrames(); everyFrame=fullRate; });
     }
     public Task<SessionEvent> StopAsync() => Request(FisicaSessionAction.Stop,0,FisicaSessionOperation.End);
 
@@ -250,17 +283,27 @@ public sealed class FisicaClient : IAsyncDisposable {
         if (closed) return;
         closed=true; linkReady=false; ticker?.Dispose(); readyDeadline?.Cancel();
         if (wired) { Transport.Ready-=OnReady; Transport.Bytes-=OnBytes; Transport.Lost-=OnLost; Transport.SendFailed-=OnSendFailed; Transport.Error-=OnTransportError; }
+        if (Entitlement!=null) Entitlement.Changed-=OnLicenseChanged;
+        // Report() still works after closing: keep the core's analysis of the last measurement.
+        try { closedAnalysis=session.Analyze(); } catch (FisicaException) { }
         Transport.Close(); session.Dispose();
         foreach (var waiter in waiters.Values) waiter.TrySetException(new FisicaException((int)FisicaStatus.Cancelled,"Client closed"));
         waiters.Clear();
     }
     public async ValueTask DisposeAsync() { try { await CloseAsync(); } catch (Exception) { /* Resources are already released. */ } }
 
-    /// <summary>Analyze the frames collected so far; null without a stable measurement.</summary>
+    /// <summary>Weight and foot size of the current measurement; null without a stable measurement. When every packet
+    /// became a frame (full mode) the collected frames are analyzed; otherwise (basic mode) the core analyzes every packet
+    /// it received since the start. The analysis runs in the shared core in both cases.</summary>
     public SessionReport? Report() {
-        var snapshot=Frames; if (snapshot.Count==0) return null;
         Entitlement?.CheckStatus();
-        var result=Core.AnalyzePackets(snapshot.Select(f => f.Packet).ToArray());
+        var snapshot=Frames; double[]? result;
+        if (everyFrame) {
+            if (snapshot.Count==0) return null;
+            result=Core.Analyze(snapshot.SelectMany(f => f.Display).ToArray(),snapshot.Select(f => f.Weight).ToArray(),29,29);
+        } else {
+            try { result=session.Analyze(); } catch (ObjectDisposedException) { result=closedAnalysis; }
+        }
         return result==null ? null : new(result[0],result[1],result[2],result[3],result[4],snapshot) { Battery=Battery };
     }
 }

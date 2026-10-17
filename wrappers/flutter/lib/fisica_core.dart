@@ -43,8 +43,17 @@ class FisicaStateError extends StateError {
   FisicaStateError(this.code, String message) : super(message);
 }
 
+/// [FisicaStatus.featureNotLicensed]: the call needs full mode, an SDK key
+/// activated for this app or PC (see [FisicaEntitlement]). It is not a
+/// measurement or communication error.
+class FisicaLicenseError extends FisicaStateError {
+  FisicaLicenseError(super.code, super.message);
+}
+
 typedef _DecodeNative =
     Int32 Function(
+      Pointer<Void>,
+      Uint64,
       Pointer<Uint8>,
       Uint32,
       Pointer<Double>,
@@ -56,6 +65,8 @@ typedef _DecodeNative =
     );
 typedef _DecodeDart =
     int Function(
+      Pointer<Void>,
+      int,
       Pointer<Uint8>,
       int,
       Pointer<Double>,
@@ -126,12 +137,16 @@ typedef _AnalyzeDart =
       int,
     );
 
+/// One measurement: the 29x29 display grid ([sensorMatrix]) and weight, plus
+/// the 29x22 [rawGrid] and the 645-byte packet ([rawData]) when the license
+/// opens raw data. [FisicaCore.decodePacket] always fills them (it needs full
+/// mode); a session frame in basic mode has them null.
 class DecodedMeasurement {
-  final List<List<double>> rawGrid;
+  final List<List<double>>? rawGrid;
   final List<List<double>> sensorMatrix;
   final double weight;
   final double battery;
-  final Uint8List rawData;
+  final Uint8List? rawData;
   final String coreVersion;
   final int schemaVersion;
   // The existing SDK battery value is a placeholder, not a hardware reading.
@@ -234,12 +249,24 @@ class FisicaCore {
         )
         .toDartString();
     if (status == 1 || status == 4) throw FisicaArgumentError(status, message);
+    if (status == FisicaStatus.featureNotLicensed) {
+      throw FisicaLicenseError(status, message);
+    }
     throw FisicaStateError(status, message);
   }
 
-  DecodedMeasurement decodePacket(Uint8List packet) {
+  /// Raw and display grids of one packet. They are raw data, so this needs a
+  /// [license] in full mode whose features include [FisicaFeature.rawData];
+  /// otherwise it throws [FisicaLicenseError]. A [FisicaSession] hands out
+  /// display grids in every mode.
+  DecodedMeasurement decodePacket(
+    Uint8List packet, {
+    FisicaEntitlement? license,
+  }) {
     if (packet.length != 645)
       throw FisicaArgumentError(1, 'Expected a 645-byte packet');
+    final context = license?._open ?? nullptr;
+    final nowS = license?._now() ?? 0;
     final input = calloc<Uint8>(packet.length);
     final raw = calloc<Double>(638);
     final display = calloc<Double>(841);
@@ -249,7 +276,20 @@ class FisicaCore {
       final decode = _library.lookupFunction<_DecodeNative, _DecodeDart>(
         'fisica_core_decode_packet',
       );
-      _check(decode(input, packet.length, raw, 638, display, 841, metrics, 2));
+      _check(
+        decode(
+          context,
+          nowS,
+          input,
+          packet.length,
+          raw,
+          638,
+          display,
+          841,
+          metrics,
+          2,
+        ),
+      );
       return DecodedMeasurement(
         List.generate(29, (r) => List.generate(22, (c) => raw[r * 22 + c])),
         List.generate(29, (r) => List.generate(29, (c) => display[r * 29 + c])),
@@ -265,6 +305,37 @@ class FisicaCore {
       calloc.free(display);
       calloc.free(metrics);
     }
+  }
+
+  /// Frame of a session [FisicaSessionEventKind.measurement] event. Its
+  /// payload is 842 little-endian doubles (weight, then the 29x29 display
+  /// grid) and, only while the session's license opens raw data, 638 doubles
+  /// (the 29x22 raw grid) and the 645-byte packet.
+  DecodedMeasurement frameFromEvent(FisicaSessionEvent event) {
+    final payload = event.payload;
+    if (event.kind != FisicaSessionEventKind.measurement ||
+        payload.length < 842 * 8) {
+      throw FisicaArgumentError(1, 'Expected a measurement event');
+    }
+    final data = ByteData.sublistView(payload);
+    double at(int index) => data.getFloat64(index * 8, Endian.little);
+    const rawEnd = (842 + 638) * 8;
+    final raw = payload.length >= rawEnd + 645;
+    return DecodedMeasurement(
+      raw
+          ? List.generate(
+              29,
+              (r) => List.generate(22, (c) => at(842 + r * 22 + c)),
+            )
+          : null,
+      List.generate(29, (r) => List.generate(29, (c) => at(1 + r * 29 + c))),
+      at(0),
+      // Measurement packets carry no battery field (placeholder, batteryValid false).
+      99,
+      raw ? Uint8List.fromList(payload.sublist(rawEnd, rawEnd + 645)) : null,
+      coreVersion,
+      policy['result_schema_version'] as int,
+    );
   }
 
   Uint8List command(String name, {double value = 0, Uint8List? payload}) {
@@ -415,6 +486,7 @@ class FisicaCore {
   /// Weight and foot dimensions from measurement packets as received:
   /// `[weight_kg, left_width_cm, left_length_cm, right_width_cm, right_length_cm]`,
   /// or null without a stable measurement. The analysis runs in the shared core.
+  /// Weight and foot size are basic-mode results: analysis needs no license.
   List<double>? analyzePackets(List<Uint8List> packets) {
     if (packets.isEmpty || packets.any((packet) => packet.length != 645)) {
       throw FisicaArgumentError(1, 'Expected 645-byte measurement packets');

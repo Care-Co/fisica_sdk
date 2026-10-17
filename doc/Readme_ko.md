@@ -13,41 +13,21 @@
 
 ### 시스템 요구사항
 
-- Python 3.8 이상
-- 운영체제: Windows 10/11 또는 macOS 10.15+
+- Python 3.9 이상, 64비트
+- Windows 10/11 (x64·ARM64) 또는 macOS 11 이상
 
-### pip로 설치
+### wheel로 설치
 
-```bash
-  pip install fisica
-```
-
-### 소스코드에서 설치
+Care&Co가 제공한 바이너리 wheel을 설치합니다. 공개 레지스트리 배포와 소스 설치는 제공하지 않습니다.
 
 ```bash
-    git clone https://github.com/fisica/fisica_sdk.git
-    cd fisica_sdk
-    pip install -e .
+python -m pip install /path/to/fisica-3.0.0-py3-none-PLATFORM.whl
+# 이미지 렌더링(sdk.render)을 쓸 때: OpenCV·Pillow 포함
+python -m pip install '/path/to/fisica-3.0.0-py3-none-PLATFORM.whl[visualization]'
 ```
 
-### 의존성 패키지
-
-SDK는 다음 의존성 패키지들을 자동으로 설치합니다:
-
-```bash
-# 핵심 의존성
-  'numpy>=1.21',
-  'opencv-python>=4.5',
-  'requests>=2.25',
-  'packaging>=21.0',
-  'Pillow>=8.0',
-  'pyserial>=3.5',
-  'importlib-metadata>=4.0; python_version<"3.8"',  # 하위 호환
-  'bleak>=0.22.3' # For Bluetooth support
-
-  # GUI용 의존성  
-  'PyQt5>=5.15',
-```
+필수 의존성은 numpy, pyserial, bleak, packaging이며 wheel 설치 때 함께 설치됩니다.
+SDK 자체 GUI는 3.0.0부터 없습니다. 렌더링한 이미지는 앱에서 표시합니다.
 
 ## 🔧 빠른 시작
 
@@ -88,149 +68,28 @@ if devices:
    sdk.wait()
 ```
 
-### 실시간 데이터 모니터링
+### 실시간 데이터 받기
 
 ```python
-# examples/realtime_monitoring.py
-import sys
-import numpy as np
-import cv2
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QLabel
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
-from PyQt5.QtGui import QPixmap, QImage
-import fisica_sdk as fisica
+from fisica_sdk import FisicaSDK
 
-class MonitoringThread(QThread):
-   frame_received = pyqtSignal(object)
-   status_updated = pyqtSignal(str)
+sdk = FisicaSDK()
+sdk.connect(sdk.scan_devices()[0])         # 사용자가 고른 기기
 
-   def __init__(self, sdk):
-      super().__init__()
-      self.sdk = sdk
-      self._is_running = True
+def on_frame(frame):
+    print(frame.weight, 'kg')               # frame.sensor_matrix: 29x29 표시용 격자
+    image = sdk.render(frame, mode='BLUR')  # [visualization] extra: BGR 이미지(numpy). 표시는 앱에서
+                                            # 전체 모드일 때만 frame.raw_data(645바이트)·frame.raw_grid가 있음
 
-   def run(self):
-      try:
-         self.status_updated.emit('Scanning for devices...')
-         devices = self.sdk.scan_devices()
-
-         if not devices:
-            self.status_updated.emit('No devices found.')
-            return
-
-         self.status_updated.emit(f"Connecting to {devices[0]['name']}...")
-         self.sdk.connect(devices[0])
-         self.sdk.on_data(self.on_frame)
-
-         self.status_updated.emit('Measurement started.')
-         self.sdk.start_measurement()
-
-         # Keep the thread alive while measuring
-         while self._is_running:
-            self.msleep(100)
-
-      except Exception as e:
-         self.status_updated.emit(f'Error: {e}')
-      finally:
-         self.sdk.stop_measurement()
-         self.status_updated.emit('Measurement stopped.')
-
-   def on_frame(self, frame):
-      if self._is_running:
-         self.frame_received.emit(frame)
-
-   def stop(self):
-      self._is_running = False
-      self.wait() # Wait for the run loop to finish
-
-class RealtimeMonitor(QMainWindow):
-   def __init__(self, scale=2.0):
-      super().__init__()
-      self.sdk = fisica.FisicaSDK()
-      self.monitoring_thread = None
-      self.scale = scale
-      self.init_ui()
-      self.start_monitoring()
-
-   def init_ui(self):
-      self.setWindowTitle('Fisica SDK - Realtime Monitor')
-
-      base_img_w, base_img_h = 228, 256
-      img_w = int(base_img_w * self.scale)
-      img_h = int(base_img_h * self.scale)
-
-      window_w = img_w + 24
-      window_h = img_h + 80
-
-      self.setGeometry(100, 100, window_w, window_h)
-
-      central_widget = QWidget()
-      self.setCentralWidget(central_widget)
-      layout = QVBoxLayout(central_widget)
-
-      self.image_label = QLabel('Initializing...')
-      self.image_label.setMinimumSize(img_w, img_h)
-      self.image_label.setStyleSheet("border: 1px solid black;")
-      self.image_label.setAlignment(Qt.AlignCenter)
-      layout.addWidget(self.image_label)
-
-      self.status_label = QLabel('Ready')
-      self.status_label.setAlignment(Qt.AlignCenter)
-      layout.addWidget(self.status_label)
-
-   def start_monitoring(self):
-      self.monitoring_thread = MonitoringThread(self.sdk)
-      self.monitoring_thread.frame_received.connect(self.update_visualization)
-      self.monitoring_thread.status_updated.connect(self.set_status)
-      self.monitoring_thread.start()
-
-   def set_status(self, text):
-      self.status_label.setText(text)
-
-   def update_visualization(self, frame):
-      try:
-         image_array = self.sdk.render(frame, mode="BLUR", bbox=True, scale=self.scale)
-         self.set_image(image_array)
-      except Exception as e:
-         error_message = f'Visualization error: {e}'
-         self.set_status(error_message)
-
-   def set_image(self, image: np.ndarray):
-      try:
-         if image.dtype != np.uint8:
-            if image.max() <= 1.0:
-               image = (image * 255).astype(np.uint8)
-            else:
-               image = np.clip(image, 0, 255).astype(np.uint8)
-
-         if len(image.shape) == 3 and image.shape[2] == 3:
-            h, w, ch = image.shape
-            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            qimage = QImage(image_rgb.data, w, h, ch * w, QImage.Format_RGB888)
-         else:
-            # Handle other formats if necessary, or raise an error
-            raise ValueError("Unsupported image format for display.")
-
-         pixmap = QPixmap.fromImage(qimage)
-         scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-         self.image_label.setPixmap(scaled_pixmap)
-      except Exception as e:
-         self.set_status(f'Image display error: {e}')
-
-   def closeEvent(self, event):
-      if self.monitoring_thread and self.monitoring_thread.isRunning():
-         self.monitoring_thread.stop()
-      event.accept()
-
-def main():
-   app = QApplication(sys.argv)
-   window = RealtimeMonitor(scale=2.0)
-   window.show()
-   sys.exit(app.exec_())
-
-if __name__ == '__main__':
-   main()
+sdk.on_data(on_frame)
+sdk.start_measurement(duration=5)
+sdk.wait()
+sdk.disconnect()
+sdk.wait()
 ```
+
+기본 모드(SDK 키 없음 등)에서는 프레임이 초당 1장까지만 오고 원본 데이터가 없습니다. 체중·발 크기 분석은
+두 모드에서 같습니다. 자세한 내용은 아래 "라이선스와 SDK 키"를 참고하세요.
 
 ### 배치 처리
 
@@ -279,23 +138,17 @@ SDK는 USB로 연결된 Fisica 기기를 자동으로 감지합니다.
 
 ### 사용 가능한 지표
 
-SDK는 종합적인 족저압 분석을 제공합니다:
-
-- **압력 분포**: 히트맵 분석
-- **압력 중심점(COP)**: 움직임 추적
-- **발 크기**: 길이 및 폭 측정
-- **체중 분포**: 좌우 발 균형
-- **시간별 분석**: 시간에 따른 압력 변화
+- **체중**: 안정 구간 평균(kg)
+- **발 길이·폭**: 좌우 각각, 공칭 1cm 셀 기준(임상 보정 아님)
+- **압력 분포**: 프레임마다 29x29 표시용 격자(`sensor_matrix`, 상대값이며 kPa가 아님)
+- **압력 중심점(COP)**: `fisica_sdk.analyzer.compute_cop(grid)`로 프레임별 계산
 
 ### 시각화 옵션
 
 ```python
-# 다양한 렌더링 모드
-modes = ["PIXEL", "BLUR", "BINARY", "BINARY_NONZERO", "BBOX", "CONTOUR"]
-
+modes = ["PIXEL", "BLUR", "BINARY", "BINARY_NONZERO", "CONTOUR"]
 for mode in modes:
-    image = sdk.render(frame, mode=mode, scale=2.0)
-    # 이미지 저장 또는 표시
+    image = sdk.render(frame, mode=mode, scale=2.0, bbox=True, vmax=255)  # vmax: 프레임끼리 같은 색 기준
 ```
 
 ## 🎯 예제
@@ -330,194 +183,6 @@ def main():
    sdk.export_report(output=args.output)
 
 if __name__ == "__main__":
-   main()
-```
-
-### GUI 애플리케이션
-
-```python
-# examples/gui_app.py
-import sys
-import numpy as np
-import cv2
-import fisica_sdk as fisica
-from PyQt5.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, QLabel, QTextEdit
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
-from PyQt5.QtGui import QPixmap, QImage
-
-class MeasurementThread(QThread):
-   frame_received = pyqtSignal(object)
-
-   def __init__(self, sdk):
-      super().__init__()
-      self.sdk = sdk
-      self.sdk.on_data(self.on_frame)
-
-   def on_frame(self, frame):
-      self.frame_received.emit(frame)
-
-   def run(self):
-      self.sdk.start_measurement(duration=10)
-      self.sdk.wait()
-
-class FisicaGUI(QMainWindow):
-   def __init__(self):
-      super().__init__()
-      self.sdk = fisica.FisicaSDK()
-      self.devices = []
-      self.measurement_thread = None
-      self.init_ui()
-
-   def init_ui(self):
-      self.setWindowTitle('Fisica SDK GUI')
-      self.setGeometry(100, 100, 800, 600)
-
-      # Central widget
-      central_widget = QWidget()
-      self.setCentralWidget(central_widget)
-      layout = QVBoxLayout(central_widget)
-
-      # Status label
-      self.status_label = QLabel('Ready')
-      layout.addWidget(self.status_label)
-
-      # Buttons
-      self.scan_btn = QPushButton('Scan Devices')
-      self.scan_btn.clicked.connect(self.scan_devices)
-      layout.addWidget(self.scan_btn)
-
-      self.connect_btn = QPushButton('Connect')
-      self.connect_btn.clicked.connect(self.connect_device)
-      self.connect_btn.setEnabled(False)
-      layout.addWidget(self.connect_btn)
-
-      self.start_btn = QPushButton('Start Measurement')
-      self.start_btn.clicked.connect(self.start_measurement)
-      self.start_btn.setEnabled(False)
-      layout.addWidget(self.start_btn)
-
-      # Device list
-      self.device_text = QTextEdit()
-      self.device_text.setMaximumHeight(100)
-      layout.addWidget(self.device_text)
-
-      # Visualization area
-      self.image_label = QLabel('Pressure visualization will appear here')
-      self.image_label.setMinimumHeight(400)
-      self.image_label.setStyleSheet("border: 1px solid black;")
-      self.image_label.setAlignment(Qt.AlignCenter)
-      layout.addWidget(self.image_label)
-
-   def scan_devices(self):
-      self.status_label.setText('Scanning devices...')
-      self.devices = self.sdk.scan_devices()
-
-      if self.devices:
-         device_info = '\n'.join([f"{i}: [{d['type']}] {d['name']} - {d['id']}"
-                                  for i, d in enumerate(self.devices)])
-         self.device_text.setText(device_info)
-         self.connect_btn.setEnabled(True)
-         self.status_label.setText(f'Found {len(self.devices)} devices')
-      else:
-         self.device_text.setText('No devices found')
-         self.status_label.setText('No devices found')
-
-   def connect_device(self):
-      if self.devices:
-         try:
-            self.sdk.connect(self.devices[0])  # Connect to first device
-            self.status_label.setText(f'Connected to {self.devices[0]["name"]}')
-            self.start_btn.setEnabled(True)
-            self.connect_btn.setEnabled(False)
-         except Exception as e:
-            self.status_label.setText(f'Connection failed: {e}')
-
-   def start_measurement(self):
-      if self.measurement_thread and self.measurement_thread.isRunning():
-         return
-
-      self.status_label.setText('Starting measurement...')
-      self.start_btn.setEnabled(False)
-
-      self.measurement_thread = MeasurementThread(self.sdk)
-      self.measurement_thread.frame_received.connect(self.update_visualization)
-      self.measurement_thread.finished.connect(self.measurement_finished)
-      self.measurement_thread.start()
-
-   def set_image(self, image: np.ndarray):
-      """Improved image display method based on the provided code"""
-      try:
-         if len(image.shape) == 2:
-            # Grayscale image
-            h, w = image.shape
-            qimage = QImage(image.data, w, h, w, QImage.Format_Grayscale8)
-         elif len(image.shape) == 3:
-            if image.shape[2] == 3:
-               # RGB/BGR image
-               h, w, ch = image.shape
-               # Convert BGR to RGB if needed
-               if image.dtype == np.uint8:
-                  image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-               else:
-                  image_rgb = image
-               qimage = QImage(image_rgb.data, w, h, ch * w, QImage.Format_RGB888)
-            elif image.shape[2] == 4:
-               # RGBA image
-               image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA)
-               h, w, ch = image.shape
-               qimage = QImage(image.data, w, h, ch * w, QImage.Format_RGBA8888)
-            else:
-               raise ValueError("Unsupported image format.")
-         else:
-            raise ValueError("Unsupported image format.")
-
-         pixmap = QPixmap.fromImage(qimage)
-         # Scale to fit the label while maintaining aspect ratio
-         scaled_pixmap = pixmap.scaled(self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-         self.image_label.setPixmap(scaled_pixmap)
-
-      except Exception as e:
-         print(f"Image display error: {e}")
-         self.status_label.setText(f'Image display error: {e}')
-
-   def update_visualization(self, frame):
-      try:
-         # Render the frame
-         image_array = self.sdk.render(frame, mode="BLUR", scale=2.0)
-
-         # Ensure the image is in the correct format
-         if image_array.dtype != np.uint8:
-            # Normalize to 0-255 range if needed
-            if image_array.max() <= 1.0:
-               image_array = (image_array * 255).astype(np.uint8)
-            else:
-               image_array = np.clip(image_array, 0, 255).astype(np.uint8)
-
-         # Use the improved image display method
-         self.set_image(image_array)
-
-      except Exception as e:
-         print(f"Visualization error: {e}")
-         self.status_label.setText(f'Visualization error: {e}')
-
-   def measurement_finished(self):
-      self.status_label.setText('Measurement completed')
-      self.start_btn.setEnabled(True)
-
-      # Analyze results
-      try:
-         report = self.sdk.analyze()
-         print("Analysis completed:", report)
-      except Exception as e:
-         print(f"Analysis error: {e}")
-
-def main():
-   app = QApplication(sys.argv)
-   window = FisicaGUI()
-   window.show()
-   sys.exit(app.exec_())
-
-if __name__ == '__main__':
    main()
 ```
 
@@ -815,64 +480,36 @@ report에 인자가 없는 경우, 가장 최근에 `analyze()`된 SessionReport
 
 ---
 
-### `render(frame: Optional[MeasurementFrame], grid_data: Optional[np.ndarray], mode: Optional[str], scale: Optional[float])`
+### `render(frame=None, grid_data=None, mode='BLUR', scale=1.0, bbox=False, vmax=None)`
 
 **Description**:  
-프레임 또는 센서 그리드 데이터를 이미지로 렌더링합니다.  
-지정한 시각화 모드와 크기 배율에 따라 이미지가 데이터가 생성됩니다.
-`frame`은 `on_data`에 콜백함수를 등록했을 때 인자로 전달되는 변수입니다.
+프레임의 센서 격자(`sensor_matrix`) 또는 직접 넘긴 격자를 이미지로 그립니다. `[visualization]` extra가 필요합니다.
+모든 라이선스 모드에서 동작하며, 표시는 앱이 합니다.
 
 **Parameters**:
-- `frame` (MeasurementFrame, optional): 센서 매트릭스를 포함하는 데이터 클래스 인스턴스입니다.
-- `grid_data` (np.ndarray, optional): 2차원 NumPy 배열 형태의 센서 그리드 데이터입니다.
-- `mode` (str, optional): 시각화 스타일(예: "BLUR")입니다. 자세한 내용은 아래 VisualOption 섹션을 참조하세요. `기본:VisualOptions.BLUR`
-- `scale` (float, optional): 이미지 크기 배율입니다. `기본 1.0`
+- `frame` (MeasurementFrame, optional): `on_data` 콜백으로 받은 프레임입니다.
+- `grid_data` (np.ndarray, optional): 프레임 대신 그릴 2차원 격자입니다.
+- `mode` (str, optional): 아래 VisualOptions 중 하나. `기본 BLUR`
+- `scale` (float, optional): 이미지는 512x512 픽셀 × scale입니다. `기본 1.0`
+- `bbox` (bool, optional): 발마다 방향 상자를 그립니다(왼발 초록, 오른발 자홍).
+- `vmax` (float, optional): 색 지도의 최댓값. 주면 프레임끼리 색을 비교할 수 있고, 없으면 프레임마다 최댓값 기준입니다.
 
 **Returns**:
-- `np.ndarray`: 렌더링된 이미지가 담긴 NumPy 배열입니다.
+- `np.ndarray`: BGR 이미지(uint8). `ALL`이면 이미지 6개의 리스트입니다.
 
 ---
 
 **🖼️ VisualOptions**
 
-VisualOptions 클래스는 FisicaSDK.render()에서 사용할 수 있는 렌더링 모드를 정의합니다.
-
-렌더링 모드:
-- PIXEL: 픽셀 히트맵 렌더링
-- BLUR: 부드러운 히트맵 렌더링
-- BINARY: 바이너리 그리드 렌더링
-- BINARY_NONZERO: 0 값을 제외한 바이너리 그리드 렌더링
-- BBOX: BLUR 및 주성분 분석(PCA) 기반 바운딩 박스 렌더링
-- CONTOUR: 픽셀 기반 윤곽선 렌더링
-- ALL: 모든 렌더링 결과를 리스트 형태로 반환
+- PIXEL: 셀 단위 히트맵
+- BLUR: 부드러운 히트맵(압력이 없는 곳은 검은 배경)
+- BINARY: 셀 값을 숫자로 표시
+- BINARY_NONZERO: 0인 셀을 비운 숫자 표시
+- CONTOUR: 셀 히트맵과 발 윤곽선
+- ALL: [PIXEL, BLUR, BINARY, BINARY_NONZERO, 발 상자를 그린 PIXEL, CONTOUR]
 
 ---
 
-### `run(scale: Optional[float])`
-
-**Description**:  
-실시간 시각화를 위한 GUI 뷰어를 지정한 배율로 실행합니다.
-
-**Parameters**:
-- `scale` (float, optional): GUI 창의 크기 배율입니다. `기본 1.0`
-
-**Returns**:  
-없음
-
----
-
-### `update(image: np.ndarray)`
-
-**Description**:  
-렌더링된 이미지를 GUI 뷰어에 업데이트합니다.
-
-**Parameters**:
-- `image` (np.ndarray): 표시할 렌더링 이미지입니다.
-
-**Returns**:  
-없음
-
----
 ## 📚 API 참조 - 추가 메서드
 
 
@@ -1010,27 +647,31 @@ if devices:
 ## 📄 License
 
 래퍼와 비공개 코어에는 [Fisica Scale SDK License](../LICENSE)를 적용합니다.
-현재 LICENSE는 2026-10-14 정책에 맞춘 Version 2.0이며 법무 검토 전의 검토용 초안입니다
-([검토 자료](license-review.md), [Version 1.0](LICENSE-1.0.txt)). 기존 계약, 이미 제공한 배포본,
+현재 LICENSE는 2026-10-17 정책(기본·전체 모드, SDK 키)에 맞춰 다시 쓴 Version 2.0 검토용 초안이며 법무 검토 전입니다
+([검토 자료](license-review.md), [정책 이력](policy-history.md), [Version 1.0](LICENSE-1.0.txt)). 기존 계약, 이미 제공한 배포본,
 과거 MIT 등으로 제공한 버전의 권리는 자동으로 바뀌지 않습니다.
 
-정책 요약: 기본 SDK 사용권은 정품 장비 구매에 포함되고 날짜 기반 만료가 없습니다. 회사·앱 등록과
-기본 약관 수락 후 일반적인 상업적 앱·서비스에 사용할 수 있습니다. OEM·리브랜딩·SDK 재판매 같은
-예외만 별도 계약이 필요합니다. 래퍼 수정과 자체 앱에 포함한 배포는 허용하며 코어 소스는 배포하지 않습니다.
+정책 요약: 정품 장비 구매에 포함된 기본 사용권은 **기본 모드**이며 날짜 기반 만료가 없고, 상업 사용도 등록 없이
+쓸 수 있습니다. 원본 데이터·매 프레임·전체 보고서 내보내기 같은 **전체 모드**는 개발자 포털에서 받은 SDK 키를
+앱이나 PC에 활성화해야 쓸 수 있습니다(14일 체험, 비상업 무료 연장, 상업 계약). OEM·리브랜딩·SDK 재판매 같은 예외는
+별도 계약이 필요합니다. 래퍼 수정과 자체 앱에 포함한 배포는 허용하며 코어 소스는 배포하지 않고 역설계를 금지합니다.
 이전 버전과 제3자 소프트웨어에 적용된 별도 이용 조건은 유지됩니다.
 
-### 확인 정보(entitlement)
+### 라이선스와 SDK 키
 
 ```python
-sdk.configure_entitlement(file='fisica-entitlement.fse')   # 인터넷이 없는 PC에서도 동작
-print(sdk.entitlement_status())   # 기본 사용권 / 확인 정보 최신성 / 계약 상태
+sdk.configure_entitlement(file='sdk-key.fse', endpoint='https://developer.fisicahealthcare.com')
+print(sdk.entitlement_status())   # mode, reason, features, 키·체험·계약 날짜, 경고
+sdk.activation_code()             # 인터넷이 없는 PC: 포털에 입력할 활성화 코드
+sdk.release_key()                 # 이 앱·PC의 키 해제, 포털에 입력할 해제 코드 반환
 ```
 
-확인 정보가 없거나 오래됐거나 거절·만료·폐기돼도 상태값과 `FisicaEntitlementWarning`만 나오고
-연결·측정·분석은 그대로 동작합니다. `endpoint`를 지정했을 때만 확인 정보를 온라인으로 갱신합니다.
-SDK는 사용 여부·마지막 사용일시·호출 횟수 같은 사용 기록을 수집하거나 보고하지 않습니다(2026-10-14 정책).
-측정 데이터와 보고서를 앱이 자체적으로 저장하는 기능(`export_report` 등)은 이와 별개로 그대로 제공합니다.
-자세한 내용은 [확인 정보 문서](entitlement.md)를 참고하세요.
+키가 없거나, 아직 활성화되지 않았거나, 다른 앱·PC에 활성화됐거나, 기한·체험·계약이 끝났거나, 시계를 1시간 넘게
+되돌리면 **기본 모드**로 동작합니다. 연결·측정·설정·체중·발 길이와 폭은 그대로 쓰고, 프레임은 초당 1장까지 원본 데이터
+없이 오며, 보고서 내보내기는 요약만 담깁니다. 원본 격자를 직접 해석하면 `FisicaLicenseError`가 납니다.
+`endpoint`가 있으면 새 키를 이 앱·PC로 자동 활성화하고 기한 전에 갱신합니다. SDK는 측정 데이터나 사용 여부·사용 시각·
+호출 횟수 같은 사용 기록을 보내지 않습니다. 서버로 가는 것은 활성화 때의 키와 대상(앱 ID 또는 PC 해시), 갱신 때의 키뿐입니다.
+자세한 내용은 [라이선스와 SDK 키](entitlement.md)를 참고하세요.
 
 ## 📞 지원
 

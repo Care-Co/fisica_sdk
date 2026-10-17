@@ -2,12 +2,10 @@ import ctypes as ct
 import hashlib
 import json
 from pathlib import Path
-from queue import Queue
 import numpy as np
 import pytest
 from fisica_sdk import NativeCore
 from fisica_sdk.models import MeasurementFrame
-from fisica_sdk.parser import DataParser
 
 
 @pytest.fixture(scope='session')
@@ -24,9 +22,26 @@ def make_packet(weight=705):
     return bytes(packet)
 
 
-def test_decoded_data_contract(core):
+def split_stream(core, chunks, license):
+    """Feed chunks through the core's framing like a host loop; returns (decoded frames, decoded responses)."""
+    frames, responses, buffer = [], [], bytearray()
+    for chunk in chunks:
+        buffer.extend(chunk)
+        while buffer:
+            consumed, kind, packet = core.next_packet(buffer)
+            if not consumed:
+                break
+            del buffer[:consumed]
+            if kind == 1:
+                frames.append(core.decode_packet(packet, license))
+            elif kind == 2:
+                responses.append(core.decode_response(packet))
+    return frames, responses, buffer
+
+
+def test_decoded_data_contract(core, full_license):
     packet = make_packet()
-    result = core.decode_packet(packet)
+    result = core.decode_packet(packet, full_license)
     assert result.weight == 70.5
     assert result.battery == 99 and not result.battery_valid
     assert np.shape(result.raw_grid) == (29,22)
@@ -36,44 +51,38 @@ def test_decoded_data_contract(core):
     assert result.raw_data == list(packet)
 
 
-def test_legacy_processing_regression_fixtures(core):
+def test_legacy_processing_regression_fixtures(core, full_license):
     fixtures = json.loads((Path(__file__).parent / 'fixtures' / 'legacy-processing.json').read_text())
     for fixture in fixtures:
-        result = core.decode_packet(bytes.fromhex(fixture['packet_hex']))
+        result = core.decode_packet(bytes.fromhex(fixture['packet_hex']), full_license)
         encoded = np.asarray(result.sensor_matrix,dtype='<f8').tobytes()
         assert hashlib.sha256(encoded).hexdigest() == fixture['display_sha256']
         assert result.weight == fixture['weight']
 
 
 @pytest.mark.parametrize('size',[0,1,644,646,10000])
-def test_reject_invalid_packet_length(core,size):
+def test_reject_invalid_packet_length(core,size,full_license):
     with pytest.raises(ValueError):
-        core.decode_packet(bytes(size))
+        core.decode_packet(bytes(size), full_license)
 
 
 @pytest.mark.parametrize('bad',[np.nan,np.inf,-1.0])
-def test_reject_invalid_numeric_values(core,bad):
+def test_reject_invalid_numeric_values(core,bad,full_license):
     grid = np.zeros((29,22))
     grid[0,0] = bad
     with pytest.raises(ValueError):
-        core.preprocess(grid)
+        core.preprocess(grid, full_license)
 
 
 @pytest.mark.parametrize('chunk_size',[1,7,8,20,244,644,645,1300])
-def test_fragmented_and_concatenated_frames_with_responses(core,chunk_size):
+def test_fragmented_and_concatenated_frames_with_responses(core,chunk_size,full_license):
     first, second = make_packet(705), make_packet(719)
     response = bytes.fromhex('242253010000fff0')
     stream = response + first + second + response
-    frames, responses = Queue(), Queue()
-    parser = DataParser(frames,responses)
-    buffer = bytearray()
-    for start in range(0,len(stream),chunk_size):
-        buffer.extend(stream[start:start+chunk_size])
-        parser.process_all_data_by_terminator(buffer)
+    frames, responses, buffer = split_stream(core, [stream[start:start+chunk_size] for start in range(0,len(stream),chunk_size)], full_license)
     assert buffer == b''
-    assert [frames.get().weight for _ in range(frames.qsize())] == [70.5,71.9]
-    assert responses.qsize() == 2
-    assert responses.get()['success']
+    assert [frame.weight for frame in frames] == [70.5,71.9]
+    assert len(responses) == 2 and responses[0]['success']
 
 
 def test_command_bytes_inside_complete_grid_are_not_response(core):
@@ -84,17 +93,12 @@ def test_command_bytes_inside_complete_grid_are_not_response(core):
 
 
 @pytest.mark.parametrize('chunk_size',[1,37,64])
-def test_command_bytes_inside_partial_grid_are_not_response(core,chunk_size):
+def test_command_bytes_inside_partial_grid_are_not_response(core,chunk_size,full_license):
     packet = bytearray(make_packet())
     packet[20:28] = bytes.fromhex('242253010000fff0')
-    frames,responses = Queue(),Queue()
-    parser = DataParser(frames,responses)
-    buffer = bytearray()
-    for start in range(0,len(packet),chunk_size):
-        buffer.extend(packet[start:start+chunk_size])
-        parser.process_all_data_by_terminator(buffer)
-    assert frames.qsize() == 1 and responses.qsize() == 0
-    assert bytes(frames.get().raw_data) == bytes(packet)
+    frames, responses, _ = split_stream(core, [packet[start:start+chunk_size] for start in range(0,len(packet),chunk_size)], full_license)
+    assert len(frames) == 1 and not responses
+    assert bytes(frames[0].raw_data) == bytes(packet)
 
 
 def test_noise_is_bounded_and_partial_frame_preserved(core):
@@ -125,7 +129,7 @@ def test_abi_capacity_guard_preserves_canary(core):
     raw = (ct.c_double*639)(*([42]*639))
     display = (ct.c_double*841)()
     metrics = (ct.c_double*2)()
-    status = core._lib.fisica_core_decode_packet(packet,645,raw,637,display,841,metrics,2)
+    status = core._lib.fisica_core_decode_packet(None,0,packet,645,raw,637,display,841,metrics,2)
     assert status == 2
     assert list(raw) == [42]*639
 
@@ -146,16 +150,15 @@ def test_core_is_required_not_silently_replaced_by_python(tmp_path):
         NativeCore(tmp_path / 'missing.so')
 
 
-def test_packet_analysis_matches_frame_analysis():
+def test_packet_analysis_matches_frame_analysis(full_license):
     """Other languages keep packets only; the result must equal the Python frame path."""
     from fisica_sdk import FisicaError
-    from fisica_sdk.parser import parse_frame_from_chunk
     fixtures = json.loads((Path(__file__).parent / 'fixtures' / 'legacy-processing.json').read_text())
     packets = [bytes.fromhex(f['packet_hex']) for f in fixtures if 'packet_hex' in f]
     synthetic = bytes.fromhex(next(f['packet_hex'] for f in fixtures if f.get('id') == 'synthetic-recorded-layout'))
     core = NativeCore()
     for sequence in ([synthetic] * 12, packets[:1] * 11, packets[:1] * 5 + [synthetic] * 12, packets):
-        frames = [parse_frame_from_chunk(packet.hex()) for packet in sequence]
+        frames = [core.decode_packet(packet, full_license) for packet in sequence]
         assert core.analyze_packets(sequence) == core.analyze(frames)
     assert core.analyze_packets([synthetic] * 12)[0] == 70.5
     with pytest.raises(FisicaError):

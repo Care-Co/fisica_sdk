@@ -10,11 +10,18 @@ The low-level `FisicaSession`, `nextPacket` and `command` APIs remain available.
 import 'package:fisica_core/fisica_core.dart';
 
 final core = FisicaCore.platform();
-final client = FisicaClient(core, selectedTransport);
+// SDK key from the developer portal; without one the SDK runs in basic mode.
+final license = FisicaEntitlement(
+  core,
+  endpoint: 'https://developer.fisicahealthcare.com',
+  storageDirectory: appSupportDirectory, // keeps the activated key
+)..importToken(sdkKey);
+await license.sync(); // activates a new key for this app or PC
+final client = FisicaClient(core, selectedTransport, entitlement: license);
 await client.connect(link: FisicaLink.usb); // or FisicaLink.ble
 await client.start();
 // Collect frames, then await client.stop(); client.report();
-// Always await client.close(), including on errors.
+// Always await client.close(), including on errors; close the license last.
 ```
 
 Use the supplied platform ZIP, which includes Android libraries, Apple XCFrameworks
@@ -27,21 +34,22 @@ Browser/Flutter Web is not supported by this native FFI package.
 checks SDK, core, ABI and wrapper support policy offline before decoding or analysis.
 Supported older versions produce warnings; unsupported versions fail explicitly.
 
-The wrapper and compiled core use the Fisica Scale SDK License Version 2.0, included
-in the wrapper ZIP and core bundle. The base SDK license comes with genuine Fisica
-hardware, has no date-based expiry and covers non-commercial and ordinary commercial
-use. Wrapper modifications and inclusion in your own applications are allowed under
-its terms; OEM supply, rebranding, standalone SDK resale and use with other hardware
-require a separate agreement. Private core sources are never included.
+The wrapper and compiled core use the Fisica Scale SDK License Version 2.0 (draft),
+included in the wrapper ZIP and core bundle. The base SDK license comes with genuine Fisica
+hardware, has no date-based expiry and is basic mode, for any use including commercial;
+full mode needs an SDK key of a trial, extension or contract activated for the app or PC.
+Wrapper modifications and inclusion in your own applications are allowed under its terms;
+OEM supply, rebranding, standalone SDK resale and use with other hardware require a separate
+agreement. Private core sources are never included and may not be reverse engineered.
 `versionInfo` reports release and entitlement
 key information; the binary carries no company or delivery identifier. Native errors retain their numeric `code`. `decodeResponse` exposes
 fixed and variable query payloads without reimplementing the protocol in Dart.
 
 See [native SDK maintenance](../../doc/native-sdk.md) for release/build/security details.
 
-## Platform packages (0.5)
+## Platform packages (0.6)
 
-Use `fisica-flutter-0.5.0-platforms.zip`, not a source checkout. It includes prebuilt
+Use `fisica-flutter-0.6.0-platforms.zip`, not a source checkout. It includes prebuilt
 Android libraries, Apple XCFrameworks and Windows x64/ARM64 DLLs. `FisicaCore.platform()`
 uses the linked process symbols on iOS/macOS and the packaged DLL/.so on Windows/Android.
 The Apple podspec retains C symbols for Dart FFI; no private source build is performed.
@@ -74,20 +82,45 @@ Applications handle platform permissions, identity selection, firmware warnings 
 RECONNECT events. Mobile USB/Wi-Fi are not included. Same-header stale ACKs remain a
 legacy protocol limitation. Android/iOS physical measurements are still unverified.
 
-## Reports, codes and entitlement (0.5)
+## Reports, codes and license modes (0.6)
 
 `FisicaClient` collects decoded frames and `report()` returns weight and foot
-dimensions computed by the shared core from the received packets (29x29 display grid
-and per-frame weight; unrounded). Codes are generated classes such as `FisicaStatus`,
-`FisicaSessionState`, `FisicaSessionEventKind` and `FisicaContract`, and
+dimensions computed by the shared core (29x29 display grid and per-frame weight;
+unrounded). Codes are generated classes such as `FisicaStatus`, `FisicaSessionState`,
+`FisicaSessionEventKind`, `FisicaMode` and `FisicaModeReason`, and
 `FisicaBleProfile.scale` carries the default GATT UUIDs (from the Python SDK, not yet
 confirmed on production firmware) for the BLE plugin your app uses.
 
-`FisicaEntitlement` imports a server-signed token or file and reports three separate
-values (base license, confirmation freshness, contract state) plus warning bits. Pass
-it as `FisicaClient(core, transport, entitlement: ...)` so warnings appear when features are used. It
-never blocks a feature. Pass `storageDirectory` (for example the app support directory)
-to keep the signed token across launches for offline verification. With `endpoint` it
-refreshes the information in the background (`await sync()` to run it now); without an
-endpoint no network is used. A failed exchange only sets `lastSyncError`. The SDK does
-not track its own use; see `doc/entitlement.md`.
+The native core decides between two modes and limits what it hands out itself:
+
+- **Full mode**: an SDK key activated for this app (iOS/macOS bundle ID, Android
+  package name) or this PC (Windows, or a macOS command-line program), within the
+  key's expiry and its trial or contract. Every packet arrives as a frame with the
+  29x22 `rawGrid` and the 645-byte packet (`rawData`); `decodePacket` works.
+- **Basic mode**: everything else (no key, a key not activated yet, activated for
+  another app or PC, expired, released, trial or contract ended, clock set back).
+  Connection, measurement, settings, battery, weight and foot size work; the session
+  hands out at most one frame a second without `rawGrid`/`rawData`, `report()` still
+  analyzes every packet (`FisicaSession.analyze`), and `decodePacket` throws
+  `FisicaLicenseError` (`FisicaStatus.featureNotLicensed`).
+
+`FisicaEntitlement` holds the SDK key. `importToken`/`importFile` take a key from the
+developer portal or a key file it made for a device that is never online (activation
+or renewal file). `status()` returns the mode, the reason for basic mode (`message`
+explains it), the open `FisicaFeature` bits, company, contract, key, the app ID or PC
+hash it is activated for, its dates (`keyUntil`, `fullUntil`, `refreshBy`, contract
+dates) and warning bits; `changes` emits whenever the license changes, and
+`onWarning` gets newly raised warnings. Pass it as
+`FisicaClient(core, transport, entitlement: ...)`: the client applies it to its session
+before every start, every 30 seconds and whenever it changes.
+
+With `endpoint`, a new key is activated for this app or PC in the background (`await
+sync()` waits for it) and renewed before it ends; only the key (as the bearer token)
+and the core's activation request (this app's ID or PC hash) are sent. A failed
+exchange only sets `lastSyncError` and never changes the license; without an endpoint
+no network is used. A key not activated yet shows an activation code
+(`activationCode()`, FAC1) to enter in the developer portal from another device.
+`release()` frees the key on this app or PC and returns the FRC1 code to enter in the
+portal. Pass `storageDirectory` (for example the app support directory) to keep the
+activated key and the latest time seen across launches; a stored key wins over an
+older original key file. The SDK does not track its own use; see `doc/entitlement.md`.

@@ -13,6 +13,7 @@ public enum FisicaStatus: UInt32, CaseIterable {
     case cancelled = 10
     case transportLost = 11
     case incompatibleVersion = 12
+    case featureNotLicensed = 13
 }
 public enum FisicaPacketKind: UInt32, CaseIterable {
     case none = 0
@@ -23,6 +24,9 @@ public enum FisicaLimit: UInt32, CaseIterable {
     case analysisFrames = 19949
     case feedBytes = 65536
     case tokenBytes = 4096
+    case statusFields = 19
+    case basicFrameIntervalMs = 1000
+    case eventBytes = 16384
 }
 public enum FisicaSessionState: UInt32, CaseIterable {
     case disconnected = 0
@@ -67,14 +71,30 @@ public enum FisicaEntitlementOutcome: UInt32, CaseIterable {
     case rejectedFormat = 3
     case rejectedKey = 4
     case rejectedSignature = 5
+    case rejectedTarget = 6
 }
-public enum FisicaBaseLicense: UInt32, CaseIterable {
-    case granted = 1
+public enum FisicaMode: UInt32, CaseIterable {
+    case basic = 1
+    case full = 2
 }
-public enum FisicaVerification: UInt32, CaseIterable {
+public enum FisicaModeReason: UInt32, CaseIterable {
     case none = 0
-    case fresh = 1
-    case refreshDue = 2
+    case noKey = 1
+    case legacyToken = 2
+    case notActivated = 3
+    case noTarget = 4
+    case otherTarget = 5
+    case revoked = 6
+    case clockRollback = 7
+    case keyExpired = 8
+    case notStarted = 9
+    case fullEnded = 10
+}
+public enum FisicaFeature: UInt32, CaseIterable {
+    case rawData = 1
+    case export = 2
+    case advanced = 4
+    case fullRate = 8
 }
 public enum FisicaContract: UInt32, CaseIterable {
     case unverified = 0
@@ -88,26 +108,42 @@ public enum FisicaContractKind: UInt32, CaseIterable {
     case basic = 1
     case special = 2
 }
+public enum FisicaTrack: UInt32, CaseIterable {
+    case none = 0
+    case trial = 1
+    case `extension` = 2
+    case contract = 3
+}
+public enum FisicaBindType: UInt32, CaseIterable {
+    case none = 0
+    case app = 1
+    case pc = 2
+}
 public enum FisicaKeyEnvironment: UInt32, CaseIterable {
     case none = 0
     case production = 1
     case test = 2
 }
 public enum FisicaEntitlementWarning: UInt32, CaseIterable {
-    case unverified = 1
-    case refreshDue = 2
-    case contractEnded = 4
-    case contractRevoked = 8
-    case contractNotStarted = 16
-    case importRejected = 32
-    case testKey = 64
+    case renewDue = 1
+    case grace = 2
+    case fullEnding = 4
+    case importRejected = 8
+    case testKey = 16
 }
 public enum FisicaEntitlementText: UInt32, CaseIterable {
     case company = 1
     case contract = 2
     case grants = 3
-    case keyId = 4
+    case signingKey = 4
     case token = 5
+    case key = 6
+    case bind = 7
+    case target = 8
+    case features = 9
+    case activationRequest = 10
+    case activationCode = 11
+    case stateName = 12
 }
 /// GATT characteristics used by the Scale. `verified` is false until confirmed on production firmware.
 public struct FisicaBleProfile: Equatable {

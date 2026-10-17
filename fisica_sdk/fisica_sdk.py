@@ -1,16 +1,18 @@
 import asyncio
+import logging
 import time
 import threading
+from typing import Optional, Union
 import numpy as np
 
 from .analyzer import analyze as global_analyzer
 from .codes import FisicaLimit
 from .native import get_core
 from .receiver import Receiver
-from .exporter import *
-from .models import *
-from .device import *
-from .utils import *
+from .exporter import export_session_reports_to_json, serialize_session_frame, serialize_session_report
+from .models import MeasurementFrame, MeasurementSession, SessionReport
+from .device import scan
+from .utils import log, resolve_output_path
 
 logger = logging.getLogger(__name__)
 _ANALYSIS_FRAMES = int(FisicaLimit.ANALYSIS_FRAMES)
@@ -38,6 +40,9 @@ class FisicaSDK:
         - get_report(): Retrieve the most recent analysis report.
         - get_all_reports(): Retrieve all previous session reports stored in memory.
         - export_report(report: Optional[Union[SessionReport, list]], output: Optional[str]): Save the current or specified report(s) to a JSON file.
+        - configure_entitlement(token=..., file=..., endpoint=...): Use an SDK key for full mode.
+        - entitlement_status(): Full or basic mode, why, and the key's dates.
+        - activation_code() / release_key(): Offline activation code, and releasing the key on this app or PC.
         - reset_session(): Clear the current session's metadata and frame data.
         - reset_reports(): Clear all stored reports in memory.
         - render(frame: Optional[MeasurementFrame], grid_data: Optional[np.ndarray], mode: Optional[str], scale: Optional[float]): Render a visualization image from raw sensor data.
@@ -76,6 +81,7 @@ class FisicaSDK:
         self._loop_thread = None
         self._reports = []
         self._frames = []
+        self._native_analysis = None  # basic mode: the core's analysis of every packet
         self._counter = 0
         self._debug = debug
         self._last_error = None
@@ -92,32 +98,61 @@ class FisicaSDK:
     Fisica SDK: configure_entitlement
 
         Parameters:
-            token (str): Server-signed entitlement information.
-            file (str): Path of an entitlement file; works on a PC that was never online.
-            endpoint (str): Server URL for online confirmation. No network is used without it.
+            token (str): SDK key from the developer portal.
+            file (str): Path of a key file (an activation or renewal file from the portal works on a PC that is never online).
+            endpoint (str): Server URL for activation and renewal. No network is used without it.
             online (bool): Set False to keep a configured endpoint unused.
 
         Returns:
             dict: Same content as entitlement_status().
 
         Notes:
-            Entitlement information identifies the registered company and contract.
-            It never blocks connection, measurement, analysis or reports; missing,
-            outdated or rejected information only produces a status and a warning.
+            Without an SDK key activated for this app or PC the SDK runs in basic mode:
+            connection, measurement, settings, weight and foot size work; frames come at
+            most once a second without raw data, and report exports hold the summary only.
+            Online, a new key is activated here automatically and renewed before it expires.
         """
         from .entitlement import Entitlement
         previous, self._entitlement = self._entitlement, Entitlement(
             token=token, file=file, endpoint=endpoint, online=online, **options)
         if previous:
             previous.close()
+        self._apply_license()
         return self._entitlement.status()
 
     def entitlement_status(self):
-        """Base license, confirmation freshness and contract state as three separate values."""
+        """Full or basic mode, the reason for basic mode, open features and the key's dates."""
         if self._entitlement:
             return self._entitlement.status()
-        from .entitlement import UNVERIFIED_STATUS
-        return dict(UNVERIFIED_STATUS)
+        from .entitlement import NO_KEY_STATUS
+        return dict(NO_KEY_STATUS)
+
+    def activation_code(self):
+        """Code to enter in the developer portal to activate the loaded key for a device that is never online."""
+        return self._entitlement.activation_code() if self._entitlement else None
+
+    def release_key(self):
+        """Release the SDK key on this app or PC; returns the code to enter in the developer portal."""
+        if not self._entitlement:
+            raise RuntimeError('No SDK key is configured')
+        code = self._entitlement.release()
+        self._apply_license()
+        return code
+
+    def _apply_license(self):
+        receiver = self._receiver
+        if receiver:
+            try:
+                with receiver._condition:
+                    receiver.apply_license()
+            except Exception as error:
+                log.debug(f"License not applied to the session: {error}")
+
+    def _has_feature(self, name):
+        try:
+            return bool(self._entitlement and self._entitlement.has_feature(name))
+        except Exception:
+            return False
 
     def _check_entitlement(self):
         # Status notice only; nothing about the use is recorded. Problems here must never
@@ -129,9 +164,8 @@ class FisicaSDK:
                 self._unverified_notice = True
                 import warnings
                 from .errors import FisicaEntitlementWarning
-                from .entitlement import WARNINGS
-                warnings.warn('Fisica SDK entitlement: ' + WARNINGS[1][1] + ' Local SDK features keep working.',
-                              FisicaEntitlementWarning, stacklevel=3)
+                from .entitlement import REASON_MESSAGES
+                warnings.warn('Fisica SDK license: ' + REASON_MESSAGES['no_key'], FisicaEntitlementWarning, stacklevel=3)
         except Exception as error:
             log.debug(f"Entitlement notice skipped: {error}")
 
@@ -179,6 +213,7 @@ class FisicaSDK:
                 log.debug("Initializing async data receiving loop...")
                 self._start_time = time.time()
                 self._frames.clear()
+                self._native_analysis = None
                 self._receiver.start(duration)
                 self._working = True
             log.info("Measurement started.")
@@ -199,6 +234,9 @@ class FisicaSDK:
         try:
             if self._receiver:
                 self._receiver.stop()
+                # Basic mode hands out one frame a second; the core analyzed every packet.
+                if not self._receiver.full_rate:
+                    self._native_analysis = self._receiver.analyze()
             if self._session:
                 self._session.frames.extend(self._frames)
             log.info("Measurement stopped and session frozen.")
@@ -315,7 +353,8 @@ class FisicaSDK:
             if transport is None and (not hasattr(self, '_available_devices') or not self._available_devices):
                 raise RuntimeError("No devices scanned. Call scan_devices() first.")
 
-            receiver = Receiver(device, self._handle_frame, transport=transport, record_callback=self._record_frame)
+            receiver = Receiver(device, self._handle_frame, transport=transport, record_callback=self._record_frame,
+                                license=lambda: self._entitlement)
             receiver.on_stopped = self._schedule_stop
             receiver.on_error = self._handle_session_error
             receiver.conn()
@@ -556,11 +595,7 @@ class FisicaSDK:
             executed `analyze()`. Note that this function must be called after
             the current session measurement has ended and `analyze()` has been executed.
         """
-        try:
-            if not self._current_report:
-                raise
-            return [serialize_session_report(self._current_report)]
-        except Exception as e:
+        if not self._current_report:
             log.error(
                 "\nFisica SDK\n"
                 "   It seems that analyze has not been run."
@@ -569,6 +604,8 @@ class FisicaSDK:
                 "   For guidance on device scanning and connection, use:\n"
                 "   `print(FisicaSDK.analyze.__doc__)` and `print(FisicaSDK.get_report.__doc__)`.\n"
             )
+            return None
+        return [serialize_session_report(self._current_report, frames=self._has_feature('export'))]
 
 
     def get_all_reports(self):
@@ -579,7 +616,7 @@ class FisicaSDK:
            list: Serialized list of all analyzed SessionReport objects
 
         """
-        return [serialize_session_report(r) for r in self._reports]
+        return [serialize_session_report(r, frames=self._has_feature('export')) for r in self._reports]
 
     def set_zero(self):
         """
@@ -653,7 +690,10 @@ class FisicaSDK:
             If no argument is provided for report exports information from the most recently analyzed SessionReport.
             Calling this method without having performed `analyze()` may result in an error.
             e.g., "output/sample/result" becomes "output/sample/result.json" if result folder doesn't exist.
+            In basic mode the report is exported as its summary (weight, foot size) without frames.
 
+        Returns:
+            str: The path of the written JSON file, or None when there is no report.
         """
         try:
             if report is None:
@@ -668,11 +708,17 @@ class FisicaSDK:
                     )
                     return None
                 else:
-                    report = [serialize_session_report(self._current_report)]
+                    report = [self._current_report]
             elif isinstance(report, SessionReport):
-                report = [serialize_session_report(report)]
-            elif isinstance(report, list) and report and isinstance(report[0], SessionReport):
-                report = [serialize_session_report(r) for r in report]
+                report = [report]
+            # Basic mode exports the summary (weight, foot size); frames need full mode.
+            frames = self._has_feature('export')
+            if not frames:
+                log.info("Basic mode: the exported report holds the summary without frames.")
+            if isinstance(report, list) and report and isinstance(report[0], SessionReport):
+                report = [serialize_session_report(r, frames=frames) for r in report]
+            elif isinstance(report, list) and not frames:
+                report = [{k: v for k, v in r.items() if k != 'total_frame'} if isinstance(r, dict) else r for r in report]
 
             output_path = resolve_output_path(output)
             return export_session_reports_to_json(report, output_path)
@@ -741,7 +787,8 @@ class FisicaSDK:
             log.warning(f"Analyzing the latest {len(analyzed)} of {len(frames)} frames "
                         f"(one analysis accepts at most {_ANALYSIS_FRAMES}).")
 
-        result = global_analyzer(analyzed)
+        result = self._native_analysis if self._native_analysis is not None else global_analyzer(analyzed)
+        self._native_analysis = None
 
         if not result:
             log.warning(
@@ -774,51 +821,35 @@ class FisicaSDK:
         self._session.frames = []
         return self._current_report
 
-    def render(self, frame: Optional[MeasurementFrame] = None, grid_data: Optional[np.ndarray] = None, mode: str = "BLUR", scale: float = 1.0, bbox: bool = False):
+    def render(self, frame: Optional[MeasurementFrame] = None, grid_data: Optional[np.ndarray] = None, mode: str = "BLUR",
+               scale: float = 1.0, bbox: bool = False, vmax: Optional[float] = None):
         """
-    Fisica SDK: render
+    Fisica SDK: render (needs the visualization extra: pip install fisica[visualization])
+
         Parameters:
-            frame (MeasurementFrame): This dataclass is used when measurement data is received through the on_data callback function.
-                                          If you are calling the render function directly, please provide grid_data instead.
-                                          When calling render from within the on_data callback, you can pass the data argument directly.
-                                          For more details, refer to the example below.
-
-            grid_data (str): Hexadecimal string from the sensor (645 bytes). > deprecated
-
-            mode (str): Visualization mode for rendering the sensor data.
-                       Available options: 'ALL', 'PIXEL', 'BLUR', 'BINARY', 'BINARY_NONZERO', 'CONTOUR'.
-                       Default is 'BLUR'. You can also import VisualOptions for these constants.
-
-            scale (float): Scaling factor for the output image. The default resolution is 456x512 pixels,
-                           and the image will be scaled up proportionally.
-
-            bbox (bool): When set to True, bounding boxes will be drawn on the rendered image.
+            frame (MeasurementFrame): A frame from the on_data callback; its sensor_matrix is drawn.
+            grid_data (np.ndarray): A 2D grid to draw instead of a frame, for example a stored sensor_matrix.
+            mode (str): 'PIXEL', 'BLUR', 'BINARY', 'BINARY_NONZERO', 'CONTOUR' or 'ALL' (VisualOptions).
+                        Default 'BLUR'. 'ALL' returns a list of six images (see VisualOptions).
+            scale (float): The image is 512x512 pixels times scale.
+            bbox (bool): Draws each foot's oriented box (left green, right magenta).
+            vmax (float): Value drawn as the top of the colour map, for colours that compare across
+                          frames. Default: each frame's own maximum.
 
         Returns:
-            np.ndarray: It returns image data as a NumPy array.
-                        Implement your own logic using the image data.
+            np.ndarray: BGR image (uint8), or a list of them for 'ALL'.
 
         Notes:
-            If you need to display image data in real time during scale measurement,
-            you can use the built-in visualize function provided by the Fisica SDK.
-            Refer to realtime_monitoring.py in the examples directory.
+            Works in every license mode: sensor_matrix is the display grid, which basic mode
+            hands out at most once a second. Showing the image is up to your application.
         """
-
         if frame is None and grid_data is None:
-            log.error(
-                "\nFisica SDK\n"
-                "   No data was detected.\n"
-                "   Please make sure you have entered valid data.\n"
-                "   If you want to know about the how use render func, please call `print(FisicaSDK.render.__doc__)`.\n"
-                "   If you want to know about the how use receive data from the scale, please call `print(FisicaSDK.__doc__)`.\n\n"
-            )
-            raise ValueError("Check Paramater")
-
-        if frame:
+            raise ValueError('Pass a frame from on_data or a grid_data array')
+        if frame is not None:
             grid_data = np.array(frame.sensor_matrix)
 
         from .visualizer import render as global_render
-        return global_render(grid_data, mode, scale=scale, bbox=bbox)
+        return global_render(grid_data, mode, scale=scale, bbox=bbox, vmax=vmax)
 
     def wait(self):
         """

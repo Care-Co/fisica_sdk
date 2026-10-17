@@ -1,53 +1,103 @@
 Fisica Scale SDK License
-Version 2.0 (draft for review, revised 2026-10-14)
+Version 2.0 (draft for review, revised 2026-10-17)
 
-This version states the product policy of 2026-10-14 and is published for review.
-It has not completed legal review. It does not change any existing agreement,
-any package already delivered under Version 1.0 (doc/LICENSE-1.0.txt), or any
-rights granted under an earlier license such as the MIT License.
+This version states the product policy of 2026-10-17 (SDK keys, basic and full mode) and
+is published for review. It has not completed legal review. The text first published
+under this version number on 2026-10-14 is superseded; doc/policy-history.md records the
+change. This version does not change any existing agreement, any package already delivered
+under Version 1.0 (doc/LICENSE-1.0.txt), or any rights granted under an earlier license
+such as the MIT License.
 
 Copyright (c) 2026 Care&Co. All rights reserved.
 
 1. Scope and definitions
 
-This license applies to the Fisica Scale SDK materials distributed by Care&Co under
-it: public language wrappers, examples, documentation, public C headers and the
-compiled native core.
+This license applies to the Fisica Scale SDK materials distributed by Care&Co under it:
+public language wrappers, examples, documentation, public C headers and the compiled
+native core.
 
 - "Hardware" means a genuine Fisica Scale lawfully obtained from Care&Co or an
   authorized channel.
 - "Public Wrappers" means wrapper source expressly provided by Care&Co.
 - "Native Core" means the compiled implementation and its private source.
-- "Base SDK License" means the grant in section 2.
+- "Developer Portal" means https://developer.fisicahealthcare.com, where Care&Co
+  publishes SDK documentation and the current conditions referred to in this license.
+- "Basic Mode" and "Full Mode" are the two ways the SDK operates (sections 2 and 3).
+- "Trial", "Extension" and "Contract" are the three ways to obtain Full Mode
+  (section 3); together, a "Grant".
+- "SDK Key" means a key signed by Care&Co for one Grant, issued in the Developer Portal.
+  Each SDK Key is one seat.
+- "Target" means what an SDK Key is activated for: one application, identified by its
+  application ID (bundle ID or package name; its debug builds are the same application),
+  or one computer, identified by a hash of its machine identifier.
 - "Separate Agreement" means a written agreement with Care&Co for the matters in
-  section 4.
-- "Entitlement Information" means server-signed information that identifies a
-  registered company and a contract reference.
+  section 6, which may be part of a Contract.
 
-2. Base SDK License (included with the Hardware)
+2. Base SDK License: Basic Mode (included with the Hardware)
 
 Purchase of the Hardware includes a non-exclusive license to use the SDK with that
-Hardware. The Base SDK License has no date-based expiry.
+Hardware in Basic Mode, for any purpose, including commercial applications, services and
+facility measurements and charging your own customers for them. The Base SDK License has
+no date-based expiry and needs no SDK Key, registration or signed agreement.
 
-It covers non-commercial development and research, and ordinary commercial use:
-building and operating your own applications, services and facility measurements
-that use the Hardware, including charging your own customers for them. No SDK fee
-and no signed agreement is required merely because the use is commercial.
+Basic Mode provides connection, measurement, device settings and calibration, weight,
+foot length and width, a real-time preview at a limited frame rate, and report
+summaries. Care&Co does not disable Basic Mode on the basis of registration, SDK Key,
+Grant or contract status.
 
-Connection, measurement, local processing, analysis and reports provided by the SDK
-are not disabled by Care&Co on the basis of registration, verification or contract
-status.
+3. Full Mode
 
-3. Registration for commercial use
+Full Mode adds the features described in the Developer Portal, such as raw packets and
+raw or processed sensor grids, full-rate frames, full report exports and future advanced
+analysis. It is available only while an SDK Key of a valid Grant is activated for the
+Target that uses it, within the key's validity and the Grant's full-mode period.
 
-A company using the SDK commercially registers the company and the application or
-service with Care&Co and accepts these terms. Registration receives a contract
-reference. Registration details are used for support and for administering these
-terms. They are not a unit of runtime tracking.
+- Trial: available once per account, organization, business registration number and
+  Target, after Care&Co approves the request. Its length, seats and features are those
+  approved and shown in the Developer Portal.
+- Extension: free Full Mode for non-commercial education, research or public and
+  non-profit use, granted at Care&Co's discretion for the period, seats and features it
+  approves.
+- Contract: commercial use of Full Mode after a Trial requires a Contract. Its period,
+  seats, features, monthly seat moves, longest key validity, any grace period after its
+  end and any rights under section 6 are those stated in the Contract and the Developer
+  Portal.
 
-4. Matters that need a Separate Agreement
+When a Grant, a key's validity or a grace period ends, or a key is released or
+revoked, the SDK continues in Basic Mode. Ending Full Mode does not end the Base SDK
+License, ownership of the Hardware or the registration of devices, and end users of
+lawfully supplied applications keep Basic Mode.
 
-The Base SDK License does not include, and a Separate Agreement is required for:
+4. SDK Keys and seats
+
+- Each SDK Key is one seat. A Grant has the number of seats Care&Co approved or agreed,
+  and an SDK Key may be created only within them.
+- An SDK Key is activated once for one Target and gives Full Mode only on that Target.
+  An application Target covers every installation of that application; a computer
+  Target covers that computer only.
+- Releasing a key frees its seat when the device lets go of the key, a release code from
+  the device is entered in the Developer Portal, the key's validity ends, or Care&Co
+  releases it. Creating a key in a released seat is a seat move; seat moves are limited
+  per month as stated for the Grant.
+- An application ID may be used under one Contract or Grant at a time. You may not
+  resell, transfer or share an SDK Key, a Target or a Grant, or use an SDK Key for an
+  application or computer it was not activated for, except as a Separate Agreement
+  allows.
+- Keep SDK Keys within your organization and the products that use them. Care&Co may
+  revoke an SDK Key that is used against this license.
+
+5. Registration and requests
+
+A Trial, Extension or Contract is requested in the Developer Portal with the account,
+organization and project details it asks for; commercial requests include the
+applicant's contact details. Care&Co reviews each request and may approve, adjust or
+decline it. Registration details are used for these requests, support and administering
+this license. They are not a unit of runtime tracking.
+
+6. Matters that need a Separate Agreement
+
+The Base SDK License and a Grant do not include, and a Separate Agreement is required
+for:
 
 - selling or distributing the SDK on its own, or reselling the SDK;
 - OEM integration and supply of the Hardware or SDK under another party's product;
@@ -56,81 +106,68 @@ The Base SDK License does not include, and a Separate Agreement is required for:
 - any other exception to these terms.
 
 Paid support, cloud or analysis services are offered, if at all, under their own
-agreements. Scope, term and renewal of a Separate Agreement are stated in that
-agreement and administered by Care&Co; they are not built into the SDK.
+agreements.
 
-5. End of a Separate Agreement
-
-The end of a Separate Agreement ends the special rights and services of that
-agreement. It does not end or convert the Base SDK License, ownership of the
-Hardware or the registration of devices. End users of Hardware and applications that
-were lawfully supplied keep the Base SDK License. Ending new OEM supply or special
-distribution is handled under the agreement. Access to paid server services is
-governed by the terms of those services and is separate from continued local use of
-the SDK.
-
-6. Public Wrappers: modification and redistribution
+7. Public Wrappers: modification and redistribution
 
 Within these terms you may use, copy and modify the Public Wrappers and include them,
 together with the unmodified compiled Native Core, in your own applications and
-products for distribution to your users. Keep this license and the applicable
-copyright and third-party notices, and identify your modifications so they are not
-presented as an unmodified Care&Co release. Your users' rights must be consistent
-with this license. You may not sublicense the SDK on terms that remove these
-conditions.
+products for distribution to your users. Keep this license and the applicable copyright
+and third-party notices, and identify your modifications so they are not presented as
+an unmodified Care&Co release. Your users' rights must be consistent with this license.
+You may not sublicense the SDK on terms that remove these conditions.
 
-7. Native Core and retained rights
+8. Native Core, reverse engineering and retained rights
 
 No Native Core source is provided or licensed for disclosure, modification or
 redistribution. Do not distribute private implementation source, debug symbols or
-internal build materials. Rights not expressly granted are reserved. Nothing here
-restricts rights that cannot lawfully be restricted.
+internal build materials. You may not decompile, disassemble or otherwise reverse
+engineer the Native Core, or modify, bypass or disable how the SDK decides between Basic
+Mode and Full Mode, except to the extent applicable law expressly permits it despite
+this restriction, for example for interoperability. Rights not expressly granted are
+reserved. Nothing here restricts rights that cannot lawfully be restricted.
 
-8. Entitlement Information and local operation
+9. Licensing operation and data
 
-The SDK can check Entitlement Information online or from a file imported on a device
-that has never been online. Missing, outdated, rejected, expired or revoked
-Entitlement Information produces a status and a notice only. It does not block local
-SDK features.
+The Native Core reads the Target itself and decides the mode from the signed SDK Key.
+Online, the SDK activates a new SDK Key and renews it before it expires; a computer that
+is never online uses an activation code and key files from the Developer Portal.
 
-Entitlement Information is confirmed for at most 30 days at a time. An older
-confirmation means the information should be refreshed; it does not mean the Base SDK
-License has expired. A communication failure is not treated as an expiry or a
-revocation. Entitlement Information does not prove that a device is genuine, where
-code came from, or that an agreement is being complied with.
+- Activation sends the SDK Key and the Target (the application ID, or the hash of the
+  computer's machine identifier; the identifier itself is not sent). Renewal sends the
+  SDK Key only.
+- Care&Co stores, for each SDK Key, its Target and the times it was activated, renewed
+  and released, to administer seats and Grants.
+- The device stores the signed SDK Key and the latest time the SDK has seen, so the
+  license can be checked offline and a clock set back can be noticed; a clock set back
+  by more than an hour leads to Basic Mode until it is corrected.
+- A communication failure is not treated as an expiry, a release or a revocation.
+- An SDK Key does not prove that a device is genuine, where code came from, or that an
+  agreement is being complied with.
 
-An online check sends the Entitlement Information to Care&Co and receives a newer
-confirmation. It carries no measurement data and no record of SDK activity. The
-signed Entitlement Information and the time it was confirmed may be stored on the
-device so that it can be verified offline; this is not a record of SDK use.
+10. No SDK usage tracking
 
-9. No SDK usage tracking
-
-The SDK does not collect, retain or report activity records for the purpose of
-letting Care&Co track how the SDK is used. In particular it does not report whether
-the SDK was used, when it was last used, whether it was used after a contract ended
-or was revoked, or how many measurements or API calls were made, and it does not
-track use per application, installation or device.
-
-Information needed for registration, contract administration, online refresh of
-Entitlement Information and offline verification is handled separately, as described
-in sections 3 and 8. A record that Entitlement Information was refreshed is not a
-record of SDK use; it does not show whether the SDK was used or whether an agreement
-was complied with.
+The SDK does not collect, retain or report activity records for the purpose of letting
+Care&Co track how the SDK is used. It sends no measurement data, and does not report
+whether or when the SDK was used, how many measurements or API calls were made, or use
+after a Grant ended. Activation, renewal and release records (section 9) are records of
+the SDK Key and its Target, not of SDK use; renewal does not show whether the SDK was
+used or whether an agreement was complied with, and use without renewal never reaches
+Care&Co.
 
 This license does not restrict an application from storing measurement data and
 reports for its own service.
 
-10. Earlier versions and third-party materials
+11. Earlier versions and third-party materials
 
-Rights granted under an earlier license for an earlier SDK version, including
-versions published under the MIT License, are not restricted retroactively by this
-license. Examples, wrappers, the Native Core and included third-party libraries or
-models are each under the license stated for them; third-party licenses are not
-replaced by this one. The Native Core includes Monocypher (CC0-1.0 or BSD-2-Clause).
-The optional Python GUI extra depends on PyQt5 under its own GPL/commercial terms.
+Rights granted under an earlier license for an earlier SDK version, including versions
+published under the MIT License, are not restricted retroactively by this license.
+Examples, wrappers, the Native Core and included third-party libraries or models are
+each under the license stated for them; third-party licenses are not replaced by this
+one. The Native Core includes Monocypher (CC0-1.0 or BSD-2-Clause). The optional Python
+visualization extra depends on OpenCV and Pillow under their own licenses.
 
-11. Warranty and liability
+12. Warranty and liability
 
 To the extent permitted by applicable law, the SDK is provided "AS IS", without
 warranties of any kind, express or implied, including merchantability, fitness for a
@@ -138,6 +175,6 @@ particular purpose and non-infringement. Care&Co is not liable for indirect,
 incidental, special or consequential damages arising from use of the SDK, except
 where applicable law or a separate written agreement requires otherwise.
 
-12. Contact
+13. Contact
 
-For registration, Separate Agreements or questions: carencoinc@carenco.kr.
+For Grants, Separate Agreements or questions: carencoinc@carenco.kr.

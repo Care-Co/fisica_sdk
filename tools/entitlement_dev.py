@@ -92,9 +92,38 @@ def test_key():
     return key['kid'], bytes.fromhex(key['secret'])
 
 
+def pc_target(machine):
+    """PC hash as the core computes it from the platform's machine id."""
+    return hashlib.sha256(('fisica-pc-v1:' + machine).encode()).hexdigest()
+
+
+def host_machine_id():
+    """The machine id the core hashes for a PC target on this host (independent reimplementation)."""
+    import subprocess
+    import sys
+    if sys.platform == 'darwin':
+        output = subprocess.check_output(['ioreg', '-rd1', '-c', 'IOPlatformExpertDevice'], text=True)
+        return next(line.split('"')[3] for line in output.splitlines() if '"IOPlatformUUID"' in line).upper()
+    if sys.platform == 'win32':
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'SOFTWARE\Microsoft\Cryptography', 0,
+                            winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+            return winreg.QueryValueEx(key, 'MachineGuid')[0].strip()
+    for path in ('/etc/machine-id', '/var/lib/dbus/machine-id'):
+        if Path(path).is_file():
+            return Path(path).read_text().strip()
+    raise RuntimeError('No machine id on this host')
+
+
+def host_pc_vectors(now):
+    """host_vectors() for command-line test programs on this host, which the core binds to the PC."""
+    return host_vectors('pc', pc_target(host_machine_id()), now)
+
+
 def issue_token(company, contract, verified_at, kind='basic', refresh_by=None, contract_start=0,
-                contract_end=0, revoked_at=0, grants='', kid=None, secret=None, version=1):
-    """Sign verification info. Confirmation time and contract dates stay separate fields."""
+                contract_end=0, revoked_at=0, grants='', kid=None, secret=None, version=1, key='', bind_type='',
+                bind='', key_until=0, full_until=0, features='', track=''):
+    """Sign a key. Member order matches the developer portal's signer (app/fse.py)."""
     default_kid, default_secret = test_key()
     payload = {'v': version, 'kid': kid or default_kid, 'company': company, 'contract': contract, 'kind': kind,
                'verified_at': int(verified_at),
@@ -104,6 +133,10 @@ def issue_token(company, contract, verified_at, kind='basic', refresh_by=None, c
             payload[name] = int(value)
     if grants:
         payload['grants'] = grants
+    for name, value in (('key', key), ('bind_type', bind_type), ('bind', bind), ('key_until', key_until),
+                        ('full_until', full_until), ('features', features), ('track', track)):
+        if value:
+            payload[name] = value
     signing_input = ('FSE1.' + _b64(json.dumps(payload, separators=(',', ':')).encode('ascii'))).encode('ascii')
     return signing_input.decode() + '.' + _b64(sign(secret or default_secret, signing_input))
 
@@ -120,15 +153,34 @@ def read_token(token, secret=None):
         return None
 
 
-class MockEntitlementServer:
-    """In-memory reference for the server API contract (doc/entitlement-api.md).
+def host_vectors(target_type, target, now, company='acme', contract='ctr-1', key='key_test_1'):
+    """Keys activated for one target (this host's app or PC), for binding tests.
 
-    Company and contract always come from the verified bearer token, never from the body.
+    Static vectors cannot hold them: the target is read by the core on each host.
+    """
+    seat = dict(key=key, bind_type=target_type, bind=target, track='trial')
+    day = 86400
+    return {
+        'target_type': target_type, 'target': target,
+        'full': issue_token(company, contract, now, key_until=now + 90 * day, full_until=now + 14 * day, **seat),
+        'full_older': issue_token(company, contract, now - day, key_until=now + 89 * day, full_until=now + 14 * day, **seat),
+        'revoked': issue_token(company, contract, now + day, revoked_at=now + day, key_until=now + 91 * day,
+                               full_until=now + 14 * day, **seat),
+        'limited': issue_token(company, contract, now, key_until=now + 90 * day, full_until=now + 14 * day,
+                               features='export', **seat),
+    }
+
+
+class MockEntitlementServer:
+    """In-memory reference for the developer portal's SDK API (activate and refresh).
+
+    Company, contract and key always come from the verified bearer token, never from the body.
     It keeps no usage data: a refresh is not a record of SDK use.
     """
     def __init__(self, clock=time.time):
         self.clock = clock
-        self.contracts = {}   # (company, contract) -> dict(kind, contract_start, contract_end, revoked_at, grants)
+        self.contracts = {}   # (company, contract) -> dict(kind, contract_start, contract_end, revoked_at, grants, ...)
+        self.keys = {}        # key -> dict(company, contract, bind_type, bind, days, released)
         self.fail_requests = 0
         self.requests = []
         self._lock = threading.Lock()
@@ -138,8 +190,20 @@ class MockEntitlementServer:
         self.contracts[(company, contract)] = {'kind': 'basic', 'contract_start': 0, 'contract_end': 0,
                                                'revoked_at': 0, 'grants': '', **fields}
 
-    def issue(self, company, contract):
-        return issue_token(company, contract, int(self.clock()), **self.contracts[(company, contract)])
+    def add_key(self, key, company, contract, days=90, bind_type='', bind=''):
+        self.keys[key] = {'company': company, 'contract': contract, 'days': days, 'bind_type': bind_type,
+                          'bind': bind, 'released': False}
+
+    def issue(self, company, contract, key=None):
+        now = int(self.clock())
+        fields = dict(self.contracts[(company, contract)])
+        if key:
+            seat = self.keys[key]
+            fields.update(key=key, bind_type=seat['bind_type'], bind=seat['bind'],
+                          key_until=now + seat['days'] * 86400 if seat['bind'] and seat['days'] else 0)
+            if seat['released']:
+                fields['revoked_at'] = now
+        return issue_token(company, contract, now, **fields)
 
     def handle(self, path, token, body):
         with self._lock:
@@ -148,14 +212,23 @@ class MockEntitlementServer:
                 self.fail_requests -= 1
                 return 503, {'error': 'unavailable'}
             claims = read_token(token) if token else None
-            key = (claims['company'], claims['contract']) if claims else None
-            if key not in self.contracts:
+            contract = (claims['company'], claims['contract']) if claims else None
+            if contract not in self.contracts or (claims.get('key') and claims['key'] not in self.keys):
                 return 401, {'error': 'invalid_token'}
+            key = claims.get('key')
+            if path == '/sdk/v1/entitlement/activate':
+                if not key or set(body) != {'bind_type', 'bind'}:
+                    return 400, {'error': 'invalid_target'}
+                seat = self.keys[key]
+                if seat['bind'] and (seat['bind_type'], seat['bind']) != (body['bind_type'], body['bind']):
+                    return 409, {'error': 'key_in_use'}
+                seat.update(bind_type=body['bind_type'], bind=body['bind'])
+                return 200, {'token': self.issue(*contract, key)}
             if path != '/sdk/v1/entitlement/refresh':
-                return 404, {'error': 'not_found'}  # Refresh is the only SDK call; there is no usage endpoint.
+                return 404, {'error': 'not_found'}  # There is no usage endpoint.
             if body:
                 return 400, {'error': 'unexpected_body'}  # No activity or device data is accepted.
-            return 200, {'token': self.issue(*key)}
+            return 200, {'token': self.issue(*contract, key)}
 
     def start(self, port=0):
         server = self

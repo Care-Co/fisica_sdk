@@ -65,7 +65,11 @@ class FisicaCommandException(val event: SessionEvent) :
     val deviceCode get() = event.deviceError
 }
 
-/** Result of the shared analysis over the collected frames. Centimetres use the nominal 1 cm cell; not clinically calibrated. */
+/**
+ * Result of the shared analysis of one measurement. Centimetres use the nominal 1 cm cell; not
+ * clinically calibrated. [frames] are the frames handed out (in basic mode at most one a second,
+ * without raw data); the analysis itself covers every packet the Scale sent in basic mode.
+ */
 class SessionReport @JvmOverloads constructor(
     val weight: Double, val leftWidth: Double, val leftLength: Double, val rightWidth: Double,
     val rightLength: Double, val frames: List<Measurement>,
@@ -80,6 +84,12 @@ class SessionReport @JvmOverloads constructor(
  * Connect, measure, stop and report over any transport. Command order, ACK waits, timeouts
  * and recovery decisions live in the shared core; this class only runs the clock, moves
  * bytes and turns core events into callbacks.
+ *
+ * [entitlement] is the license applied to the measurement session (null: basic mode). The
+ * core limits what the session hands out: in basic mode at most one frame a second without
+ * raw data, in full mode every frame (with raw data when the key opens it). The license is
+ * applied before every start, whenever it changes (import, activation, renewal, release)
+ * and every 30 seconds.
  *
  * Work is serialized on an internal thread. Callbacks and completions run on [callbacks]
  * (for example the Android main executor); they receive either an event or an error.
@@ -99,6 +109,8 @@ class FisicaClient(
     /** Battery level in percent from the last [readBattery], or null. Measurement packets carry no battery field. */
     @Volatile var battery: Int? = null; private set
     @Volatile var state = FisicaSessionState.DISCONNECTED; private set
+    /** [FisicaFeature] bits the session opened when the license was last applied; 0 in basic mode. */
+    @Volatile var licenseFeatures = 0; private set
 
     private val worker = Executors.newSingleThreadScheduledExecutor { Thread(it, "fisica-client").apply { isDaemon = true } }
     private val session = FisicaSession(core)
@@ -111,6 +123,12 @@ class FisicaClient(
     private var readyDeadline: ScheduledFuture<*>? = null
     private var linkReady = false
     private var closed = false
+    private var licensed = false
+    private var licenseAt = 0L
+    private var licenseGeneration = 0
+    // True while the current measurement has run at full rate, so the frames hold every packet.
+    @Volatile private var fullRateRun = false
+    @Volatile private var closedAnalysis: DoubleArray? = null
 
     private val now get() = (System.nanoTime() - started) / 1_000_000
     private fun post(block: () -> Unit) { try { callbacks.execute(block) } catch (_: Exception) {} }
@@ -177,7 +195,7 @@ class FisicaClient(
     private fun ready(link: Int) {
         if (closed || linkReady) return
         linkReady = true; readyDeadline?.cancel(false)
-        if (ticker == null) ticker = worker.scheduleWithFixedDelay({ step { session.tick(now) } }, 20, 20, TimeUnit.MILLISECONDS)
+        if (ticker == null) ticker = worker.scheduleWithFixedDelay({ step { session.tick(now); refreshLicense() } }, 20, 20, TimeUnit.MILLISECONDS)
         step { session.action(FisicaSessionAction.CONNECTED, link.toLong(), now) }
     }
     private fun received(bytes: ByteArray) {
@@ -196,6 +214,20 @@ class FisicaClient(
         step { session.action(FisicaSessionAction.LOST, if (sendFailure) 1 else 0, now) }
     }
 
+    /** Copy the license into the session; returns the open [FisicaFeature] bits. */
+    private fun applyLicense(): Int {
+        val open = try { session.license(entitlement, now) } catch (_: Exception) { session.license(null, now); 0 }
+        licenseFeatures = open
+        // Frames missed at the basic rate: the report analyzes every packet in the core instead.
+        if (open and FisicaFeature.FULL_RATE == 0) fullRateRun = false
+        licensed = true; licenseAt = now; licenseGeneration = entitlement?.generation ?: 0
+        return open
+    }
+    /** Picks up imports, activation, renewal, release and the end of full mode. */
+    private fun refreshLicense() {
+        if (!licensed || now - licenseAt >= 30_000 || (entitlement?.generation ?: 0) != licenseGeneration) applyLicense()
+    }
+
     /** Run one core call, then deliver everything it produced. */
     private fun step(call: () -> Unit) {
         if (closed) return
@@ -206,7 +238,7 @@ class FisicaClient(
         when (event.kind) {
             FisicaSessionEvent.TRANSMIT -> transport.send(event.payload)
             FisicaSessionEvent.MEASUREMENT -> {
-                val frame = core.decode(event.payload)
+                val frame = Measurement.fromEvent(event)
                 synchronized(collected) { collected.addLast(frame); trim() }
                 post { onFrame(frame) }
             }
@@ -224,24 +256,31 @@ class FisicaClient(
         post { onEvent(event) }
     }
 
-    private fun request(action: Int, value: Long, waitFor: Int, accepted: () -> Unit = {}, completion: (SessionEvent?, Throwable?) -> Unit) = serial {
+    private fun request(action: Int, value: Long, waitFor: Int, before: () -> Unit = {}, accepted: () -> Unit = {},
+                        completion: (SessionEvent?, Throwable?) -> Unit) = serial {
         if (closed || waiters.containsKey(waitFor)) {
             post { completion(null, FisicaException(FisicaStatus.BUSY, "Another operation is pending")) }; return@serial
         }
         waiters[waitFor] = completion
-        try { session.action(action, value, now); accepted(); session.drain().forEach(::deliver) }
+        try { before(); session.action(action, value, now); accepted(); session.drain().forEach(::deliver) }
         catch (error: Throwable) { finish(waitFor, null, error) }
     }
     /**
      * Start measuring; null [durationMs] measures until [stop]. Completes when the Scale confirmed the start.
-     * Frames of the previous measurement are cleared once the core accepts the start.
+     * The current license is applied first. Frames of the previous measurement are cleared once the core
+     * accepts the start.
      */
     @JvmOverloads
     fun start(durationMs: Long? = null, completion: (SessionEvent?, Throwable?) -> Unit) {
         entitlement?.checkStatus()
-        request(FisicaSessionAction.START, durationMs ?: -1, FisicaSessionOperation.BEGIN, ::clearFrames, completion)
+        var open = 0
+        request(FisicaSessionAction.START, durationMs ?: -1, FisicaSessionOperation.BEGIN, before = { open = applyLicense() }, accepted = {
+            clearFrames(); closedAnalysis = null
+            fullRateRun = open and FisicaFeature.FULL_RATE != 0
+        }, completion = completion)
     }
-    fun stop(completion: (SessionEvent?, Throwable?) -> Unit) = request(FisicaSessionAction.STOP, 0, FisicaSessionOperation.END, completion = completion)
+    fun stop(completion: (SessionEvent?, Throwable?) -> Unit) =
+        request(FisicaSessionAction.STOP, 0, FisicaSessionOperation.END, before = { applyLicense() }, completion = completion)
 
     /**
      * Ask the Scale for its battery level (GET_BATTERY_LEVEL), idle or during a measurement, without
@@ -282,18 +321,31 @@ class FisicaClient(
         closed = true; linkReady = false
         ticker?.cancel(false); readyDeadline?.cancel(false)
         transport.onReady = {}; transport.onBytes = {}; transport.onLost = {}; transport.onSendFailure = {}; transport.onError = {}
+        // Keep the core's analysis of every packet for report() once the session is gone.
+        if (!fullRateRun) closedAnalysis = try { session.analyze() } catch (_: Exception) { null }
         transport.close(); session.close()
         val pending = ArrayList(waiters.values); waiters.clear()
         pending.forEach { post { it(null, FisicaException(FisicaStatus.CANCELLED, "Client closed")) } }
         worker.shutdown()
     }
 
-    /** Analyze the frames collected so far; null without a stable measurement. */
+    /**
+     * Weight and foot size of the current measurement; null without a stable measurement. A
+     * measurement at full rate analyzes the collected [frames]; otherwise (basic mode) the core
+     * analyzes every packet it received since the start, so the result has the same quality.
+     */
     fun report(): SessionReport? {
         val snapshot = frames
         if (snapshot.isEmpty()) return null
         entitlement?.checkStatus()
-        val result = core.analyzePackets(snapshot.map { it.packet }) ?: return null
+        val result = (if (fullRateRun) analyzeFrames(snapshot) else sessionAnalysis()) ?: return null
         return SessionReport(result[0], result[1], result[2], result[3], result[4], snapshot, battery)
     }
+    private fun analyzeFrames(frames: List<Measurement>): DoubleArray? {
+        val cells = 841
+        val matrices = DoubleArray(frames.size * cells)
+        frames.forEachIndexed { index, frame -> frame.display.copyInto(matrices, index * cells) }
+        return core.analyze(matrices, DoubleArray(frames.size) { frames[it].weight }, 29, 29)
+    }
+    private fun sessionAnalysis(): DoubleArray? = try { session.analyze() } catch (_: IllegalStateException) { closedAnalysis }
 }

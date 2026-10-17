@@ -4,16 +4,19 @@ from functools import lru_cache
 import json
 from pathlib import Path
 import sys
+import time
 import numpy as np
 from .models import DecodedMeasurement
 from .versions import CoreCompatibilityError, check_compatibility, local_release
-from .errors import FisicaArgumentError, FisicaBufferError, FisicaRuntimeError
+from .errors import FisicaArgumentError, FisicaBufferError, FisicaLicenseError, FisicaRuntimeError
 
 U8P = ct.POINTER(ct.c_uint8)
 U32P = ct.POINTER(ct.c_uint32)
 I32P = ct.POINTER(ct.c_int32)
 DOUBLEP = ct.POINTER(ct.c_double)
 U32 = ct.c_uint32
+U64 = ct.c_uint64
+EVENT_BYTES = 16384
 
 
 def _byte_array(data):
@@ -30,6 +33,13 @@ def _grid(data):
 
 def _ptr(data):
     return data.ctypes.data_as(DOUBLEP)
+
+
+def _license(license, now_s):
+    """Handle and wall-clock seconds for the calls that need full mode; no license is basic mode."""
+    if license is None:
+        return None, 0
+    return license._handle, license._time(now_s)
 
 
 class NativeCore:
@@ -70,9 +80,9 @@ class NativeCore:
 
     def _bind(self):
         signatures = {
-            'decode_packet': [U8P,U32,DOUBLEP,U32,DOUBLEP,U32,DOUBLEP,U32],
-            'preprocess': [DOUBLEP,U32,U32,DOUBLEP,U32],
-            'display_grid': [DOUBLEP,U32,DOUBLEP,U32],
+            'decode_packet': [ct.c_void_p,U64,U8P,U32,DOUBLEP,U32,DOUBLEP,U32,DOUBLEP,U32],
+            'preprocess': [ct.c_void_p,U64,DOUBLEP,U32,U32,DOUBLEP,U32],
+            'display_grid': [ct.c_void_p,U64,DOUBLEP,U32,DOUBLEP,U32],
             'next_packet': [U8P,U32,U32P,U32P,U8P,U32,U32P],
             'decode_response': [U8P,U32,I32P,U32],
             'response_payload': [U8P,U32,U8P,U32,U32P],
@@ -93,13 +103,14 @@ class NativeCore:
             'feed': [ct.c_void_p,U8P,U32,ct.c_uint64],
             'tick': [ct.c_void_p,ct.c_uint64],
             'poll': [ct.c_void_p,U32P,U32,U8P,U32],
+            'license': [ct.c_void_p,ct.c_void_p,ct.c_uint64,ct.c_uint64],
+            'analyze': [ct.c_void_p,DOUBLEP,U32],
         }
         for name, arguments in session_signatures.items():
             function = getattr(self._lib, 'fisica_core_session_' + name)
             function.argtypes, function.restype = arguments, ct.c_int32
         self._lib.fisica_core_session_destroy.argtypes = [ct.c_void_p]
         self._lib.fisica_core_session_destroy.restype = None
-        U64 = ct.c_uint64
         entitlement_signatures = {
             'create': [ct.POINTER(ct.c_void_p)],
             'import': [ct.c_void_p,U8P,U32,U64,U32P],
@@ -107,6 +118,7 @@ class NativeCore:
             'text': [ct.c_void_p,U32,U8P,U32,U32P],
             'export': [ct.c_void_p,U8P,U32,U32P],
             'restore': [ct.c_void_p,U8P,U32],
+            'release': [ct.c_void_p,U8P,U32,U32P],
         }
         for name, arguments in entitlement_signatures.items():
             function = getattr(self._lib, 'fisica_core_entitlement_' + name)
@@ -124,6 +136,8 @@ class NativeCore:
             raise FisicaArgumentError(status, message)
         if status == 2:
             raise FisicaBufferError(status, message)
+        if status == 13:
+            raise FisicaLicenseError(status, message)
         raise FisicaRuntimeError(status, message)
 
     def version_info(self):
@@ -136,11 +150,12 @@ class NativeCore:
             'entitlement': dict(self.policy.get('entitlement', {})),
         }
 
-    def decode_packet(self, packet):
+    def decode_packet(self, packet, license=None, now_s=None):
+        """Raw and display grids of one packet. Needs full mode with raw data (a NativeEntitlement)."""
         data = _byte_array(packet)
         raw, display, metrics = np.empty(638), np.empty(841), np.empty(2)
         self._check(self._lib.fisica_core_decode_packet(
-            data,len(data),_ptr(raw),raw.size,_ptr(display),display.size,_ptr(metrics),metrics.size,
+            *_license(license, now_s),data,len(data),_ptr(raw),raw.size,_ptr(display),display.size,_ptr(metrics),metrics.size,
         ))
         return DecodedMeasurement(
             raw_grid=raw.reshape(29,22).tolist(), sensor_matrix=display.reshape(29,29).tolist(),
@@ -148,18 +163,18 @@ class NativeCore:
             core_version=self.core_version, schema_version=self.policy['result_schema_version'],
         )
 
-    def preprocess(self, grid):
+    def preprocess(self, grid, license=None, now_s=None):
         data = _grid(grid)
         output = np.empty_like(data)
-        self._check(self._lib.fisica_core_preprocess(_ptr(data),*data.shape,_ptr(output),output.size))
+        self._check(self._lib.fisica_core_preprocess(*_license(license, now_s),_ptr(data),*data.shape,_ptr(output),output.size))
         return output
 
-    def display_grid(self, grid, gap_cols=7):
+    def display_grid(self, grid, gap_cols=7, license=None, now_s=None):
         data = _grid(grid)
         if data.shape != (29,22) or not isinstance(gap_cols,int) or not 0 <= gap_cols <= 1024:
             raise FisicaArgumentError(1, 'Expected a 29x22 grid and gap_cols between 0 and 1024')
         output = np.empty((29,22+gap_cols))
-        self._check(self._lib.fisica_core_display_grid(_ptr(data),gap_cols,_ptr(output),output.size))
+        self._check(self._lib.fisica_core_display_grid(*_license(license, now_s),_ptr(data),gap_cols,_ptr(output),output.size))
         return output
 
     def next_packet(self, buffer):
@@ -275,7 +290,6 @@ class NativeSession:
         if not self._handle.value:
             raise FisicaRuntimeError(6, 'Session is closed')
         if now_ms is None:
-            import time
             now_ms = time.monotonic_ns() // 1000000
         if not isinstance(now_ms, int) or not 0 <= now_ms <= (1 << 63)-1:
             raise FisicaArgumentError(1, 'Expected nonnegative monotonic milliseconds')
@@ -301,8 +315,10 @@ class NativeSession:
         self.core._check(self.core._lib.fisica_core_session_tick(self._handle,self._time(now_ms)))
 
     def poll(self):
+        """Next event, or None. A MEASUREMENT event also carries weight, sensor_matrix (29x29) and,
+        only when the license opens raw data, raw_grid (29x22) and packet (645 bytes)."""
         self._time(None)
-        meta, payload = (U32 * 8)(), (ct.c_uint8 * 4102)()
+        meta, payload = (U32 * 8)(), (ct.c_uint8 * EVENT_BYTES)()
         status = self.core._lib.fisica_core_session_poll(self._handle,meta,8,payload,len(payload))
         if status == 3:
             return None
@@ -310,7 +326,27 @@ class NativeSession:
         event = dict(zip(('kind','state','status','device_error','operation','header','type','length'),meta))
         event['payload'] = bytes(payload[:event['length']])
         self.state = event['state']
+        if event['kind'] == 4:
+            event.update(measurement_payload(event['payload']))
         return event
+
+    def license(self, entitlement, now_s=None, now_ms=None):
+        """Copy the license decision of a NativeEntitlement (None: basic mode) into this session."""
+        if entitlement is None:
+            handle, seconds = None, int(time.time()) if now_s is None else now_s
+        else:
+            handle, seconds = _license(entitlement, now_s)
+        self.core._check(self.core._lib.fisica_core_session_license(self._handle,handle,seconds,self._time(now_ms)))
+
+    def analyze(self):
+        """Weight and foot size from every packet since the last start, in any mode; None if unstable."""
+        self._time(None)
+        output = np.empty(5)
+        status = self.core._lib.fisica_core_session_analyze(self._handle,_ptr(output),output.size)
+        if status == 3:
+            return None
+        self.core._check(status)
+        return tuple(output.tolist())
 
     def events(self):
         while True:
@@ -320,14 +356,27 @@ class NativeSession:
             yield event
 
 
-class NativeEntitlement:
-    """Owned C ABI entitlement context. Serialize calls; wall-clock seconds are a host input.
+def measurement_payload(payload):
+    """Fields of an ABI 2 MEASUREMENT payload (see the C header)."""
+    values = np.frombuffer(payload, dtype='<f8', count=842)
+    result = {'weight': float(values[0]), 'sensor_matrix': values[1:].reshape(29,29).copy(), 'raw_grid': None, 'packet': None}
+    if len(payload) >= 8 * (842 + 638) + 645:
+        result['raw_grid'] = np.frombuffer(payload, dtype='<f8', count=638, offset=8 * 842).reshape(29,22).copy()
+        result['packet'] = payload[8 * (842 + 638):8 * (842 + 638) + 645]
+    return result
 
-    Status and warnings only: nothing here enables or disables SDK features, and
-    no record of SDK use is kept. close() only frees memory.
+
+class NativeEntitlement:
+    """Owned C ABI license context. Serialize calls; wall-clock seconds are a host input.
+
+    The core decides full or basic mode from the signed key and the app ID or PC hash it
+    reads itself. No record of SDK use is kept. close() only frees memory.
     """
-    STATUS_FIELDS = ('base_license','verification','contract_state','contract_kind','verified_at','refresh_by',
-                     'contract_start','contract_end','revoked_at','last_import','key_environment','warning_bits')
+    STATUS_FIELDS = ('mode','reason','features','contract_state','contract_kind','track','bind_type','target_type',
+                     'verified_at','refresh_by','key_until','full_until','contract_start','contract_end','revoked_at',
+                     'last_import','key_environment','warning_bits','latest_time')
+    TEXT_FIELDS = {'company': 1, 'contract': 2, 'grants': 3, 'signing_key': 4, 'key': 6, 'bind': 7,
+                   'target': 8, 'features_text': 9}
 
     def __init__(self, core=None):
         self.core = core or get_core()
@@ -353,7 +402,6 @@ class NativeEntitlement:
         if not self._handle.value:
             raise FisicaRuntimeError(6, 'Entitlement context is closed')
         if now_s is None:
-            import time
             now_s = int(time.time())
         if not isinstance(now_s, int) or not 0 <= now_s <= 1 << 53:
             raise FisicaArgumentError(1, 'Expected Unix seconds')
@@ -372,14 +420,43 @@ class NativeEntitlement:
         return bytes(output[:length.value]).decode('utf-8')
 
     def status(self, now_s=None):
-        values = (ct.c_uint64 * 12)()
-        self.core._check(self.core._lib.fisica_core_entitlement_status(self._handle,self._time(now_s),values,12))
+        values = (ct.c_uint64 * len(self.STATUS_FIELDS))()
+        self.core._check(self.core._lib.fisica_core_entitlement_status(self._handle,self._time(now_s),values,len(values)))
         status = dict(zip(self.STATUS_FIELDS, values))
-        status.update(company=self._text(1), contract=self._text(2), grants=self._text(3), key_id=self._text(4))
+        status.update({name: self._text(field) for name, field in self.TEXT_FIELDS.items()})
         return status
 
     def token(self):
         return self._text(5)
+
+    def state_name(self):
+        """File name for the stored state of this seat (company, contract and this app or PC); '' without a key."""
+        return self._text(12)
+
+    def activation_request(self):
+        """JSON body for POST /sdk/v1/entitlement/activate, or None when the core cannot read a target."""
+        try:
+            return self._text(10)
+        except FisicaRuntimeError as error:
+            if error.code == 6:
+                return None
+            raise
+
+    def activation_code(self):
+        """FAC1 code to activate the loaded key on another device, or None without an unactivated key."""
+        try:
+            return self._text(11)
+        except FisicaRuntimeError as error:
+            if error.code == 6:
+                return None
+            raise
+
+    def release(self):
+        """Forget the key activated here and return its FRC1 release code for the developer portal."""
+        self._time(0)
+        output, length = (ct.c_uint8 * 1024)(), U32()
+        self.core._check(self.core._lib.fisica_core_entitlement_release(self._handle,output,len(output),ct.byref(length)))
+        return bytes(output[:length.value]).decode('ascii')
 
     def export_state(self):
         self._time(0)

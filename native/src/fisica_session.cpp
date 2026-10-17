@@ -1,4 +1,5 @@
 #include "fisica_core.h"
+#include "fisica_license.h"
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -11,6 +12,11 @@ namespace {
 struct Event { std::array<uint32_t,8> meta; std::vector<uint8_t> bytes; };
 enum Phase { NONE, PROBE, MODE, BEGIN, END, RELEASE, COMMAND };
 constexpr uint64_t ack_timeout = 2000;
+constexpr uint64_t max_license_seconds = 10ull * 366 * 24 * 3600;
+void put_double(std::vector<uint8_t>& out, double value) {
+    uint64_t bits; std::memcpy(&bits,&value,sizeof bits);
+    for (int i=0;i<8;++i) out.push_back(uint8_t(bits>>(8*i)));
+}
 }
 
 struct FisicaSession {
@@ -22,15 +28,42 @@ struct FisicaSession {
     int64_t duration = -1;
     std::vector<uint8_t> pending, input;
     std::deque<Event> events;
+    // License copied from an entitlement context: full mode until full_until_ms (monotonic).
+    bool full = false;
+    uint32_t features = 0;
+    uint64_t full_until_ms = 0, last_frame_ms = 0;
+    bool framed = false;
+    // Every measurement packet since START, for analysis in any mode.
+    std::deque<std::vector<uint8_t>> received;
 
     void emit(uint32_t kind, uint32_t status=0, uint32_t error=0,
               uint32_t operation=0, const std::vector<uint8_t>& bytes={}) {
         if (events.size() >= 1024) throw std::overflow_error("Drain session events");
-        uint32_t header = bytes.size() >= 3 ? bytes[1] : 0;
-        uint32_t type = bytes.size() >= 3 ? bytes[2] : 0;
+        const bool packet = kind != FISICA_MEASUREMENT && bytes.size() >= 3;
+        uint32_t header = packet ? bytes[1] : 0;
+        uint32_t type = packet ? bytes[2] : 0;
         events.push_back({{kind,state,status,error,operation,header,type,uint32_t(bytes.size())},bytes});
     }
     void transition(uint32_t next) { if (state!=next) { state=next; emit(FISICA_STATE); } }
+    uint32_t open_features() const { return full && now<full_until_ms ? features : 0; }
+    // Basic mode hands out display grids at a limited rate and never the packet itself.
+    void measurement(const std::vector<uint8_t>& packet) {
+        if (received.size()>=FISICA_LIMIT_ANALYSIS_FRAMES) received.pop_front();
+        received.push_back(packet);
+        const uint32_t open=open_features();
+        if (!(open & FISICA_FEATURE_FULL_RATE) && framed && now-last_frame_ms<FISICA_LIMIT_BASIC_FRAME_INTERVAL_MS) return;
+        framed=true; last_frame_ms=now;
+        std::array<double,fisica::raw_cells> raw{}; std::array<double,fisica::display_cells> display{}; std::array<double,2> metrics{};
+        fisica::decode_measurement(packet.data(),raw.data(),display.data(),metrics.data());
+        std::vector<uint8_t> payload; payload.reserve(8*(1+fisica::display_cells+fisica::raw_cells)+fisica::packet_size);
+        put_double(payload,metrics[0]);
+        for (double cell:display) put_double(payload,cell);
+        if (open & FISICA_FEATURE_RAW_DATA) {
+            for (double cell:raw) put_double(payload,cell);
+            payload.insert(payload.end(),packet.begin(),packet.end());
+        }
+        emit(FISICA_MEASUREMENT,0,0,0,payload);
+    }
     uint32_t operation() const {
         switch (phase) {
         case PROBE: return FISICA_PROBE;
@@ -186,7 +219,8 @@ int32_t fisica_core_session_action(FisicaSession *s,uint32_t action,int64_t valu
         case FISICA_START:
             if (s->phase!=NONE) return FISICA_BUSY;
             if (s->state!=FISICA_IDLE) return FISICA_INVALID_STATE;
-            s->desired=true; s->stop_requested=false; s->duration=value; s->timer_active=false; s->measurement_deadline=0; s->begin();
+            s->desired=true; s->stop_requested=false; s->duration=value; s->timer_active=false; s->measurement_deadline=0;
+            s->received.clear(); s->framed=false; s->begin();
             break;
         case FISICA_STOP:
         case FISICA_DISCONNECT:
@@ -255,7 +289,7 @@ int32_t fisica_core_session_feed(FisicaSession *s,const uint8_t *bytes,uint32_t 
                 std::vector<uint8_t> data(packet.begin(),packet.begin()+size);
                 if (kind==FISICA_PACKET_RESPONSE) s->response(data);
                 if (kind==FISICA_PACKET_MEASUREMENT && (s->state==FISICA_MEASURING || s->state==FISICA_STOPPING))
-                    s->emit(FISICA_MEASUREMENT,0,0,0,data);
+                    s->measurement(data);
             }
         }
         return FISICA_OK;
@@ -271,5 +305,26 @@ int32_t fisica_core_session_poll(FisicaSession *s,uint32_t *event,uint32_t event
     if (!next.bytes.empty() && !payload) return FISICA_INVALID_ARGUMENT;
     if (!next.bytes.empty()) std::copy(next.bytes.begin(),next.bytes.end(),payload);
     s->events.pop_front(); return FISICA_OK;
+}
+int32_t fisica_core_session_license(FisicaSession *s,FisicaEntitlement *license,uint64_t now_s,uint64_t now_ms) {
+    return protect(s,[&]() -> int32_t {
+        if (now_s>(1ull<<53)) return FISICA_INVALID_ARGUMENT;
+        auto status=s->advance(now_ms); if (status) return status;
+        const FisicaLicenseView view=fisica_license_view(license,now_s);
+        s->full=view.mode==FISICA_MODE_FULL && view.until>now_s;
+        s->features=s->full ? view.features : 0;
+        s->full_until_ms=s->full ? s->now+std::min(view.until-now_s,max_license_seconds)*1000 : 0;
+        return FISICA_OK;
+    });
+}
+int32_t fisica_core_session_analyze(FisicaSession *s,double *result,uint32_t capacity) {
+    return protect(s,[&]() -> int32_t {
+        if (!result) return FISICA_INVALID_ARGUMENT;
+        if (capacity<5) return FISICA_BUFFER_TOO_SMALL;
+        if (s->received.empty()) return FISICA_NO_RESULT;
+        std::vector<uint8_t> packets; packets.reserve(s->received.size()*fisica::packet_size);
+        for (const auto& packet:s->received) packets.insert(packets.end(),packet.begin(),packet.end());
+        return fisica_core_analyze_packets(packets.data(),uint32_t(s->received.size()),result,capacity);
+    });
 }
 }

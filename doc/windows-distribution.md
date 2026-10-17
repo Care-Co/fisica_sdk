@@ -23,8 +23,8 @@ py -3.11 -c "from fisica_sdk import NativeCore; print(NativeCore().version_info(
 ```
 
 Verify that Python reports 64-bit (`struct.calcsize('P') == 8`). Compiler tools and
-core sources are not required on the customer's computer. GUI rendering is
-optional via `fisica[gui]` or `fisica[visualization]`. Actual USB serial drivers,
+core sources are not required on the customer's computer. Image rendering is
+optional via `fisica[visualization]`. Actual USB serial drivers,
 Bluetooth availability and Scale connectivity still need device integration QA.
 Serial-port enumeration and Bluetooth backends are loaded only when discovery or
 Bluetooth connection is requested, so SDK initialization/offline analysis does not
@@ -98,8 +98,7 @@ Windows after packaging to confirm runtime compatibility and versions.
 Public wrappers and private compiled core use the Fisica Scale SDK License. The
 wheel uses `License-Expression: LicenseRef-Fisica-Scale-SDK` and includes the license;
 core and Flutter ZIPs also include it. The packaged text is Version 2.0, written to the
-policy of 2026-10-14 and marked as a draft for review ([review notes](license-review.md)). Third-party libraries retain their own licenses; PyQt5 GUI redistribution
-must meet its separate GPL/commercial conditions.
+policy of 2026-10-17 and marked as a draft for review ([review notes](license-review.md)). Third-party libraries retain their own licenses.
 
 ```sh
 python tools/build_release.py --validation --output release
@@ -149,13 +148,13 @@ On an online Windows preparation machine of the same architecture/Python version
 prepare binary dependencies for an offline installation:
 
 ```powershell
-py -3.11 -m pip download --only-binary=:all: --dest wheelhouse '.\fisica-2.2.0-py3-none-win_amd64.whl[gui]'
+py -3.11 -m pip download --only-binary=:all: --dest wheelhouse '.\fisica-3.0.0-py3-none-win_amd64.whl[visualization]'
 # Copy wheelhouse to the offline machine.
-py -3.11 -m pip install --no-index --find-links wheelhouse 'fisica[gui]==2.2.0'
+py -3.11 -m pip install --no-index --find-links wheelhouse 'fisica[visualization]==3.0.0'
 ```
 
-This includes optional GPL PyQt wheels; prepare an appropriately licensed GUI runtime
-for proprietary redistribution. Default SDK usage does not require GUI extras.
+Default SDK usage does not require the visualization extra. The SDK has no GUI of its own
+since 3.0.0; applications show the rendered images themselves.
 
 ## Verification status
 

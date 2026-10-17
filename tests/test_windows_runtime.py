@@ -1,6 +1,7 @@
 """Windows transport regressions exercised without hardware on any host."""
 import json
 import time
+import warnings
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,15 @@ from fisica_sdk import port_scanner
 
 FIXTURES = Path(__file__).parent / 'fixtures'
 
+
+def licensed_sdk():
+    """An SDK in full mode (test key for this PC): these tests check every frame and raw data."""
+    from tests.conftest import full_key
+    sdk = FisicaSDK()
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        sdk.configure_entitlement(token=full_key(), storage=None)
+    return sdk
 
 def protocol():
     return json.loads((FIXTURES / 'protocol.json').read_text())
@@ -207,7 +217,7 @@ def test_battery_is_read_from_the_scale_and_carried_into_reports(tmp_path):
     battery = core.command('GET_BATTERY_LEVEL')
     transport.exchanges[battery] = [bytes.fromhex('243147010050fff0')]  # 0x50 = 80 %
     transport.exchanges[core.command('START_CONTINUOUS_MEASUREMENT')] = [bytes.fromhex('245153010000fff0') + packet() * 12]
-    sdk = FisicaSDK()
+    sdk = licensed_sdk()
     try:
         with pytest.warns(FisicaFirmwareWarning):
             sdk.connect({'id': 'mock', 'type': 'Serial'}, transport=transport)
@@ -256,7 +266,7 @@ def test_public_sdk_measurement_reports_preserve_raw_data_and_validity(tmp_path)
     core = NativeCore()
     transport = firmware_transport(core)
     transport.exchanges[core.command('START_CONTINUOUS_MEASUREMENT')] = [bytes.fromhex('245153010000fff0') + packet() * 12]
-    sdk = FisicaSDK()
+    sdk = licensed_sdk()
     try:
         with pytest.warns(FisicaFirmwareWarning):
             sdk.connect({'id': 'mock', 'type': 'Serial'}, transport=transport)
@@ -382,7 +392,7 @@ def test_disconnect_during_measurement_uses_core_stop_and_release():
     core=NativeCore()
     transport=firmware_transport(core)
     transport.exchanges[core.command('START_CONTINUOUS_MEASUREMENT')][0]+=packet()*3
-    sdk=FisicaSDK()
+    sdk = licensed_sdk()
     with pytest.warns(FisicaFirmwareWarning):
         sdk.connect({'id':'mock','type':'Serial'},transport=transport)
     sdk.start_measurement()
@@ -400,7 +410,7 @@ def test_slow_app_callback_cannot_drop_recorded_frames_when_stopped():
     core=NativeCore()
     transport=firmware_transport(core)
     transport.exchanges[core.command('START_CONTINUOUS_MEASUREMENT')][0]+=packet()*12
-    sdk=FisicaSDK()
+    sdk = licensed_sdk()
     entered, release=threading.Event(), threading.Event()
     def callback(frame):
         entered.set()
