@@ -113,7 +113,7 @@ Windows after packaging to confirm runtime compatibility and versions.
 Public wrappers and private compiled core use the Fisica Scale SDK License. The
 wheel uses `License-Expression: LicenseRef-Fisica-Scale-SDK` and includes the license;
 core and Flutter ZIPs also include it. The packaged text is Version 2.0, written to the
-policy of 2026-10-17 in Korean with an English translation, and marked as a draft for review ([review notes](license-review.md)). Third-party libraries retain their own licenses.
+policy of 2026-10-17 in Korean with an English translation ([review notes](license-review.md)). Third-party libraries retain their own licenses.
 
 ```sh
 python tools/build_release.py --validation --output release
