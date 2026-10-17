@@ -8,6 +8,10 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:fisica_flutter/fisica_flutter.dart';
 
+// The same steps as every partner sample: SDK and core version, the license,
+// pick a Scale (or the synthetic demo), Connect (reads the battery), Measure
+// (5 s), the report, Disconnect.
+
 void main() => runApp(const MaterialApp(home: ScalePage()));
 
 /// SDK key from the developer portal, e.g. `flutter run
@@ -19,6 +23,34 @@ const licenseEndpoint = String.fromEnvironment(
   'FISICA_LICENSE_ENDPOINT',
   defaultValue: FisicaEntitlement.defaultEndpoint,
 );
+const noResult =
+    'No stable result; check the load on the Scale and the received frames';
+
+/// Reason names as the other samples show them ([FisicaModeReason] codes).
+const reasonNames = [
+  '',
+  'no_key',
+  'legacy_token',
+  'not_activated',
+  'no_target',
+  'other_target',
+  'revoked',
+  'clock_rollback',
+  'key_expired',
+  'not_started',
+  'full_ended',
+];
+const emptyReport = [
+  'Weight: -',
+  'Left foot: -',
+  'Right foot: -',
+  'Frames: -',
+  'Battery: -',
+];
+
+/// The Scale to connect: a BLE device, a desktop USB serial port, or the
+/// synthetic demo Scale (no hardware).
+typedef ScaleChoice = ({String id, String name, int link, bool demo});
 
 class ScalePage extends StatefulWidget {
   const ScalePage({super.key});
@@ -27,54 +59,63 @@ class ScalePage extends StatefulWidget {
 }
 
 class _ScalePageState extends State<ScalePage> {
-  String status = 'Choose USB, BLE or the hardware-free demo';
+  String version = '';
   String license = 'License: not loaded';
+  String status = 'Scan for Scales, or try the demo';
+  List<ScaleChoice> devices = [];
+  ScaleChoice? selected;
+  Map<String, dynamic>? demoScript;
+  bool connected = false;
   bool busy = false;
-  List<({String id, String name, bool ble})> devices = [];
-  FisicaClient? client;
+  List<String> report = emptyReport;
+  FisicaCore? core;
   FisicaEntitlement? entitlement;
+  FisicaClient? client;
+  StreamSubscription<FisicaSessionEvent>? events;
   StreamSubscription<EntitlementStatus>? licenseChanges;
-  void show(String message) {
-    if (mounted) setState(() => status = message);
+
+  void update(VoidCallback change) {
+    if (mounted) setState(change);
   }
 
-  static String describe(EntitlementStatus current) => current.isFull
-      ? 'License: full mode (key ${current.key})'
-      : 'License: basic mode. ${current.message ?? ''}'
-            '${current.activationCode == null ? '' : '\nActivation code: ${current.activationCode}'}';
+  /// "full mode", or "basic mode (no_key)" with the SDK's explanation of the
+  /// reason.
+  static String describeLicense(EntitlementStatus current) => [
+    current.isFull
+        ? 'License: full mode'
+        : 'License: basic mode (${current.reason < reasonNames.length ? reasonNames[current.reason] : 'unknown'})',
+    if (current.message != null) current.message!,
+    if (current.activationCode != null)
+      'Activation code: ${current.activationCode}',
+  ].join('\n');
 
-  void showLicense(EntitlementStatus current) {
-    if (mounted) setState(() => license = describe(current));
-  }
+  static String describe(Object error) => error is StateError
+      ? error.message
+      : error is ArgumentError
+      ? '${error.message}'
+      : '$error';
 
   @override
   void initState() {
     super.initState();
     try {
+      final platform = core = FisicaCore.platform();
+      version =
+          'Fisica SDK ${platform.sdkVersion} (core ${platform.coreVersion})';
       // One license for the app. Online, a new key is activated for this app
       // or PC and renewed automatically. Pass storageDirectory (for example
       // from path_provider) to keep the activated key across launches.
       final current = entitlement = FisicaEntitlement(
-        FisicaCore.platform(),
+        platform,
         endpoint: licenseEndpoint,
       );
-      licenseChanges = current.changes.listen(showLicense);
+      licenseChanges = current.changes.listen(
+        (status) => update(() => license = describeLicense(status)),
+      );
       if (sdkKey.isNotEmpty) current.importToken(sdkKey);
-      license = describe(current.status());
+      license = describeLicense(current.status());
     } catch (error) {
-      license = 'License: $error';
-    }
-  }
-
-  Future<void> run(Future<void> Function() task) async {
-    if (busy) return;
-    setState(() => busy = true);
-    try {
-      await task();
-    } catch (error) {
-      show('$error');
-    } finally {
-      if (mounted) setState(() => busy = false);
+      status = 'Error: ${describe(error)}';
     }
   }
 
@@ -86,67 +127,191 @@ class _ScalePageState extends State<ScalePage> {
           : [Permission.locationWhenInUse];
       final results = await permissions.request();
       if (results.values.any((result) => !result.isGranted)) {
-        throw StateError(
-          'Bluetooth permission denied; allow it in app settings',
+        update(
+          () => status =
+              'Permission denied; allow Bluetooth access in app settings',
         );
+        return;
       }
     }
-    show('Scanning for 5 seconds');
-    final found = await FisicaBleTransport.scan();
-    if (!mounted) return;
-    setState(
-      () => devices = [
-        for (final d in found)
-          (id: d.deviceId, name: d.name ?? d.deviceId, ble: true),
-      ],
-    );
-    show(
-      found.isEmpty
-          ? 'No Scale found; check power and permissions'
-          : 'Choose a Scale',
-    );
+    update(() {
+      devices = [];
+      selected = null;
+      status = 'Scanning for 5 seconds';
+    });
+    try {
+      final found = await FisicaBleTransport.scan();
+      update(() {
+        devices = [
+          for (final d in found)
+            (
+              id: d.deviceId,
+              name: d.name ?? d.deviceId,
+              link: FisicaLink.ble,
+              demo: false,
+            ),
+        ];
+        status = found.isEmpty
+            ? 'No Scale found; check that it is powered on'
+            : 'Choose a Scale';
+      });
+    } catch (error) {
+      update(() => status = 'Error: ${describe(error)}');
+    }
   }
 
-  Future<void> measure(
-    FisicaTransport transport,
-    int link, {
-    bool mock = false,
-  }) async {
-    final core = entitlement?.core ?? FisicaCore.platform();
+  void listUsb() => update(() {
+    devices = [
+      for (final port in FisicaUsbTransport.ports())
+        (id: port, name: port, link: FisicaLink.usb, demo: false),
+    ];
+    selected = null;
+    status = devices.isEmpty
+        ? 'No serial port found; check the USB cable'
+        : 'Choose the Scale serial port';
+  });
+
+  void choose(ScaleChoice choice) => update(() {
+    selected = choice;
+    status = '${choice.name} selected; press Connect';
+  });
+
+  Future<void> chooseDemo() async {
+    try {
+      demoScript =
+          jsonDecode(await rootBundle.loadString('assets/scale-mock.json'))
+              as Map<String, dynamic>;
+      update(() {
+        selected = (
+          id: 'demo',
+          name: 'Demo without hardware',
+          link: FisicaLink.usb,
+          demo: true,
+        );
+        status = 'Demo without hardware selected; press Connect';
+      });
+    } catch (error) {
+      update(() => status = 'Error: ${describe(error)}');
+    }
+  }
+
+  Future<void> connect() async {
+    final choice = selected;
+    final platform = core;
+    if (choice == null || platform == null || client != null || busy) return;
+    final FisicaTransport transport = choice.demo
+        ? DemoTransport(platform, demoScript!)
+        : choice.link == FisicaLink.ble
+        ? FisicaBleTransport(choice.id)
+        : FisicaUsbTransport(choice.id);
     // The client applies the license to its session (full or basic mode).
     final current = client = FisicaClient(
-      core,
+      platform,
       transport,
       entitlement: entitlement,
     );
-    final events = current.events.listen(
+    events = current.events.listen(
       (_) {},
-      onError: (Object error) => show('$error'),
+      onError: (Object error) => fail(error, current),
     );
+    update(() {
+      busy = true;
+      report = emptyReport;
+      status = 'Connecting';
+    });
     try {
-      await current.connect(link: link);
-      show(mock ? 'Synthetic demo measurement' : 'Measuring for 5 seconds');
+      // DemoTransport declares no link, so connect is always given one.
+      final probe = await current.connect(link: choice.link);
+      // Measurement packets carry no battery field: read it now; the report
+      // shows this reading.
+      try {
+        await current.readBattery();
+      } catch (_) {
+        // The report then shows "Battery: not read"; measuring goes on.
+      }
+      if (!identical(client, current)) return;
+      final firmware = probe.status == FisicaStatus.ok
+          ? utf8
+                .decode(
+                  platform.decodeResponse(probe.payload)['payload']
+                      as List<int>,
+                  allowMalformed: true,
+                )
+                .replaceAll('\u0000', '')
+                .trim()
+          : '';
+      update(() {
+        connected = true;
+        busy = false;
+        status =
+            'Connected (firmware ${firmware.isEmpty ? 'unknown' : firmware})';
+      });
+    } catch (error) {
+      await fail(error, current);
+    }
+  }
+
+  Future<void> measure() async {
+    final current = client;
+    if (current == null || !connected || busy) return;
+    update(() {
+      busy = true;
+      report = emptyReport;
+      status = 'Measuring for 5 seconds';
+    });
+    try {
       await current.start();
       await Future<void>.delayed(const Duration(seconds: 5));
+      if (!identical(client, current)) return;
       await current.stop();
-      final report = current.report();
-      // Basic mode: at most one frame a second, but weight and foot size
-      // come from every packet.
-      show(
-        report == null
-            ? 'No stable result; check load and received frames'
-            : '${mock ? "Demo: " : ""}${report.weight} kg; '
-                  'feet ${report.leftLength.toStringAsFixed(1)} / '
-                  '${report.rightLength.toStringAsFixed(1)} cm; '
-                  '${report.frames.length} frames',
-      );
+      // Weight and foot size come from every packet, in basic and full mode
+      // alike.
+      final result = current.report();
+      if (!identical(client, current)) return;
+      update(() {
+        busy = false;
+        status = result == null ? noResult : 'Measurement done';
+        if (result != null) {
+          String cm(double value) => '${value.toStringAsFixed(1)} cm';
+          report = [
+            'Weight: ${result.weight.toStringAsFixed(1)} kg',
+            'Left foot: length ${cm(result.leftLength)}, width ${cm(result.leftWidth)}',
+            'Right foot: length ${cm(result.rightLength)}, width ${cm(result.rightWidth)}',
+            'Frames: ${result.frames.length}',
+            'Battery: ${result.battery == null ? 'not read' : '${result.battery}%'}',
+          ];
+        }
+      });
+    } catch (error) {
+      await fail(error, current);
+    }
+  }
+
+  /// One clear line, and the client is always closed.
+  Future<void> fail(Object error, FisicaClient failed) async {
+    if (identical(client, failed)) await release('Error: ${describe(error)}');
+  }
+
+  /// Close the client (the Scale leaves measurement mode); resources are
+  /// freed even when the Scale does not answer.
+  Future<void> release(String message) async {
+    final current = client;
+    final listening = events;
+    if (current == null) return;
+    client = null;
+    events = null;
+    update(() {
+      connected = false;
+      busy = true;
+      status = message;
+    });
+    try {
+      await current.close();
+    } catch (_) {
+      // Closing frees the resources even when the Scale does not confirm.
     } finally {
-      try {
-        await current.close();
-      } finally {
-        await events.cancel();
-        if (identical(client, current)) client = null;
-      }
+      await listening?.cancel();
+      update(() => busy = false);
     }
   }
 
@@ -154,7 +319,9 @@ class _ScalePageState extends State<ScalePage> {
   void dispose() {
     final current = client;
     final license = entitlement;
+    client = null;
     unawaited(licenseChanges?.cancel());
+    unawaited(events?.cancel());
     unawaited(
       (current?.close() ?? Future<void>.value())
           .catchError((Object _) {})
@@ -164,83 +331,75 @@ class _ScalePageState extends State<ScalePage> {
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('Fisica Scale sample')),
-    body: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          Text(license),
-          Text(status),
-          Wrap(
-            spacing: 8,
-            children: [
-              ElevatedButton(
-                onPressed: busy ? null : () => run(scanBle),
-                child: const Text('Scan BLE'),
-              ),
-              if (Platform.isWindows || Platform.isMacOS)
-                ElevatedButton(
-                  onPressed: busy
-                      ? null
-                      : () => run(() async {
-                          final ports = FisicaUsbTransport.ports();
-                          setState(
-                            () => devices = [
-                              for (final port in ports)
-                                (id: port, name: port, ble: false),
-                            ],
-                          );
-                          show('Choose the Scale serial port');
-                        }),
-                  child: const Text('List USB ports'),
-                ),
-              ElevatedButton(
-                onPressed: busy
-                    ? null
-                    : () => run(() async {
-                        final script =
-                            jsonDecode(
-                                  await rootBundle.loadString(
-                                    'assets/scale-mock.json',
-                                  ),
-                                )
-                                as Map<String, dynamic>;
-                        await measure(
-                          DemoTransport(FisicaCore.platform(), script),
-                          FisicaLink.usb,
-                          mock: true,
-                        );
-                      }),
-                child: const Text('Demo without hardware'),
-              ),
-            ],
-          ),
-          Expanded(
-            child: ListView(
+  Widget build(BuildContext context) {
+    final idle = client == null && !busy;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Fisica Scale sample')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(version, style: Theme.of(context).textTheme.bodySmall),
+            Text(license, style: Theme.of(context).textTheme.bodySmall),
+            Text(status),
+            Wrap(
+              spacing: 8,
               children: [
-                for (final d in devices)
-                  ListTile(
-                    title: Text(d.name),
-                    subtitle: Text(d.id),
-                    onTap: busy
-                        ? null
-                        : () => run(
-                            () => measure(
-                              d.ble
-                                  ? FisicaBleTransport(d.id)
-                                  : FisicaUsbTransport(d.id),
-                              d.ble ? FisicaLink.ble : FisicaLink.usb,
-                            ),
-                          ),
+                ElevatedButton(
+                  onPressed: idle ? scanBle : null,
+                  child: const Text('Scan for Scales'),
+                ),
+                if (Platform.isWindows || Platform.isMacOS)
+                  ElevatedButton(
+                    onPressed: idle ? listUsb : null,
+                    child: const Text('List USB ports'),
                   ),
+                ElevatedButton(
+                  onPressed: idle ? chooseDemo : null,
+                  child: const Text('Demo without hardware'),
+                ),
               ],
             ),
-          ),
-        ],
+            Expanded(
+              child: ListView(
+                children: [
+                  for (final d in devices)
+                    ListTile(
+                      title: Text(d.name),
+                      subtitle: Text(d.id),
+                      selected: selected == d,
+                      trailing: selected == d ? const Icon(Icons.check) : null,
+                      onTap: idle ? () => choose(d) : null,
+                    ),
+                ],
+              ),
+            ),
+            Wrap(
+              spacing: 8,
+              children: [
+                ElevatedButton(
+                  onPressed: selected != null && idle ? connect : null,
+                  child: const Text('Connect'),
+                ),
+                ElevatedButton(
+                  onPressed: connected && !busy ? measure : null,
+                  child: const Text('Measure (5 s)'),
+                ),
+              ],
+            ),
+            for (final line in report) Text(line),
+            ElevatedButton(
+              onPressed: client != null && !(busy && connected)
+                  ? () => release('Disconnected')
+                  : null,
+              child: const Text('Disconnect'),
+            ),
+          ],
+        ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 /// Recorded synthetic replies only; no measurement/protocol algorithms.

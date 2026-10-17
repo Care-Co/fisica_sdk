@@ -81,7 +81,7 @@ jobs:
           cmake --build /tmp/samples
           for sample in c cpp; do
             /tmp/samples/fisica-$sample examples/partner/sample-frame.hex | tee /tmp/$sample-sample.txt
-            grep -q '^Synthetic weight: 70.50 kg' /tmp/$sample-sample.txt
+            grep -q '^Weight: 70.5 kg' /tmp/$sample-sample.txt
           done
       - name: Flutter 3.47.7 (pinned source, kept in the cache volume)
         run: |
