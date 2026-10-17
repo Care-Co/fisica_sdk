@@ -302,25 +302,24 @@ class Entitlement:
         once; `released_online` says whether that worked. Offline, or when it failed, enter the code at
         the key in the developer portal.
         """
-        # After any exchange in flight: a renewal answered after the release would store the key again.
-        with self._sync_lock:
-            with self._lock:
-                path = self._path(self._native.status(self._now()))
-                token = self._native.token()
-                code = self._native.release()
-                try:
-                    if path:
-                        path.unlink(missing_ok=True)
-                except OSError as error:
-                    self.last_sync_error = 'storage: ' + str(error)
-            self._notify()
-            self.released_online = False
-            if self._online and self._endpoint and token:
-                try:
-                    self._post('/sdk/v1/entitlement/release', token, {})
-                    self.released_online = True
-                except Exception as error:
-                    self.last_sync_error = 'network: ' + str(error)
+        # An exchange still in flight is not waited for: its answer is dropped, as the key is no longer loaded.
+        with self._lock:
+            path = self._path(self._native.status(self._now()))
+            token = self._native.token()
+            code = self._native.release()
+            try:
+                if path:
+                    path.unlink(missing_ok=True)
+            except OSError as error:
+                self.last_sync_error = 'storage: ' + str(error)
+        self._notify()
+        self.released_online = False
+        if self._online and self._endpoint and token:
+            try:
+                self._post('/sdk/v1/entitlement/release', token, {})
+                self.released_online = True
+            except Exception as error:
+                self.last_sync_error = 'network: ' + str(error)
         return code
 
     def pair(self, on_code=None, timeout=None, cancel=None):
