@@ -436,6 +436,10 @@ final class ClientTests: XCTestCase {
         XCTAssertEqual(try fresh.status().key, "key_pair_1"); XCTAssertEqual(try fresh.status().bind, target)
         let later = try FisicaEntitlement(core: core, storage: paired, clock: { serverNow })
         XCTAssertEqual(try later.status().mode, .full); XCTAssertEqual(try later.status().key, "key_pair_1")
+        let releasing = try FisicaEntitlement(core: core, endpoint: endpoint, storage: paired, clock: { serverNow })
+        let released = try releasing.releaseNow()
+        XCTAssertTrue(released.releasedOnline, releasing.lastSyncError ?? ""); XCTAssertTrue(released.code.hasPrefix("FRC1."))
+        XCTAssertEqual(try releasing.status().reason, .noKey)
         let asynchronous = try FisicaEntitlement(core: core, endpoint: endpoint, storage: nil, clock: { serverNow })
         let result = try awaitResult { try await asynchronous.pair(onCode: { _ in }) }
         XCTAssertEqual(result, .approved)

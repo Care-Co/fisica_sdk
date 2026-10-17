@@ -56,36 +56,8 @@ public struct PairingCode: Equatable {
 /// How pairing ended. `.approved`: the key is loaded and stored.
 public enum PairingResult: Equatable { case approved, denied, expired, cancelled }
 
-public extension FisicaModeReason {
-    /// Why the SDK is in basic mode and what to do; nil for `.none` (full mode).
-    var message: String? {
-        let basic = " Basic mode keeps connection, measurement, weight and foot size; raw data and full-rate frames need full mode."
-        switch self {
-        case .none: return nil
-        case .noKey: return "No SDK key. Create one in the developer portal and import it." + basic
-        case .legacyToken: return "This is a contract confirmation, not an SDK key. Create an SDK key in the developer portal." + basic
-        case .notActivated: return "The SDK key is not activated yet: connect to the internet, or enter the activation code in the developer portal and import the file it gives." + basic
-        case .noTarget: return "The SDK cannot read this app's ID or this PC's identity, so a key cannot be activated here." + basic
-        case .otherTarget: return "This SDK key is activated for another app or PC." + basic
-        case .revoked: return "The SDK key was released or its contract was revoked." + basic
-        case .clockRollback: return "This device's clock is earlier than a time the SDK has already seen; correct the clock." + basic
-        case .keyExpired: return "The SDK key expired: connect to renew it, or import a renewal file from the developer portal." + basic
-        case .notStarted: return "The contract of this SDK key has not started yet." + basic
-        case .fullEnded: return "The trial or contract of this SDK key has ended." + basic
-        }
-    }
-}
-public extension FisicaEntitlementWarning {
-    var message: String {
-        switch self {
-        case .renewDue: return "The SDK key is due for renewal: connect to the internet or import a renewal file."
-        case .grace: return "The contract has ended; full mode continues during the grace period."
-        case .fullEnding: return "Full mode ends within 7 days (trial or contract end)."
-        case .importRejected: return "The last SDK key or file was rejected (format, unknown signing key, signature or another app/PC)."
-        case .testKey: return "The SDK key is signed with a TEST key; this is not a production license."
-        }
-    }
-}
+// FisicaModeReason.message and FisicaEntitlementWarning.message are generated into Codes.swift
+// from wrappers/license-messages.json, shared by every wrapper.
 
 /// One SDK instance's license: its SDK key, the key's activation here, and renewal.
 ///
@@ -113,6 +85,7 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
     private(set) var revision = 0
     private static let activatePath = "/sdk/v1/entitlement/activate", refreshPath = "/sdk/v1/entitlement/refresh"
     private static let pairingPath = "/sdk/v1/pairing", pairingTokenPath = "/sdk/v1/pairing/token"
+    private static let releasePath = "/sdk/v1/entitlement/release"
     /// The developer portal, for pairing.
     public static let defaultEndpoint = URL(string: "https://developer.fisicahealthcare.com")!
 
@@ -287,12 +260,26 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
     }
     /// Release the key activated here: the core forgets it and returns the FRC1 code to enter in
     /// the developer portal, and the stored key is deleted. The SDK is in basic mode afterwards.
-    /// Throws `FisicaError` (invalid state) without a key activated for this app or PC.
+    /// Online, the server is also told in the background, which frees the seat at once
+    /// (`releaseNow` waits for that). Throws `FisicaError` (invalid state) without a key activated
+    /// for this app or PC.
     public func release() throws -> String {
-        let code: String
+        let (code, token) = try releaseHere()
+        if let token { exchange.async { [weak self] in _ = self?.tellReleased(token) } }
+        return code
+    }
+    /// `release()`, then online tell the server with the key itself and wait for it; do not call it on
+    /// the main thread. Without `releasedOnline`, enter the code at the key in the developer portal.
+    public func releaseNow() throws -> (code: String, releasedOnline: Bool) {
+        let (code, token) = try releaseHere()
+        return (code, token.map { tellReleased($0) } ?? false)
+    }
+    private func releaseHere() throws -> (String, String?) {
+        let code: String, token: String
         do {
             lock.lock(); defer { lock.unlock() }
             let file = stateFile()
+            token = (try? text(.token)) ?? ""
             var output = [UInt8](repeating: 0, count: 1024), length: UInt32 = 0
             try check(fisica_core_entitlement_release(try open(), &output, UInt32(output.count), &length))
             code = String(decoding: output.prefix(Int(length)), as: UTF8.self)
@@ -300,7 +287,13 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
             revision += 1
         }
         notify()
-        return code
+        return (code, online && endpoint != nil && !token.isEmpty ? token : nil)
+    }
+    private func tellReleased(_ token: String) -> Bool {
+        do { _ = try post(FisicaEntitlement.releasePath, token: token, body: Data("{}".utf8)); return true } catch {
+            lock.lock(); syncError = "network: \((error as? FisicaError)?.message ?? error.localizedDescription)"; lock.unlock()
+            return false
+        }
     }
 
     private func notify() {
@@ -397,32 +390,33 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
             if Date() >= deadline { return .expired }
         }
     }
-    /// `pairNow` off the calling thread; cancelling the task stops waiting (`.cancelled`).
+    /// `pairNow` off the calling thread; `onCode` runs on the main queue, so it can update the UI.
+    /// Cancelling the task stops waiting (`.cancelled`).
     @available(macOS 10.15, iOS 13.0, *)
     public func pair(onCode: @escaping (PairingCode) -> Void) async throws -> PairingResult {
         let cancelled = PairingCancel()
+        let show: (PairingCode) -> Void = { code in DispatchQueue.main.async { onCode(code) } }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .utility).async {
-                    continuation.resume(with: Result { try self.pairNow(onCode: onCode, isCancelled: { cancelled.isSet }) })
+                    continuation.resume(with: Result { try self.pairNow(onCode: show, isCancelled: { cancelled.isSet }) })
                 }
             }
         } onCancel: { cancelled.set() }
     }
-    /// What the server should do now: activate (with the core's request body), renew, or nothing.
+    /// What the server should do now, as the core decides it: activate (with the core's request
+    /// body), renew, or nothing.
     private func due(force: Bool) -> (path: String, token: String, body: Data)? {
         lock.lock(); defer { lock.unlock() }
-        guard handle != nil, let status = try? status(), let token = try? text(.token), !token.isEmpty else { return nil }
+        guard let handle, let token = try? text(.token), !token.isEmpty else { return nil }
         let refresh = (FisicaEntitlement.refreshPath, token, Data("{}".utf8))
-        switch status.reason {
-        case .noKey, .legacyToken, .otherTarget, .noTarget, .revoked: return force ? refresh : nil
-        case .notActivated:
+        var next: UInt32 = 0
+        guard fisica_core_entitlement_next_exchange(handle, clock(), &next) == 0 else { return force ? refresh : nil }
+        if next == FisicaExchange.activate.rawValue, let request = optionalText(.activationRequest) {
             // Exactly the core's request: this app's ID or this PC's hash, nothing else.
-            guard let request = optionalText(.activationRequest) else { return force ? refresh : nil }
             return (FisicaEntitlement.activatePath, token, Data(request.utf8))
-        case .keyExpired, .fullEnded, .notStarted: return refresh
-        default: return status.warnings.contains(.renewDue) || force ? refresh : nil
         }
+        return next == FisicaExchange.refresh.rawValue || force ? refresh : nil
     }
     private func exchangeOnce(force: Bool) -> EntitlementSyncResult {
         guard online, endpoint != nil, let next = due(force: force) else {
@@ -430,7 +424,16 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
         }
         var accepted = false, failure: String?
         do {
-            let response = try JSONSerialization.jsonObject(with: try post(next.path, token: next.token, body: next.body)) as? [String: Any]
+            let reply = try send(next.path, token: next.token, body: next.body)
+            guard (200..<300).contains(reply.status) else {
+                // A refused activation (key in use elsewhere, released, trial already used) does not change
+                // within a minute: ask again in an hour. Other failures retry after a minute.
+                if (400..<500).contains(reply.status) && reply.status != 429 {
+                    lock.lock(); nextSync = .now() + .seconds(3600); lock.unlock()
+                }
+                throw FisicaError(code: 1001, message: "HTTP \(reply.status) \(String(decoding: reply.data.prefix(200), as: UTF8.self))")
+            }
+            let response = try JSONSerialization.jsonObject(with: reply.data) as? [String: Any]
             guard let issued = response?["token"] as? String else { throw FisicaError(code: 1001, message: "Unexpected server response") }
             lock.lock()
             if let handle {

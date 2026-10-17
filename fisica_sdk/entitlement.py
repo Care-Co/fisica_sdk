@@ -37,26 +37,10 @@ BIND_TYPE = {**_names(codes.FisicaBindType), 0: None}
 IMPORT_OUTCOME = {**_names(codes.FisicaEntitlementOutcome), 0: None}
 KEY_ENVIRONMENT = {**_names(codes.FisicaKeyEnvironment), 0: None}
 FEATURES = {member.value: member.name.lower() for member in codes.FisicaFeature}
-_BASIC = 'Basic mode keeps connection, measurement, weight and foot size; raw data and full-rate frames need full mode.'
-REASON_MESSAGES = {
-    'no_key': 'No SDK key. Create one in the developer portal and import it. ' + _BASIC,
-    'legacy_token': 'This is a contract confirmation, not an SDK key. Create an SDK key in the developer portal. ' + _BASIC,
-    'not_activated': 'The SDK key is not activated yet: connect to the internet, or enter the activation code in the developer portal and import the file it gives. ' + _BASIC,
-    'no_target': 'The SDK cannot read this app\'s ID or this PC\'s identity, so a key cannot be activated here. ' + _BASIC,
-    'other_target': 'This SDK key is activated for another app or PC. ' + _BASIC,
-    'revoked': 'The SDK key was released or its contract was revoked. ' + _BASIC,
-    'clock_rollback': 'This device\'s clock is earlier than a time the SDK has already seen; correct the clock. ' + _BASIC,
-    'key_expired': 'The SDK key expired: connect to renew it, or import a renewal file from the developer portal. ' + _BASIC,
-    'not_started': 'The contract of this SDK key has not started yet. ' + _BASIC,
-    'full_ended': 'The trial or contract of this SDK key has ended. ' + _BASIC,
-}
-_WARNING_MESSAGES = {
-    'renew_due': 'The SDK key is due for renewal: connect to the internet or import a renewal file.',
-    'grace': 'The contract has ended; full mode continues during the grace period.',
-    'full_ending': 'Full mode ends within 7 days (trial or contract end).',
-    'import_rejected': 'The last SDK key or file was rejected (format, unknown signing key, signature or another app/PC).',
-    'test_key': 'The SDK key is signed with a TEST key; this is not a production license.',
-}
+# Messages shared by every wrapper (wrappers/license-messages.json, generated into codes.py).
+_BASIC = codes.LICENSE_BASIC_MODE
+REASON_MESSAGES = dict(codes.LICENSE_REASON_MESSAGES)
+_WARNING_MESSAGES = dict(codes.LICENSE_WARNING_MESSAGES)
 WARNINGS = {member.value: (member.name.lower(), _WARNING_MESSAGES[member.name.lower()]) for member in codes.FisicaEntitlementWarning}
 _times = ('verified_at', 'refresh_by', 'key_until', 'full_until', 'contract_start', 'contract_end', 'revoked_at')
 NO_KEY_STATUS = {

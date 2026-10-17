@@ -384,6 +384,12 @@ fun main(args: Array<String>) {
             check(shown?.userCode?.length == 9 && fresh.status().key == "key_pair_1" && fresh.status().bind == target)
         }
         FisicaEntitlement(core, null, paired) { clock }.use { later -> check(later.status().isFull && later.status().key == "key_pair_1") }
+        FisicaEntitlement(core, endpoint, paired) { clock }.use { releasing ->
+            val (code, online) = releasing.releaseNow()
+            check(online && code.startsWith("FRC1.") && releasing.status().reason == FisicaModeReason.NO_KEY) { "release: ${releasing.lastSyncError}" }
+        }
+        // The server's answers may escape characters; the reader handles them.
+        check(Json.string("{\"token\":\"FSE1.a\\/b\\u0041\",\"n\":2}", "token") == "FSE1.a/bA" && Json.number("{\"n\": 2.5}", "n") == 2.5)
         check(runCatching { license().pair({}) }.exceptionOrNull() is IllegalStateException)  // no endpoint
         // A communication failure is recorded, raises nothing and changes no license.
         val offline = FisicaEntitlement(core, "http://127.0.0.1:9", File(directory, "offline")) { clock }

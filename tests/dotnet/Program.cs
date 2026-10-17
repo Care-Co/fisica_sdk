@@ -390,6 +390,11 @@ if (values.TryGetValue("endpoint",out var endpoint)) {
     }
     using (var later=new FisicaEntitlement(core,() => clock,null,paired))
         Require(later.Status() is { Mode: FisicaMode.Full, Key: "key_pair_1" },"a later start finds the paired key");
+    using (var releasing=new FisicaEntitlement(core,() => clock,endpoint,paired)) {
+        var (releaseCode,releasedOnline)=await releasing.ReleaseAsync();
+        Require(releasedOnline && releaseCode.StartsWith("FRC1.") && releasing.Status().Reason==FisicaModeReason.NoKey
+            && !Directory.EnumerateFiles(paired,"*.state").Any(),"released online: "+releasing.LastSyncError);
+    }
     using (var unreachable=new FisicaEntitlement(core,() => clock,null,null)) {
         bool refused=false;
         try { await unreachable.PairAsync(_ => { }); } catch (InvalidOperationException) { refused=true; }

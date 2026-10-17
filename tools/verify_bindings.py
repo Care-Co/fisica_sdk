@@ -66,7 +66,7 @@ def entitlement_server(output):
                               (path in ('/sdk/v1/entitlement/activate', '/sdk/v1/pairing') and body == target) or
                               (path == '/sdk/v1/pairing/token' and set(body) == {'device_code'}))]
         assert not unexpected, f'binding sent more than its target, device codes and empty refreshes: {unexpected}'
-        print('mock server: only activation and pairing for this PC, pairing polls and empty refreshes received')
+        print('mock server: only activation and pairing for this PC, pairing polls, empty refreshes and releases received')
     finally:
         server.stop()
 

@@ -63,34 +63,15 @@ class EntitlementStatus(
     /** [reason] as a name such as "no_key" or "not_activated"; null in full mode. */
     val reasonName: String? get() = REASONS.getOrNull(reason)
     /** What basic mode means for this [reason] and what to do; null in full mode. */
-    val message: String? get() = reasonName?.let { MESSAGES[it] + " " + BASIC }
+    val message: String? get() = FisicaLicenseMessages.REASONS[reason]
     /** Messages for the [warnings] bits. */
-    val warningMessages: List<String> get() = WARNINGS.filter { warnings and it.key != 0 }.map { it.value }
+    val warningMessages: List<String> get() = FisicaLicenseMessages.WARNINGS.filter { warnings and it.key != 0 }.map { it.value }
     override fun toString() = "$modeName mode" + (reasonName?.let { " ($it)" } ?: "")
 
     companion object {
         private val REASONS = listOf(null, "no_key", "legacy_token", "not_activated", "no_target", "other_target", "revoked",
             "clock_rollback", "key_expired", "not_started", "full_ended")
-        private const val BASIC = "Basic mode keeps connection, measurement, weight and foot size; raw data and full-rate frames need full mode."
-        private val MESSAGES = mapOf(
-            "no_key" to "No SDK key. Create one in the developer portal and import it.",
-            "legacy_token" to "This is a contract confirmation, not an SDK key. Create an SDK key in the developer portal.",
-            "not_activated" to "The SDK key is not activated yet: connect to the internet, or enter the activation code in the developer portal and import the file it gives.",
-            "no_target" to "The SDK cannot read this app's ID or this PC's identity, so a key cannot be activated here.",
-            "other_target" to "This SDK key is activated for another app or PC.",
-            "revoked" to "The SDK key was released or its contract was revoked.",
-            "clock_rollback" to "This device's clock is earlier than a time the SDK has already seen; correct the clock.",
-            "key_expired" to "The SDK key expired: connect to renew it, or import a renewal file from the developer portal.",
-            "not_started" to "The contract of this SDK key has not started yet.",
-            "full_ended" to "The trial or contract of this SDK key has ended.",
-        )
-        private val WARNINGS = linkedMapOf(
-            FisicaEntitlementWarning.RENEW_DUE to "The SDK key is due for renewal: connect to the internet or import a renewal file.",
-            FisicaEntitlementWarning.GRACE to "The contract has ended; full mode continues during the grace period.",
-            FisicaEntitlementWarning.FULL_ENDING to "Full mode ends within 7 days (trial or contract end).",
-            FisicaEntitlementWarning.IMPORT_REJECTED to "The last SDK key or file was rejected (format, unknown signing key, signature or another app/PC).",
-            FisicaEntitlementWarning.TEST_KEY to "The SDK key is signed with a TEST key; this is not a production license.",
-        )
+        // Messages are shared by every wrapper: FisicaLicenseMessages (generated from wrappers/license-messages.json).
     }
 }
 
@@ -225,9 +206,12 @@ class FisicaEntitlement @JvmOverloads constructor(
         try {
             val file = stateFile() ?: return
             file.parentFile?.mkdirs()
-            val temporary = File(file.path + ".tmp")
-            temporary.writeBytes(Bridge.entitlementExport(handle))
-            if (!temporary.renameTo(file)) { file.delete(); if (!temporary.renameTo(file)) throw IOException("cannot replace ${file.name}") }
+            // A temporary file of its own: other processes and wrappers on this PC may save the same seat.
+            val temporary = File.createTempFile(file.name + ".", ".tmp", file.parentFile)
+            try {
+                temporary.writeBytes(Bridge.entitlementExport(handle))
+                if (!temporary.renameTo(file)) { file.delete(); if (!temporary.renameTo(file)) throw IOException("cannot replace ${file.name}") }
+            } finally { if (temporary.exists()) temporary.delete() }
         } catch (error: Exception) { lastSyncError = "storage: ${error.message}" }
     }
     private fun deleteState(file: File?) {
@@ -267,19 +251,37 @@ class FisicaEntitlement @JvmOverloads constructor(
     /**
      * Release the key activated for this app or PC: the core forgets it and returns the FRC1
      * release code to enter in the developer portal, which frees the seat. The stored state is
-     * deleted. Throws [FisicaException] ([FisicaStatus.INVALID_STATE]) without such a key.
+     * deleted. Online, the server is also told in the background, which frees the seat at once
+     * ([releaseNow] waits for that). Throws [FisicaException] ([FisicaStatus.INVALID_STATE]) without such a key.
      */
     fun release(): String {
-        val code = synchronized(this) {
-            open()
-            val file = stateFile()
-            val code = String(Bridge.entitlementRelease(handle), Charsets.US_ASCII)
-            deleteState(file); generation++
-            code
-        }
-        notifyStatus()
+        val (code, token) = releaseHere()
+        if (token != null) Thread({ tellReleased(token) }, "fisica-entitlement-release").apply { isDaemon = true }.start()
         return code
     }
+    /**
+     * [release], then online tell the server with the key itself and wait (call it on a background
+     * thread). Without `second == true`, enter the code at the key in the developer portal.
+     */
+    fun releaseNow(): Pair<String, Boolean> {
+        val (code, token) = releaseHere()
+        return code to (token != null && tellReleased(token))
+    }
+    private fun releaseHere(): Pair<String, String?> {
+        val (code, token) = synchronized(this) {
+            open()
+            val file = stateFile()
+            val token = text(FisicaEntitlementText.TOKEN).orEmpty()
+            val code = String(Bridge.entitlementRelease(handle), Charsets.US_ASCII)
+            deleteState(file); generation++
+            code to token
+        }
+        notifyStatus()
+        return code to if (online && endpoint != null && token.isNotEmpty()) token else null
+    }
+    private fun tellReleased(token: String): Boolean = try {
+        post("/sdk/v1/entitlement/release", token, "{}".toByteArray(Charsets.US_ASCII)); true
+    } catch (error: Exception) { lastSyncError = "network: ${error.message ?: error.javaClass.simpleName}"; false }
 
     private fun notifyStatus() {
         val (status, fresh, changed) = synchronized(this) {
@@ -303,21 +305,18 @@ class FisicaEntitlement @JvmOverloads constructor(
     }
 
     private class Due(val path: String, val token: String, val body: ByteArray)
-    /** What the server should do now: activate, renew, or nothing. */
+    /** What the server should do now, as the core decides it: activate, renew, or nothing. */
     private fun due(force: Boolean): Due? = synchronized(this) {
         if (handle == 0L) return null
-        val values = Bridge.entitlementStatus(handle, now())
         val token = text(FisicaEntitlementText.TOKEN).orEmpty()
         if (token.isEmpty()) return null
         val renew = Due("/sdk/v1/entitlement/refresh", token, "{}".toByteArray(Charsets.US_ASCII))
-        when (values[1].toInt()) {
-            FisicaModeReason.NO_KEY, FisicaModeReason.LEGACY_TOKEN, FisicaModeReason.OTHER_TARGET,
-            FisicaModeReason.NO_TARGET, FisicaModeReason.REVOKED -> if (force) renew else null
+        when (Bridge.entitlementNextExchange(handle, now())) {
             // The body is the core's request verbatim: this app's ID or PC hash, nothing else.
-            FisicaModeReason.NOT_ACTIVATED -> text(FisicaEntitlementText.ACTIVATION_REQUEST)
+            FisicaExchange.ACTIVATE -> text(FisicaEntitlementText.ACTIVATION_REQUEST)
                 ?.let { Due("/sdk/v1/entitlement/activate", token, it.toByteArray(Charsets.UTF_8)) } ?: if (force) renew else null
-            FisicaModeReason.KEY_EXPIRED, FisicaModeReason.FULL_ENDED, FisicaModeReason.NOT_STARTED -> renew
-            else -> if (force || values[17].toInt() and FisicaEntitlementWarning.RENEW_DUE != 0) renew else null
+            FisicaExchange.REFRESH -> renew
+            else -> if (force) renew else null
         }
     }
     private fun send(path: String, token: String?, body: ByteArray): Pair<Int, String> {
@@ -340,10 +339,8 @@ class FisicaEntitlement @JvmOverloads constructor(
         if (code !in 200..299) throw IOException("HTTP $code ${text.take(200)}".trim())
         return text.toByteArray(Charsets.UTF_8)
     }
-    private fun jsonString(text: String, name: String) =
-        Regex("\"$name\"\\s*:\\s*\"([^\"\\\\]*)\"").find(text)?.groupValues?.get(1)
-    private fun jsonNumber(text: String, name: String) =
-        Regex("\"$name\"\\s*:\\s*([0-9.]+)").find(text)?.groupValues?.get(1)?.toDoubleOrNull()
+    private fun jsonString(text: String, name: String) = Json.string(text, name)
+    private fun jsonNumber(text: String, name: String) = Json.number(text, name)
 
     /**
      * Get a key without one: the developer portal approves a code shown here (device authorization).
@@ -406,9 +403,14 @@ class FisicaEntitlement @JvmOverloads constructor(
     private fun syncLocked(force: Boolean): String? {
         try {
             val due = due(force) ?: return null
-            val response = String(post(due.path, due.token, due.body), Charsets.UTF_8)
-            val token = Regex("\"token\"\\s*:\\s*\"([A-Za-z0-9_.-]+)\"").find(response)?.groupValues?.get(1)
-                ?: throw IOException("Unexpected response")
+            val (status, response) = send(due.path, due.token, due.body)
+            if (status !in 200..299) {
+                // A refused activation (key in use elsewhere, released, trial already used) does not change
+                // within a minute: ask again in an hour. Other failures retry after a minute.
+                if (status in 400..499 && status != 429) synchronized(this) { nextSync = monotonic() + 3_600_000 }
+                throw IOException("HTTP $status ${response.take(200)}".trim())
+            }
+            val token = Json.string(response, "token") ?: throw IOException("Unexpected response")
             lastSyncError = null
             synchronized(this) {
                 if (handle == 0L) return null
@@ -448,5 +450,79 @@ class FisicaEntitlement @JvmOverloads constructor(
     fun restoreState(state: ByteArray) {
         synchronized(this) { Bridge.entitlementRestore(open(), state); generation++ }
         notifyStatus()
+    }
+}
+
+/** The server's answers: a JSON object with string, number and literal members (escapes included). */
+internal object Json {
+    fun string(text: String, name: String): String? = parse(text)[name] as? String
+    fun number(text: String, name: String): Double? = parse(text)[name] as? Double
+
+    fun parse(text: String): Map<String, Any?> {
+        val reader = Reader(text)
+        val value = reader.value()
+        reader.end()
+        @Suppress("UNCHECKED_CAST")
+        return value as? Map<String, Any?> ?: throw IOException("Unexpected response")
+    }
+
+    private class Reader(val text: String) {
+        var at = 0
+        fun fail(): Nothing = throw IOException("Unexpected response")
+        fun space() { while (at < text.length && text[at] in " \t\r\n") at++ }
+        fun end() { space(); if (at != text.length) fail() }
+        fun expect(c: Char) { space(); if (text.getOrNull(at) != c) fail(); at++ }
+        fun value(): Any? {
+            space()
+            return when (text.getOrNull(at) ?: fail()) {
+                '{' -> {
+                    at++; val members = LinkedHashMap<String, Any?>()
+                    space(); if (text.getOrNull(at) == '}') { at++; return members }
+                    while (true) {
+                        space(); val name = string(); expect(':'); members[name] = value()
+                        space(); if (text.getOrNull(at) == ',') { at++; continue }
+                        expect('}'); return members
+                    }
+                }
+                '[' -> {
+                    at++; val items = ArrayList<Any?>()
+                    space(); if (text.getOrNull(at) == ']') { at++; return items }
+                    while (true) {
+                        items.add(value())
+                        space(); if (text.getOrNull(at) == ',') { at++; continue }
+                        expect(']'); return items
+                    }
+                }
+                '"' -> string()
+                't' -> literal("true", true)
+                'f' -> literal("false", false)
+                'n' -> literal("null", null)
+                else -> {
+                    val start = at
+                    while (at < text.length && (text[at].isDigit() || text[at] in "+-.eE")) at++
+                    text.substring(start, at).toDoubleOrNull() ?: fail()
+                }
+            }
+        }
+        fun literal(word: String, value: Any?): Any? { if (!text.startsWith(word, at)) fail(); at += word.length; return value }
+        fun string(): String {
+            if (text.getOrNull(at) != '"') fail()
+            at++
+            val out = StringBuilder()
+            while (true) {
+                val c = text.getOrNull(at++) ?: fail()
+                when (c) {
+                    '"' -> return out.toString()
+                    '\\' -> when (val escaped = text.getOrNull(at++) ?: fail()) {
+                        '"', '\\', '/' -> out.append(escaped)
+                        'b' -> out.append('\b'); 'f' -> out.append('\u000C'); 'n' -> out.append('\n')
+                        'r' -> out.append('\r'); 't' -> out.append('\t')
+                        'u' -> { if (at + 4 > text.length) fail(); out.append(text.substring(at, at + 4).toIntOrNull(16)?.toChar() ?: fail()); at += 4 }
+                        else -> fail()
+                    }
+                    else -> out.append(c)
+                }
+            }
+        }
     }
 }

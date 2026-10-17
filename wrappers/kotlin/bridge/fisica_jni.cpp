@@ -114,6 +114,11 @@ JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_entitlementText(JNIE
     if (status==FISICA_INVALID_STATE) return nullptr; if (!checked(e,status)) return nullptr;
     return output(e,value.data(),length);
 }
+JNIEXPORT jint JNICALL Java_com_carenco_fisica_Bridge_entitlementNextExchange(JNIEnv *e,jobject,jlong h,jlong now) {
+    uint32_t exchange=0;
+    if (!checked(e,fisica_core_entitlement_next_exchange(entitlement(h),now,&exchange))) return 0;
+    return jint(exchange);
+}
 JNIEXPORT jbyteArray JNICALL Java_com_carenco_fisica_Bridge_entitlementRelease(JNIEnv *e,jobject,jlong h) {
     std::array<uint8_t,1024> code{}; uint32_t length=0;
     if (!checked(e,fisica_core_entitlement_release(entitlement(h),code.data(),code.size(),&length))) return nullptr;
