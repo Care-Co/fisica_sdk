@@ -1,7 +1,11 @@
 package com.carenco.fisica
 
+import java.lang.ref.PhantomReference
+import java.lang.ref.ReferenceQueue
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 
 /** A core error; [code] is a [FisicaStatus] value. */
 open class FisicaException(val code: Int, message: String): RuntimeException(message)
@@ -115,11 +119,44 @@ class FisicaCore(libraryPath: String? = null, warn: (String)->Unit = { System.er
         return Bridge.analyze(matrices,weights,rows,cols)
     }
 }
-/** Synchronized owning handle; no protocol rules, clocks or OS IO here. */
+/**
+ * Frees the native memory of objects the app dropped without close(): a PhantomReference
+ * queue drained by one daemon thread (Android API 23 has no java.lang.ref.Cleaner). An
+ * action must not reference its owner, or the owner is never collected.
+ */
+internal object NativeCleaner {
+    private val queue = ReferenceQueue<Any>()
+    // Keeps each registration reachable until it has run.
+    private val registered: MutableSet<Cleanable> = Collections.newSetFromMap(ConcurrentHashMap())
+    /** Registrations whose owner is neither closed nor collected yet. */
+    val pending get() = registered.size
+    class Cleanable internal constructor(owner: Any, action: () -> Unit) : PhantomReference<Any>(owner, queue) {
+        private var action: (() -> Unit)? = action
+        /** Run the action now, once: on close() or after the owner was collected, whichever comes first. */
+        fun clean() {
+            val run = synchronized(this) { action.also { action = null } } ?: return
+            registered.remove(this); clear(); run()
+        }
+    }
+    fun register(owner: Any, action: () -> Unit): Cleanable = Cleanable(owner, action).also { registered.add(it) }
+    init {
+        Thread({
+            while (true) {
+                try { (queue.remove() as Cleanable).clean() } catch (_: InterruptedException) { } catch (_: Exception) { }
+            }
+        }, "fisica-cleaner").apply { isDaemon = true; start() }
+    }
+}
+/**
+ * Synchronized owning handle; no protocol rules, clocks or OS IO here. Close it when done;
+ * a session dropped without close() is freed once it is collected.
+ */
 class FisicaSession(val core: FisicaCore): AutoCloseable {
     private var handle=Bridge.create()
+    // Captures only the native handle (up to ~13 MB of packets), never this object.
+    private val cleanable=handle.let { native -> NativeCleaner.register(this) { Bridge.destroy(native) } }
     private fun valid(now: Long) { check(handle!=0L) { "Closed session" }; require(now>=0) }
-    @Synchronized override fun close() { if (handle!=0L) { Bridge.destroy(handle); handle=0 } }
+    @Synchronized override fun close() { if (handle!=0L) { handle=0; cleanable.clean() } }
     @Synchronized fun action(action: Int,value: Long=0,nowMs: Long) { valid(nowMs); Bridge.action(handle,action,value,nowMs) }
     @Synchronized fun tick(nowMs: Long) { valid(nowMs); Bridge.tick(handle,nowMs) }
     @Synchronized fun feed(bytes: ByteArray,nowMs: Long) { valid(nowMs); Bridge.feed(handle,bytes,nowMs) }

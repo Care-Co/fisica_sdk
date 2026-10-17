@@ -14,7 +14,8 @@ abstract interface class FisicaTransport {
 
 /// A transport that knows which Scale link it carries: [FisicaLink.ble] or
 /// [FisicaLink.usb]. [FisicaClient.connect] uses it as the default link and
-/// rejects a different one before anything is sent.
+/// rejects a different one before anything is sent. Any other transport
+/// must be given its link.
 abstract interface class FisicaLinkTransport implements FisicaTransport {
   int get link;
 }
@@ -29,6 +30,7 @@ class FisicaClient {
   FisicaTransport _transport;
   final _clock = Stopwatch();
   final _events = StreamController<FisicaSessionEvent>.broadcast();
+  // Pending operations by FisicaSessionOperation, as their RESULT events name them.
   final _waiters = <int, Completer<FisicaSessionEvent>>{};
   StreamSubscription<Uint8List>? _input;
   StreamSubscription<void>? _lost;
@@ -47,9 +49,8 @@ class FisicaClient {
   final FisicaEntitlement? entitlement;
   StreamSubscription<EntitlementStatus>? _licenseChanges;
   int _licenseApplied = 0;
-  // The last applied license hands out every frame; the current measurement
-  // has had such a license throughout.
-  bool _fullRate = false, _everyFrame = false;
+  // The core's analysis of the last measurement, kept when the session closes.
+  List<double>? _closedAnalysis;
   final _frames = ListQueue<DecodedMeasurement>();
   int _maxFrames = FisicaLimit.analysisFrames;
   int _droppedFrames = 0;
@@ -106,9 +107,10 @@ class FisicaClient {
   /// left/right foot width and length in nominal centimetres, or null without
   /// a stable measurement. [battery] is the last [readBattery] reading, or null.
   ///
-  /// When the measurement ran in full mode the collected frames are analyzed;
-  /// otherwise the session analyzes every packet it received since [start]
-  /// (weight and foot size are basic-mode results).
+  /// The session analyzes every packet it received since [start], in every
+  /// mode ([frames] may hold only some of them; weight and foot size are
+  /// basic-mode results). After [close] it returns the last measurement's
+  /// analysis.
   ({
     double weight,
     double leftWidth,
@@ -119,15 +121,8 @@ class FisicaClient {
     int? battery,
   })?
   report() {
-    if (_frames.isEmpty) return null;
     entitlement?.checkStatus();
-    final everyPacket =
-        _everyFrame && _frames.every((frame) => frame.rawData != null);
-    final result = everyPacket
-        ? session.core.analyzePackets([
-            for (final frame in _frames) frame.rawData!,
-          ])
-        : session.analyze();
+    final result = _closed ? _closedAnalysis : session.analyze();
     if (result == null) return null;
     return (
       weight: result[0],
@@ -146,11 +141,8 @@ class FisicaClient {
   /// read leaves the session in basic mode. Never throws.
   void _applyLicense() {
     if (_closed) return;
-    final license = entitlement;
-    var fullRate = false;
     try {
-      session.license(license, nowMs: now);
-      fullRate = license?.fullRate ?? false;
+      session.license(entitlement, nowMs: now);
     } catch (_) {
       try {
         session.license(null, nowMs: now);
@@ -158,8 +150,6 @@ class FisicaClient {
         // Session closed; nothing to apply.
       }
     }
-    _fullRate = fullRate;
-    if (!fullRate) _everyFrame = false;
     _licenseApplied = now;
   }
 
@@ -219,32 +209,49 @@ class FisicaClient {
     }
   }
 
+  /// The operation whose RESULT completes [action].
+  static int _operationOf(int action) => switch (action) {
+    FisicaSessionAction.connected => FisicaSessionOperation.probe,
+    FisicaSessionAction.start => FisicaSessionOperation.begin,
+    FisicaSessionAction.stop => FisicaSessionOperation.end,
+    FisicaSessionAction.disconnect => FisicaSessionOperation.close,
+    _ => throw FisicaArgumentError(FisicaStatus.invalidArgument, 'No result'),
+  };
+
+  /// Run [action] and wait for its operation's RESULT. Busy only while the
+  /// same operation is pending; the core refuses what cannot run now.
   Future<FisicaSessionEvent> _action(
     int action,
     int value, {
     void Function()? accepted,
   }) {
     if (_closed) throw StateError('Client is closed');
-    if (_waiters.containsKey(action) ||
-        (_waiters.isNotEmpty && action != FisicaSessionAction.disconnect)) {
+    final operation = _operationOf(action);
+    if (_waiters.containsKey(operation)) {
       throw FisicaStateError(FisicaStatus.busy, 'Another operation is pending');
     }
     final waiter = Completer<FisicaSessionEvent>();
-    _waiters[action] = waiter;
+    _waiters[operation] = waiter;
     try {
       session.action(action, value: value, nowMs: now);
       accepted?.call();
       _drain();
     } catch (error, stack) {
-      _waiters.remove(action);
-      waiter.completeError(error, stack);
+      if (identical(_waiters[operation], waiter)) _waiters.remove(operation);
+      if (!waiter.isCompleted) waiter.completeError(error, stack);
     }
     return waiter.future;
   }
 
   static int _linkFor(FisicaTransport transport, int? requested) {
     final carried = transport is FisicaLinkTransport ? transport.link : null;
-    final link = requested ?? carried ?? FisicaLink.ble;
+    final link = requested ?? carried;
+    if (link == null) {
+      throw FisicaArgumentError(
+        FisicaStatus.invalidArgument,
+        'This transport does not declare its link: pass FisicaLink.ble or FisicaLink.usb',
+      );
+    }
     String name(int value) => value == FisicaLink.usb ? 'USB' : 'BLE';
     if (link != FisicaLink.ble && link != FisicaLink.usb) {
       throw FisicaArgumentError(
@@ -264,8 +271,9 @@ class FisicaClient {
   /// Link the Scale and probe its firmware.
   ///
   /// [link] is [FisicaLink.ble] or [FisicaLink.usb]. By default it is the
-  /// transport's own link ([FisicaLinkTransport]), otherwise BLE. A link that
-  /// differs from the transport's is rejected before anything is sent.
+  /// transport's own link ([FisicaLinkTransport]); any other transport must
+  /// be given it. A missing link, or one that differs from the transport's,
+  /// fails with [FisicaArgumentError] before anything is sent.
   ///
   /// Also reconnects after a link loss: omit [transport] to connect the same
   /// one again, or pass a replacement (the previous one is closed).
@@ -359,10 +367,7 @@ class FisicaClient {
       _action(
         FisicaSessionAction.start,
         duration?.inMilliseconds ?? -1,
-        accepted: () {
-          clearFrames();
-          _everyFrame = _fullRate;
-        },
+        accepted: clearFrames,
       ),
     );
   }
@@ -375,17 +380,18 @@ class FisicaClient {
   /// fails only this call; the session carries on.
   Future<int> readBattery() async {
     if (_closed) throw StateError('Client is closed');
-    if (_waiters.isNotEmpty) {
-      throw FisicaStateError(FisicaStatus.busy, 'Another operation is pending');
+    const operation = FisicaSessionOperation.request;
+    if (_waiters.containsKey(operation)) {
+      throw FisicaStateError(FisicaStatus.busy, 'Another query is pending');
     }
     final waiter = Completer<FisicaSessionEvent>();
-    _waiters[FisicaSessionOperation.request] = waiter;
+    _waiters[operation] = waiter;
     try {
       session.command('GET_BATTERY_LEVEL', nowMs: now);
       _drain();
     } catch (error, stack) {
-      _waiters.remove(FisicaSessionOperation.request);
-      waiter.completeError(error, stack);
+      if (identical(_waiters[operation], waiter)) _waiters.remove(operation);
+      if (!waiter.isCompleted) waiter.completeError(error, stack);
     }
     final event = await _checked(waiter.future);
     final data = session.core.decodeResponse(event.payload)['payload'] as Uint8List;
@@ -402,6 +408,12 @@ class FisicaClient {
     try {
       if (_linked) await _checked(_action(FisicaSessionAction.disconnect, 0));
     } finally {
+      // report() still works after close: keep the core's analysis.
+      try {
+        _closedAnalysis = session.analyze();
+      } catch (_) {
+        _closedAnalysis = null;
+      }
       _closed = true;
       _timer?.cancel();
       await _licenseChanges?.cancel();

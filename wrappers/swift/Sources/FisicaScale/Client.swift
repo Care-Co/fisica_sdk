@@ -3,8 +3,8 @@ import Foundation
 /// Byte link to one Scale. The app or SDK adapter owns the OS I/O; no protocol rules here.
 /// Deliver every callback on the client's queue.
 public protocol FisicaTransport: AnyObject {
-    /// The Scale link this transport carries, or nil when it can carry either.
-    /// `FisicaClient.connect` rejects a different link before anything is sent.
+    /// The Scale link this transport carries, or nil when it can carry either; then
+    /// `FisicaClient.connect` must be given the link. A different link is rejected before anything is sent.
     var link: FisicaLink? { get }
     /// Reads and writes both work.
     var onReady: (() -> Void)? { get set }
@@ -53,7 +53,8 @@ public struct FisicaCommandError: Error {
 }
 
 /// Result of the shared analysis of a measurement. Centimetres use the nominal 1 cm cell;
-/// values are not clinically calibrated. Weight and foot size work in every license mode.
+/// values are not clinically calibrated. Weight and foot size work in every license mode and
+/// come from every packet the core received, whatever `frames` holds.
 public struct SessionReport {
     public let weight: Double, leftWidth: Double, leftLength: Double, rightWidth: Double, rightLength: Double
     /// The frames the client received: every packet in full mode, at most one display frame a
@@ -107,9 +108,9 @@ public final class FisicaClient {
     private var timer: DispatchSourceTimer?
     private var readyDeadline: DispatchWorkItem?
     private var linkReady = false, closed = false
-    // License as applied to the session: when, which revision, and whether the current
-    // measurement has had every frame since its start (otherwise the core analyzes the packets).
-    private var licensedAt: Int64 = 0, licenseRevision = -1, fullRate = false, everyFrame = false
+    // License as applied to the session: when, and which revision.
+    private var licensedAt: Int64 = 0, licenseRevision = -1
+    // The core's analysis of the last measurement, kept when the session is released.
     private var finalAnalysis: [Double]?
     private static let licenseInterval: Int64 = 30_000
 
@@ -124,15 +125,22 @@ public final class FisicaClient {
 
     /// Open the transport and probe firmware. Completes with the probe result; an
     /// unanswered probe is reported in its `status` and does not prevent use.
-    /// A link other than the transport's own `link` fails before anything is sent.
-    public func connect(_ link: FisicaLink, timeout: TimeInterval = 15, completion: @escaping Completion) {
+    /// `link` defaults to the transport's own `link`; a transport that does not declare one
+    /// must be given it. A missing link, or one other than the transport's, fails with
+    /// `invalidArgument` before anything is sent.
+    public func connect(_ link: FisicaLink? = nil, timeout: TimeInterval = 15, completion: @escaping Completion) {
         queue.async { [weak self] in
             guard let self else { return }
             let probe = self.operation(.probe)
             guard !self.closed, !self.linkReady, self.waiters[probe] == nil else {
                 completion(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Already connected or connecting"))); return
             }
-            if let carried = self.transport.link, carried != link {
+            let carried = self.transport.link
+            guard let link = link ?? carried else {
+                completion(.failure(FisicaError(code: Int32(FisicaStatus.invalidArgument.rawValue),
+                                                message: "This transport does not declare its link: pass .ble or .usb"))); return
+            }
+            if let carried, carried != link {
                 completion(.failure(FisicaError(code: Int32(FisicaStatus.invalidArgument.rawValue),
                                                 message: "This transport carries \(carried), not \(link)"))); return
             }
@@ -176,10 +184,7 @@ public final class FisicaClient {
     private func applyLicense() {
         step { session, now in
             licenseRevision = entitlement?.revision ?? 0; licensedAt = now  // a failure is retried after the interval
-            let full = entitlement?.fullRate ?? false
-            fullRate = false; everyFrame = everyFrame && full
             try session.license(entitlement, nowMs: now)
-            fullRate = full
         }
     }
     private func received(_ bytes: [UInt8]) {
@@ -250,17 +255,15 @@ public final class FisicaClient {
     /// the core accepts the start.
     public func start(durationMs: Int64? = nil, completion: @escaping Completion) {
         entitlement?.checkStatus()
-        request(.start, value: durationMs ?? -1, waitFor: .begin, prepare: { [weak self] in self?.applyLicense() }, accepted: { [weak self] in
-            guard let self else { return }
-            self.clearFrames(); self.everyFrame = self.fullRate; self.finalAnalysis = nil
-        }, completion: completion)
+        request(.start, value: durationMs ?? -1, waitFor: .begin, prepare: { [weak self] in self?.applyLicense() },
+                accepted: { [weak self] in self?.clearFrames() }, completion: completion)
     }
     public func stop(completion: @escaping Completion) { request(.stop, value: 0, waitFor: .end, completion: completion) }
 
     /// Ask the Scale for its battery level (GET_BATTERY_LEVEL), idle or during a measurement, without
     /// interrupting it. A refused or unanswered query fails only this call; the session carries on.
     public func readBattery(completion: @escaping (Result<Int, Error>) -> Void) {
-        queue.async {
+        queue.async { [self] in
             let key = self.operation(.request)
             guard !self.closed, self.waiters[key] == nil else {
                 completion(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Another operation is pending"))); return
@@ -295,27 +298,18 @@ public final class FisicaClient {
         timer?.cancel(); timer = nil; readyDeadline?.cancel()
         transport.onReady = nil; transport.onBytes = nil; transport.onLost = nil; transport.onSendFailure = nil; transport.onError = nil
         // Keep the core's analysis of the last measurement for `report()` after close.
-        if !everyFrame { finalAnalysis = try? session.analyze() }
+        finalAnalysis = try? session.analyze()
         transport.close(); session.close()
         let pending = waiters; waiters.removeAll()
         for waiter in pending.values { waiter(.failure(FisicaError(code: Int32(FisicaStatus.cancelled.rawValue), message: "Client closed"))) }
     }
 
     /// Weight and foot size of the current measurement; nil without a stable measurement.
-    /// With every frame (full mode since `start`) the collected `frames` are analyzed; otherwise
-    /// the core analyzes every packet it received since `start`, so basic mode gives the same result.
+    /// The core analyzes every packet it received since `start`, in every mode (`frames` may
+    /// hold only some of them). After `close` it returns the last measurement's analysis.
     public func report() throws -> SessionReport? {
         entitlement?.checkStatus()
-        let analysis: [Double]?
-        if everyFrame {
-            guard !frames.isEmpty else { return nil }
-            analysis = try core.analyze(frames.flatMap { $0.display }, weights: frames.map { $0.weight }, rows: 29, cols: 29)
-        } else if closed {
-            analysis = finalAnalysis
-        } else {
-            analysis = try session.analyze()
-        }
-        guard let result = analysis else { return nil }
+        guard let result = try closed ? finalAnalysis : session.analyze() else { return nil }
         return SessionReport(weight: result[0], leftWidth: result[1], leftLength: result[2], rightWidth: result[3], rightLength: result[4],
                              frames: frames, battery: battery)
     }

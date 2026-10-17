@@ -1,7 +1,9 @@
 import 'dart:io';
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
+import 'package:ffi/ffi.dart';
 import 'package:fisica_core/fisica_core.dart';
 import 'package:test/test.dart';
 
@@ -42,20 +44,28 @@ void main() {
       throwsStateError,
     );
   });
-  test('unknown result schema fails before decoding', () {
-    final policy = Map<String, dynamic>.from(core.policy)
-      ..['result_schema_version'] = 2;
-    expect(
-      () => verifyCompatibility(
-        policy: policy,
-        wrapper: core.wrapper,
-        sdkVersion: core.sdkVersion,
-        coreVersion: core.coreVersion,
-        abiVersion: core.abiVersion,
-        onDeprecation: (_) {},
+  test('the core decides which wrapper releases it supports', () {
+    // FisicaCore asks the core (fisica_core_check_wrapper), like every wrapper.
+    final check = DynamicLibrary.open(path).lookupFunction<
+      Int32 Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Uint32>),
+      int Function(Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Uint32>)
+    >('fisica_core_check_wrapper');
+    int status(String name, String sdk, String version) => using(
+      (arena) => check(
+        name.toNativeUtf8(allocator: arena),
+        sdk.toNativeUtf8(allocator: arena),
+        version.toNativeUtf8(allocator: arena),
+        arena<Uint32>(),
       ),
-      throwsStateError,
     );
+    final version = core.wrapper['version'] as String;
+    expect(status('flutter', core.sdkVersion, version), FisicaStatus.ok);
+    expect(status('flutter', core.sdkVersion, '0.0.9'), isNot(FisicaStatus.ok));
+    expect(status('flutter', '1.0.0', version), isNot(FisicaStatus.ok));
+    expect(status('no-such-wrapper', core.sdkVersion, version), isNot(FisicaStatus.ok));
+    final warnings = <String>[];
+    FisicaCore.open(path, onDeprecation: warnings.add);
+    expect(warnings, isEmpty);
   });
   test('independent wrapper versions and native ABI', () {
     expect(core.versionInfo['wrapper_name'], 'flutter');
@@ -173,44 +183,20 @@ void main() {
       throwsA(isA<FisicaArgumentError>().having((e) => e.code, 'code', 4)),
     );
   });
-  test('wrapper deprecation and unsupported ABI are separate', () {
-    final warnings = <String>[];
-    final oldWrapper = Map<String, dynamic>.from(core.wrapper)
-      ..['version'] = '0.0.9';
-    expect(
-      () => verifyCompatibility(
-        policy: core.policy,
-        wrapper: oldWrapper,
-        sdkVersion: core.sdkVersion,
-        coreVersion: core.coreVersion,
-        abiVersion: core.abiVersion,
-        onDeprecation: warnings.add,
-      ),
-      throwsStateError,
-    );
-    // A deprecation window like the ones minor releases open (3.0.0 has none).
-    final window = jsonDecode(jsonEncode(core.policy)) as Map<String, dynamic>;
-    window['sdk_support']['minimum'] = '1.0.0';
-    verifyCompatibility(
-      policy: window,
-      wrapper: core.wrapper,
-      sdkVersion: '1.5.0',
-      coreVersion: core.coreVersion,
-      abiVersion: core.abiVersion,
-      onDeprecation: warnings.add,
-    );
-    expect(warnings.single, contains('SDK 1.5.0 is deprecated'));
-    expect(
-      () => verifyCompatibility(
-        policy: core.policy,
-        wrapper: core.wrapper,
-        sdkVersion: core.sdkVersion,
-        coreVersion: core.coreVersion,
-        abiVersion: 3 << 16,
-        onDeprecation: warnings.add,
-      ),
-      throwsStateError,
-    );
+  test('sessions reuse their buffers and close once', () {
+    final session = FisicaSession(core);
+    session.action(FisicaSessionAction.connected, value: FisicaLink.usb, nowMs: 0);
+    // Many polls and feeds through the same native buffers.
+    for (var i = 0; i < 1000; i++) {
+      session.feed(Uint8List.fromList([0, 1, 2]), nowMs: i);
+      session.drain();
+    }
+    expect(session.analyze(), isNull);
+    session.close();
+    session.close();
+    expect(() => session.poll(), throwsStateError);
+    // A session dropped without close() is freed by its finalizer.
+    FisicaSession(core);
   });
   test('shared Sans-IO session state and ACK golden vectors', () {
     final vectors =
