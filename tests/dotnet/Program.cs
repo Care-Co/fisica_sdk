@@ -363,6 +363,18 @@ foreach (var (key,at) in new (string?,ulong)[]{(null,now),("unbound",now),("tamp
     }
 }
 {
+    // A second close while the first waits for the Scale is Busy and leaves the first alone; once closed, close does nothing.
+    var transport=Scale(); var release=core.Command("SET_DEVICE_STOP"); transport.Reply(release);  // never confirmed
+    var client=new FisicaClient(core,transport);
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    var first=client.CloseAsync();
+    Require(await Failure(client.CloseAsync()) is FisicaException { Code: (int)FisicaStatus.Busy } && transport.IsOpen,"a second close while one is pending is busy");
+    Require(await Failure(first) is FisicaCommandException && !transport.IsOpen && client.Report()?.Weight==70.5,"an unconfirmed close still releases");
+    Require(await Failure(client.CloseAsync())==null && transport.Sent.Count(s => s.SequenceEqual(release))==1,"close after close does nothing");
+}
+{
     // Callbacks go to the SynchronizationContext given.
     var context=new CountingContext(); var transport=Scale(); var client=new FisicaClient(core,transport,callbacks: context);
     int received=0; client.Frame+=_ => Interlocked.Increment(ref received);
