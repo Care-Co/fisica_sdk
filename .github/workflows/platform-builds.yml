@@ -126,26 +126,3 @@ jobs:
             .build/platforms/android/*.aar
             .build/platforms/android/*.zip
           retention-days: 14
-  windows-arm64:
-    # GitHub-hosted: there is no self-hosted Windows runner.
-    if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: windows-2022
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-        with: {persist-credentials: false}
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with: {python-version: '3.11', architecture: x64}
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
-        with: {arch: amd64_arm64}
-      - run: python -m pip install build
-      - run: python tools/build_release.py --validation --output release
-        env: {FISICA_BUILD_PLATFORM: win_arm64}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: fisica-windows-arm64
-          path: |
-            release/**/*-win_arm64.whl
-            release/**/fisica-core-*-win_arm64.zip
-            release/**/artifact-manifest.json
-          retention-days: 14

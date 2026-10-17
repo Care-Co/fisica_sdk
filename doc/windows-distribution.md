@@ -58,7 +58,11 @@ the release audit. This check is not a code-signing or malware certification.
 
 ## CI artifacts and installation matrix
 
-`.github/workflows/windows-wheel.yml` provides manual and internal PR builds on
+Removed on 2026-10-17 until a self-hosted Windows runner exists (CI uses only self-hosted
+runners; see `doc/platform-support.md`, CI). The workflow below is kept in git history
+(`git show a44754b:.github/workflows/windows-wheel.yml`).
+
+`.github/workflows/windows-wheel.yml` provided manual and internal PR builds on
 `windows-2022`. It initializes an x64 MSVC environment, builds the core, runs the
 test suite, produces and audits the wheel/native ZIP, then installs the wheel
 into a clean environment outside the checkout. GUI/visualization extras are also
