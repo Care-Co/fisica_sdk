@@ -70,6 +70,8 @@ public struct SessionReport {
 /// timeouts and recovery decisions live in the shared core; this class only runs the
 /// clock, moves bytes and turns core events into callbacks.
 /// Every callback and completion runs on `queue`; read `frames` and call `report()` there.
+/// Keep the client in a property until `close` completes: the transport holds it only weakly, and
+/// a client released mid-operation closes the link and cancels what it was waiting for.
 ///
 /// The license decides what the core hands out. Without an `entitlement`, or in basic mode,
 /// `onFrame` gets at most one display frame (29x29 grid and weight) a second without raw data;
@@ -107,7 +109,7 @@ public final class FisicaClient {
     private var waiters: [UInt32: Completion] = [:]
     private var timer: DispatchSourceTimer?
     private var readyDeadline: DispatchWorkItem?
-    private var linkReady = false, closed = false
+    private var linkReady = false, closed = false, opened = false
     // License as applied to the session: when, and which revision.
     private var licensedAt: Int64 = 0, licenseRevision = -1
     // The core's analysis of the last measurement, kept when the session is released.
@@ -118,7 +120,25 @@ public final class FisicaClient {
         self.core = core; self.transport = transport; self.entitlement = entitlement; self.queue = queue
         session = try FisicaSession(core: core)
     }
-    deinit { timer?.cancel(); session.close() }
+    /// Released without `close` (nothing held the client but an operation in flight, say): the link is
+    /// closed and every pending completion fails with `cancelled`, on `queue` as always. Keep the client
+    /// in a property until it is closed.
+    deinit {
+        timer?.cancel(); readyDeadline?.cancel()
+        if !closed {
+            // The transport's callbacks hold the client weakly; they do nothing from now on.
+            let transport = self.transport, pending = waiters, opened = self.opened
+            if opened || !pending.isEmpty {
+                queue.async {
+                    if opened { transport.close() }
+                    for waiter in pending.values {
+                        waiter(.failure(FisicaError(code: Int32(FisicaStatus.cancelled.rawValue), message: "Client released without close")))
+                    }
+                }
+            }
+        }
+        session.close()
+    }
 
     private var now: Int64 { Int64((DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000) }
     private func operation(_ value: FisicaSessionOperation) -> UInt32 { value.rawValue }
@@ -158,6 +178,7 @@ public final class FisicaClient {
             self.readyDeadline = deadline
             self.queue.asyncAfter(deadline: .now() + timeout, execute: deadline)
             self.entitlement?.checkStatus()
+            self.opened = true
             self.transport.open()
         }
     }

@@ -253,8 +253,8 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
     /// Release the key activated here: the core forgets it and returns the FRC1 code to enter in
     /// the developer portal, and the stored key is deleted. The SDK is in basic mode afterwards.
     /// Online, the server is also told in the background, which frees the seat at once
-    /// (`releaseNow` waits for that). Throws `FisicaError` (invalid state) without a key activated
-    /// for this app or PC.
+    /// (`releaseNow` waits for that). An activation or renewal still on its way does not bring the
+    /// key back. Throws `FisicaError` (invalid state) without a key activated for this app or PC.
     public func release() throws -> String {
         let (code, token) = try releaseHere()
         if let token { exchange.async { [weak self] in _ = self?.tellReleased(token) } }
@@ -269,6 +269,7 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
     private func releaseHere() throws -> (String, String?) {
         let code: String, token: String
         do {
+            // Under the same lock as importing a server answer, which happens only while its key is still loaded.
             lock.lock(); defer { lock.unlock() }
             let file = stateFile()
             token = (try? text(.token)) ?? ""
@@ -428,16 +429,21 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
             let response = try JSONSerialization.jsonObject(with: reply.data) as? [String: Any]
             guard let issued = response?["token"] as? String else { throw FisicaError(code: 1001, message: "Unexpected server response") }
             lock.lock()
-            if let handle {
-                let bytes = Array(issued.utf8); var outcome: UInt32 = 0
-                accepted = fisica_core_entitlement_import(handle, bytes, UInt32(bytes.count), clock(), &outcome) == 0 &&
-                    outcome == FisicaEntitlementOutcome.accepted.rawValue
-                if (try? status())?.reason == .revoked {
-                    // The server reports this key released: the device lets go of it.
-                    delete(stateFile())
-                } else if accepted { save() }
-                revision += 1
+            // The answer belongs to the key it was asked for. Released or replaced (release, importToken,
+            // restoreState) while it was on its way, it is dropped: a released key never comes back and a
+            // newer key stays.
+            guard let handle, (try? text(.token)) == next.token else {
+                lock.unlock()
+                return EntitlementSyncResult(activated: false, refreshed: false, error: nil)
             }
+            let bytes = Array(issued.utf8); var outcome: UInt32 = 0
+            accepted = fisica_core_entitlement_import(handle, bytes, UInt32(bytes.count), clock(), &outcome) == 0 &&
+                outcome == FisicaEntitlementOutcome.accepted.rawValue
+            if (try? status())?.reason == .revoked {
+                // The server reports this key released: the device lets go of it.
+                delete(stateFile())
+            } else if accepted { save() }
+            revision += 1
             syncError = nil; nextSync = .now() + .seconds(3600)
             lock.unlock()
         } catch {
@@ -450,7 +456,8 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
         return EntitlementSyncResult(activated: accepted && activation, refreshed: accepted && !activation, error: failure)
     }
     /// Activate or renew now when due (force: renew anyway), on the calling thread after any
-    /// background exchange; do not call it on the main thread. Never throws.
+    /// background exchange; do not call it on the main thread. Never throws. An answer for a key
+    /// released or replaced while it was on its way changes nothing.
     @discardableResult public func syncNow(force: Bool = false) -> EntitlementSyncResult { exchange.sync { exchangeOnce(force: force) } }
     /// Background `syncNow`: at most once a minute until an exchange succeeds, then hourly unless
     /// forced. Never blocks or throws into the caller.
@@ -463,7 +470,9 @@ public final class FisicaEntitlement: @unchecked Sendable {  // every use of the
         exchange.async { [weak self] in
             guard let self else { return }
             _ = self.exchangeOnce(force: force)
-            self.lock.lock(); self.syncing = false; self.lock.unlock()
+            self.lock.lock(); self.syncing = false; let again = DispatchTime.now() >= self.nextSync; self.lock.unlock()
+            // A key imported during this exchange asked for its own (importToken makes one due at once).
+            if again { self.sync() }
         }
     }
     /// Opaque state for the host to store: the verified key and the latest time seen. Restoring
