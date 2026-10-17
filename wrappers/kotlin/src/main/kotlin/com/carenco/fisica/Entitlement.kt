@@ -129,6 +129,11 @@ class FisicaEntitlement @JvmOverloads constructor(
 
     init { if (loadStored()) { notifyStatus(); sync() } }
 
+    companion object {
+        /** The developer portal, for activation, renewal and [pair]. */
+        const val DEFAULT_ENDPOINT = "https://developer.fisicahealthcare.com"
+    }
+
     /**
      * The key stored for this app or PC, if any. The core names a state file from the company, the
      * contract and the target, so a file it names again after restoring it belongs here. With

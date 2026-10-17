@@ -1,5 +1,5 @@
 group 'com.carenco.fisica'
-version '0.5.0'
+version '0.6.0'
 buildscript { repositories { google(); mavenCentral() }; dependencies { classpath 'com.android.tools.build:gradle:8.6.1' } }
 apply plugin: 'com.android.library'
 android {

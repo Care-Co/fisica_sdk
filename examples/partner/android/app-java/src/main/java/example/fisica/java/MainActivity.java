@@ -24,7 +24,7 @@ public class MainActivity extends Activity {
      */
     private static final String SDK_KEY = "";
     /** Activates the key for this app and renews it (needs the INTERNET permission). */
-    private static final String PORTAL = "https://developer.fisicahealthcare.com";
+    private static final String PORTAL = FisicaEntitlement.DEFAULT_ENDPOINT;
     private TextView status;
     private TextView licenseText;
     private FisicaCore core;

@@ -17,7 +17,7 @@ void main() => runApp(const MaterialApp(home: ScalePage()));
 const sdkKey = String.fromEnvironment('FISICA_SDK_KEY');
 const licenseEndpoint = String.fromEnvironment(
   'FISICA_LICENSE_ENDPOINT',
-  defaultValue: 'https://developer.fisicahealthcare.com',
+  defaultValue: FisicaEntitlement.defaultEndpoint,
 );
 
 class ScalePage extends StatefulWidget {

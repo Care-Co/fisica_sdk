@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name = 'fisica_core'
-  s.version = '0.5.0'
+  s.version = '0.6.0'
   s.summary = 'Fisica Scale compiled core and Dart FFI'
   s.homepage = 'https://github.com/Care-Co/'
   s.license = { :type => 'Fisica Scale SDK License', :file => '../LICENSE' }

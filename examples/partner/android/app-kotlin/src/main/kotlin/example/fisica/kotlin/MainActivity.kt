@@ -24,7 +24,7 @@ class MainActivity : Activity() {
          */
         const val SDK_KEY = ""
         /** Activates the key for this app and renews it (needs the INTERNET permission). */
-        const val PORTAL = "https://developer.fisicahealthcare.com"
+        const val PORTAL = FisicaEntitlement.DEFAULT_ENDPOINT
     }
     private lateinit var status: TextView
     private lateinit var licenseText: TextView
