@@ -1,30 +1,20 @@
 name: Windows binary wheels
 
-# Pull requests and manual runs only: merging to main does not run the same checks again.
+# Manual only (Actions > Run workflow, or gh workflow run): wrappers and platform builds are checked
+# when someone asks for it. Verify locally with tools/verify_bindings.py and pytest first.
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'fisica_sdk/**'
-      - 'native/**'
-      - 'tools/**'
-      - 'tests/**'
-      - 'wrappers/**/wrapper.json'
-      - 'wrappers/dotnet/**'
-      - 'wrappers/flutter/lib/src/version.dart'
-      - 'wrappers/flutter/pubspec.yaml'
-      - 'sdk-release.json'
-      - 'setup.py'
-      - 'LICENSE'
-      - 'MANIFEST.in'
-      - 'pyproject.toml'
-      - '.github/workflows/windows-wheel.yml'
+    inputs:
+      all_pythons:
+        description: Install the wheel on every supported Python (3.9, 3.11, 3.13, 3.14), not only 3.9 and 3.14
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 concurrency:
-  # A newer push to the same branch or pull request replaces the run in progress.
+  # A newer run on the same branch replaces the one in progress.
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
@@ -79,9 +69,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Pull requests check the oldest and newest supported Python (the build job already installs on 3.11);
-        # a manual run checks every supported version.
-        python: ${{ github.event_name == 'workflow_dispatch' && fromJSON('["3.9", "3.11", "3.13", "3.14"]') || fromJSON('["3.9", "3.14"]') }}
+        # The oldest and newest supported Python (the build job already installs on 3.11); all_pythons adds the rest.
+        python: ${{ inputs.all_pythons && fromJSON('["3.9", "3.11", "3.13", "3.14"]') || fromJSON('["3.9", "3.14"]') }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
