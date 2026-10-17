@@ -1,23 +1,25 @@
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict
+from . import codes
+from .errors import FisicaTransportError
 from .utils import log
 
 BLE_START_TIMEOUT = 5.0
 
 def find_serial_devices():
-    """시리얼 포트에서 Fisica Scale 기기 검색"""
+    """Fisica Scales on USB serial ports (by USB vendor ID); raises FisicaTransportError if ports cannot be listed."""
     try:
         import serial.tools.list_ports
-        devices = [{'id': p.device, 'name': 'Fisica Scale', 'type': 'Serial',
-                    'port': p.device, 'vid': p.vid, 'pid': p.pid,
-                    'serial_number': p.serial_number}
-                   for p in serial.tools.list_ports.comports() if p.vid == 4292]
-        log.info(f"Serial scan completed. found count : {len(devices)}")
-        return devices
-    except Exception as e:
-        log.debug(f"Serial scan error: {e}")
-        return []
+        ports = serial.tools.list_ports.comports()
+    except Exception as error:
+        raise FisicaTransportError(f'Serial port scan failed: {error}') from error
+    devices = [{'id': p.device, 'name': 'Fisica Scale', 'type': 'Serial',
+                'port': p.device, 'vid': p.vid, 'pid': p.pid,
+                'serial_number': p.serial_number}
+               for p in ports if p.vid == 4292]
+    log.info(f"Serial scan completed. found count : {len(devices)}")
+    return devices
 
 
 def find_serial_com_ports():
@@ -25,7 +27,11 @@ def find_serial_com_ports():
     return [device['id'] for device in find_serial_devices()]
 
 def find_bluetooth_com_ports(timeout=15.0, max_devices=5) -> List[Dict]:
-    """빠른 블루투스 스캔 - 여러 기기 감지, 적응적 타임아웃, 신호 강도 순 정렬"""
+    """Fisica Scales advertising over BLE, strongest signal first.
+
+    Raises FisicaTransportError when scanning fails (Bluetooth off or not permitted), so that is
+    not mistaken for "no Scale nearby".
+    """
 
     async def _scan_bluetooth():
         scanner = None
@@ -39,7 +45,7 @@ def find_bluetooth_com_ports(timeout=15.0, max_devices=5) -> List[Dict]:
                 nonlocal last_discovery_time
                 device_name = advertisement_data.local_name or device.name or 'Unknown'
 
-                if 'fisica scale' in device_name.lower():
+                if codes.BLE_NAME_CONTAINS.lower() in device_name.lower():
                     # 새 기기 발견 시간 기록
                     if device.address not in fisica_devices:
                         last_discovery_time = asyncio.get_event_loop().time()
@@ -86,9 +92,6 @@ def find_bluetooth_com_ports(timeout=15.0, max_devices=5) -> List[Dict]:
 
             return device_list
 
-        except Exception as e:
-            log.debug(f"Bluetooth scan error: {e}")
-            return []
         finally:
             if scanner is not None:
                 try:
@@ -107,9 +110,10 @@ def find_bluetooth_com_ports(timeout=15.0, max_devices=5) -> List[Dict]:
         # A synchronous SDK call must not replace or run the application's loop.
         with ThreadPoolExecutor(max_workers=1) as executor:
             return executor.submit(lambda: asyncio.run(_bounded_scan())).result()
-    except Exception as e:
-        log.debug(f"Bluetooth scan failed: {e}")
-        return []
+    except asyncio.TimeoutError:
+        raise FisicaTransportError('Bluetooth scan did not finish; check that Bluetooth is on') from None
+    except Exception as error:
+        raise FisicaTransportError(f'Bluetooth scan failed (is Bluetooth on and permitted?): {error}') from error
 
 def find_all_com_ports(timeout=15.0, max_bt_devices=5, prioritize_signal=True, transport=None) -> List[Dict]:
     """모든 Fisica Scale 기기 검색 (시리얼 + 블루투스)
@@ -118,18 +122,22 @@ def find_all_com_ports(timeout=15.0, max_bt_devices=5, prioritize_signal=True, t
         timeout: 블루투스 스캔 타임아웃 (초)
         max_bt_devices: 최대 블루투스 기기 수
         prioritize_signal: True면 블루투스 기기를 신호 강도 순으로 우선 배치
+        transport: 'Serial' or 'Bluetooth' scans only that transport and raises
+            FisicaTransportError when it cannot be scanned; None scans both and logs a failure of either.
     """
     if transport not in (None, 'Serial', 'Bluetooth'):
         raise ValueError('transport must be Serial, Bluetooth, or None')
     all_devices = []
 
     # 1. 시리얼 포트 기기 찾기 (빠름)
-    try:
-        if transport != 'Bluetooth':
+    if transport != 'Bluetooth':
+        try:
             for i, device in enumerate(find_serial_devices()):
                 all_devices.append(dict(device, priority=1000 + i))
-    except Exception as e:
-        log.debug(f"Serial scan error: {e}")
+        except FisicaTransportError:
+            if transport == 'Serial':
+                raise
+            log.exception("Serial scan failed; continuing with Bluetooth")
 
     if transport == 'Serial':
         return all_devices
@@ -150,8 +158,10 @@ def find_all_com_ports(timeout=15.0, max_bt_devices=5, prioritize_signal=True, t
 
         all_devices.extend(bluetooth_devices)
 
-    except Exception as e:
-        log.debug(f"Bluetooth scan error: {e}")
+    except FisicaTransportError:
+        if transport == 'Bluetooth':
+            raise
+        log.exception("Bluetooth scan failed; only USB Scales are listed")
 
     # 3. 전체 기기 정렬
     if prioritize_signal:
