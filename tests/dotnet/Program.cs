@@ -2,6 +2,7 @@ using CareCo.Fisica;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -175,6 +176,13 @@ MockTransport Scale(int frames=12) {
     }
     return transport;
 }
+// A connected client the app forgets to close; only the returned weak reference remains.
+[MethodImpl(MethodImplOptions.NoInlining)]
+WeakReference<FisicaClient> Abandon() {
+    var client=new FisicaClient(core,Scale());
+    client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5)).GetAwaiter().GetResult();
+    return new(client);
+}
 async Task<Exception?> Failure(Task task) { try { await task.WaitAsync(TimeSpan.FromSeconds(5)); return null; } catch(Exception error) { return error; } }
 async Task Until(Func<bool> condition,string what) {
     for (var deadline=DateTime.UtcNow.AddSeconds(5);!condition();await Task.Delay(10)) Require(DateTime.UtcNow<deadline,what);
@@ -343,6 +351,16 @@ foreach (var (key,at) in new (string?,ulong)[]{(null,now),("unbound",now),("tamp
     Require(client.Report() is { Weight: 70.5, FrameCount: 12 },"full report after close");
     Require(await Failure(client.StartAsync()) is FisicaException && await Failure(client.ConnectAsync()) is FisicaException,"calls after close fail");
     await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+}
+{
+    // A connected client dropped without CloseAsync: its timer holds it weakly, so it is collected
+    // (and its session's native memory with it).
+    var dropped=Abandon();
+    for (var deadline=DateTime.UtcNow.AddSeconds(10);;await Task.Delay(50)) {
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        if (!dropped.TryGetTarget(out _)) break;
+        Require(DateTime.UtcNow<deadline,"a client dropped without CloseAsync is collected");
+    }
 }
 {
     // Callbacks go to the SynchronizationContext given.
