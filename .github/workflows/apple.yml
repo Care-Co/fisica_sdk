@@ -1,0 +1,41 @@
+name: Apple core and Swift wrapper
+# macOS minutes cost ten times Linux minutes: this runs only when the core, the Swift wrapper or
+# the tools that build and test them change, and on demand. Python, native contract and Dart
+# checks run on Linux (platform-builds.yml).
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: ['native/**', 'wrappers/swift/**', 'examples/partner/swift/**', 'tests/fixtures/**', 'sdk-release.json',
+            'tools/native_build.py', 'tools/build_platforms.py', 'tools/audit_artifacts.py', 'tools/verify_bindings.py',
+            'tools/entitlement_dev.py', '.github/workflows/apple.yml']
+permissions:
+  contents: read
+concurrency:
+  # A newer push to the same branch or pull request replaces the run in progress.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  apple:
+    if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with: {python-version: '3.11'}
+      - run: python tools/build_platforms.py --validation --target apple
+        env:
+          FISICA_XCODE_DEVELOPER: /Applications/Xcode.app/Contents/Developer
+      - name: Swift contract (client, entitlement, online exchange with the mock server)
+        run: python tools/verify_bindings.py swift
+      - run: python tools/build_platforms.py --validation --target macosx_11_0_universal2
+      - name: Audit public Apple artifacts
+        run: python tools/audit_artifacts.py $(python tools/build_platforms.py --print-artifacts apple macosx_11_0_universal2)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fisica-apple-binaries
+          path: |
+            .build/platforms/apple/*.zip
+            .build/platforms/*.zip
+          retention-days: 14
