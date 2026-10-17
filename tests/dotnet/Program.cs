@@ -1,4 +1,5 @@
 using CareCo.Fisica;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -163,8 +164,9 @@ Console.WriteLine("C# shared session and processing vectors passed");
 }
 
 // High-level client and transports against the same core, without hardware.
+// A mock Scale on a USB link (a transport that does not declare its link must be given one).
 MockTransport Scale(int frames=12) {
-    var transport=new MockTransport();
+    var transport=new MockTransport { Link=FisicaLink.Usb };
     transport.Reply(core.Command("GET_FIRMWARE_VERSION"),Convert.FromHexString("24434701322e302e31fff0"));
     foreach(var name in new[]{"SET_DEVICE_USB","SET_DEVICE_BLE","START_CONTINUOUS_MEASUREMENT","STOP_CONTINUOUS_MEASUREMENT","SET_DEVICE_STOP"}) {
         var command=core.Command(name); IEnumerable<byte> ack=new byte[]{0x24,command[1],command[2],1,0,0,0xff,0xf0};
@@ -292,6 +294,67 @@ foreach (var (key,at) in new (string?,ulong)[]{(null,now),("unbound",now),("tamp
     Require(new SerialTransport("COM9").Link==FisicaLink.Usb && ((IFisicaTransport)new MockTransport()).Link==null,"transport links");
 }
 {
+    // A transport that does not declare its link must be given one: no default, nothing sent without it.
+    var transport=Scale(); transport.Link=null; var client=new FisicaClient(core,transport);
+    var error=await Failure(client.ConnectAsync());
+    Require(error is FisicaException { Code: (int)FisicaStatus.InvalidArgument } && !transport.IsOpen && transport.Sent.Count==0,"undeclared link needs one");
+    await client.ConnectAsync(FisicaLink.Ble).WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(transport.Sent.Any(s => s.SequenceEqual(core.Command("SET_DEVICE_BLE"))),"the link given is used");
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+}
+{
+    // Handlers that throw are reported through Error (even one that throws itself) and never stop Start, Stop,
+    // a reconnect or Close; the drained results still complete the tasks.
+    var transport=Scale(); var client=new FisicaClient(core,transport); var errors=new ConcurrentQueue<Exception>();
+    client.Error+=error => { errors.Enqueue(error); throw new InvalidOperationException("error handler"); };
+    client.Frame+=_ => throw new InvalidOperationException("frame handler");
+    client.Event+=_ => throw new InvalidOperationException("event handler");
+    client.LinkLost+=() => throw new InvalidOperationException("link handler");
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    transport.Drop(); await Until(() => client.State==FisicaSessionState.Recovering,"recovering despite a throwing LinkLost");
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(client.Frames.Count==1 && client.Report()?.Weight==70.5,"frames and report despite throwing handlers");
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(client.Report()?.Weight==70.5 && !transport.IsOpen,"report after close");
+    var messages=errors.Select(e => e.Message).ToHashSet();
+    Require(messages.SetEquals(new[]{"frame handler","event handler","link handler"}),"handler errors reported: "+string.Join(",",messages));
+}
+{
+    // A custom transport whose Send throws: reported and handled as a send failure; the start does not hang.
+    var inner=Scale(); var transport=new ThrowingTransport(inner,core.Command("START_CONTINUOUS_MEASUREMENT"));
+    var client=new FisicaClient(core,transport); var errors=new ConcurrentQueue<Exception>(); client.Error+=errors.Enqueue;
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    var error=await Failure(client.StartAsync());
+    Require(error is FisicaException or FisicaCommandException && client.State==FisicaSessionState.Fault,"start fails after a throwing Send: "+error);
+    Require(errors.Any(e => e is IOException { Message: "write refused" }),"Send exception reported");
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(!inner.IsOpen,"closed after a throwing Send");
+}
+{
+    // Full mode keeps the analysis after close too; calls after close fail instead of hanging.
+    using var license=License("full"); var client=new FisicaClient(core,Scale(),license);
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    Require(client.Report() is { Weight: 70.5, FrameCount: 12 },"full report after close");
+    Require(await Failure(client.StartAsync()) is FisicaException && await Failure(client.ConnectAsync()) is FisicaException,"calls after close fail");
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+}
+{
+    // Callbacks go to the SynchronizationContext given.
+    var context=new CountingContext(); var transport=Scale(); var client=new FisicaClient(core,transport,callbacks: context);
+    int received=0; client.Frame+=_ => Interlocked.Increment(ref received);
+    await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+    await Until(() => Volatile.Read(ref received)==1,"frame through the context");
+    Require(context.Posts>0,"callbacks posted to the context");
+    await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+}
+{
     // Start clears the previous measurement; frames stay bounded (full mode hands out every packet).
     using var license=License("full");
     var transport=Scale(8); var client=new FisicaClient(core,transport,license);
@@ -405,3 +468,21 @@ if (values.TryGetValue("endpoint",out var endpoint)) {
     Require(await entitlement.SyncAsync() is { Refreshed: true, Error: null } && entitlement.Status().Reason==FisicaModeReason.FullEnded,"renewal when due");
 }
 Console.WriteLine("C# client, transports and license contract passed");
+
+/// <summary>A USB link whose Send throws for one request instead of raising SendFailed.</summary>
+sealed class ThrowingTransport(MockTransport inner,byte[] refused) : IFisicaTransport {
+    public FisicaLink? Link => FisicaLink.Usb;
+    public event Action? Ready { add => inner.Ready+=value; remove => inner.Ready-=value; }
+    public event Action<byte[]>? Bytes { add => inner.Bytes+=value; remove => inner.Bytes-=value; }
+    public event Action? Lost { add => inner.Lost+=value; remove => inner.Lost-=value; }
+    public event Action<Exception>? SendFailed { add => inner.SendFailed+=value; remove => inner.SendFailed-=value; }
+    public event Action<Exception>? Error { add => inner.Error+=value; remove => inner.Error-=value; }
+    public void Open() => inner.Open();
+    public void Send(byte[] bytes) { if (bytes.SequenceEqual(refused)) throw new IOException("write refused"); inner.Send(bytes); }
+    public void Close() => inner.Close();
+}
+/// <summary>Counts what the client posts and runs it on the thread pool.</summary>
+sealed class CountingContext : SynchronizationContext {
+    int posts; public int Posts => Volatile.Read(ref posts);
+    public override void Post(SendOrPostCallback callback,object? state) { Interlocked.Increment(ref posts); ThreadPool.QueueUserWorkItem(_ => callback(state)); }
+}

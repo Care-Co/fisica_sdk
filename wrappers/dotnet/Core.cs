@@ -97,6 +97,8 @@ internal sealed class SessionHandle : SafeHandleZeroOrMinusOneIsInvalid {
 /// full-mode license; weight and foot size (Analyze) cover every packet in any mode.</summary>
 public sealed class FisicaSession(FisicaCore core) : IDisposable {
     readonly SessionHandle handle=new(); readonly object gate=new(); readonly FisicaCore owner=core;
+    // Reused by every Poll (under gate): EVENT_BYTES holds any event, so nothing is allocated per poll but the result.
+    readonly uint[] meta=new uint[8]; readonly byte[] buffer=new byte[(int)FisicaLimit.EventBytes];
     void Valid(long now) { if(handle.IsClosed) throw new ObjectDisposedException(nameof(FisicaSession)); if(now<0) throw new ArgumentOutOfRangeException(nameof(now)); }
     public void Dispose() { lock(gate) handle.Dispose(); }
     public void Action(uint action,long value,long nowMs) { lock(gate) { Valid(nowMs); FisicaCore.Check(Native.fisica_core_session_action(handle,action,value,(ulong)nowMs)); } }
@@ -106,9 +108,9 @@ public sealed class FisicaSession(FisicaCore core) : IDisposable {
         Valid(nowMs); if(name.Contains('\0')) throw new ArgumentException("NUL in command"); payload??=[];
         FisicaCore.Check(Native.fisica_core_session_command(handle,name,value,payload,(uint)payload.Length,(ulong)nowMs));
     } }
-    public SessionEvent? Poll() { lock(gate) { Valid(0); var meta=new uint[8]; var bytes=new byte[(int)FisicaLimit.EventBytes];
-        int status=Native.fisica_core_session_poll(handle,meta,8,bytes,(uint)bytes.Length); if(status==3) return null;
-        FisicaCore.Check(status); return new(meta,bytes[..(int)meta[7]]);
+    public SessionEvent? Poll() { lock(gate) { Valid(0);
+        int status=Native.fisica_core_session_poll(handle,meta,8,buffer,(uint)buffer.Length); if(status==3) return null;
+        FisicaCore.Check(status); return new((uint[])meta.Clone(),buffer[..(int)meta[7]]);
     } }
     public List<SessionEvent> Drain() { lock(gate) { var events=new List<SessionEvent>(); while(Poll() is {} next) events.Add(next); return events; } }
     /// <summary>Copy the license decision into this session (null: basic mode). Call it again after the license
