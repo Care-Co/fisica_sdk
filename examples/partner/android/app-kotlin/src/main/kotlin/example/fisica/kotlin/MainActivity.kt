@@ -17,7 +17,11 @@ import java.util.concurrent.Executor
 
 class MainActivity : Activity() {
     companion object {
-        /** Paste an SDK key from the developer portal for full mode; empty runs in basic mode. */
+        /**
+         * Paste an SDK key from the developer portal for full mode; empty runs in basic mode. The key is
+         * bound to this app's package name, one seat for every install, so it ships inside the app
+         * (pairing with a code is for PCs).
+         */
         const val SDK_KEY = ""
         /** Activates the key for this app and renews it (needs the INTERNET permission). */
         const val PORTAL = "https://developer.fisicahealthcare.com"

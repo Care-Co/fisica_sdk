@@ -12,6 +12,11 @@ Swift/Kotlin/C# 0.3.0 기준. 설치는 회사가 제공한 **바이너리 패�
   https://developer.fisicahealthcare.com 에서 체험·계약 승인 후 만든다. 온라인이면 SDK가 키를
   처음 쓸 때 이 앱 ID나 PC로 활성화하고 기한 전에 갱신한다(`endpoint`도 같은 주소).
   인터넷이 없는 PC는 SDK가 보여주는 활성화 코드를 포털에 입력해 받은 `.fse` 파일을 가져온다.
+- PC는 키를 복사하지 않고 연결할 수 있다: `python -m fisica_sdk license pair`(또는 Python·C# 샘플의
+  `--pair`)가 코드를 보여주고, 조직 소유자·관리자가 포털 `/activate`에서 승인하면 이 PC에 키가 저장된다.
+  같은 PC의 Python·C# 앱은 키 지정 없이 그 키를 쓴다.
+- 모바일 앱(iOS·Android, 휴대폰의 Flutter)은 키를 앱에 넣는다. 키가 앱 ID에 묶여 설치 기기 수와 관계없이
+  좌석 하나이므로, 휴대폰 한 대를 연결해도 다른 설치에는 키가 가지 않는다.
 - 코어는 컴파일된 DLL/dylib/so/정적 라이브러리로 제공한다. 고객 앱은 코어 소스를
   받거나 컴파일하지 않는다. 공개 래퍼·샘플은 수정할 수 있다.
 - Windows x64와 ARM64 파일을 구분한다. macOS는 Intel/Apple Silicon universal2다.

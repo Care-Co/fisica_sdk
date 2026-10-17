@@ -12,6 +12,8 @@ void main() => runApp(const MaterialApp(home: ScalePage()));
 
 /// SDK key from the developer portal, e.g. `flutter run
 /// --dart-define=FISICA_SDK_KEY=FSE1...`. Without one the SDK runs in basic mode.
+/// On iOS and Android the key is bound to the app ID, one seat for every
+/// install, so it ships inside the app (pairing with a code is for PCs).
 const sdkKey = String.fromEnvironment('FISICA_SDK_KEY');
 const licenseEndpoint = String.fromEnvironment(
   'FISICA_LICENSE_ENDPOINT',
