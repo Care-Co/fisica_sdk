@@ -62,7 +62,7 @@ def entitlement_server(output):
         assert any(path.endswith('/activate') for path, _ in server.requests), 'the binding never activated the key'
         assert any(path == '/sdk/v1/pairing/token' for path, _ in server.requests), 'the binding never paired'
         unexpected = [(path, body) for path, body in server.requests
-                      if not ((path == '/sdk/v1/entitlement/refresh' and body == {}) or
+                      if not ((path in ('/sdk/v1/entitlement/refresh', '/sdk/v1/entitlement/release') and body == {}) or
                               (path in ('/sdk/v1/entitlement/activate', '/sdk/v1/pairing') and body == target) or
                               (path == '/sdk/v1/pairing/token' and set(body) == {'device_code'}))]
         assert not unexpected, f'binding sent more than its target, device codes and empty refreshes: {unexpected}'
@@ -90,9 +90,23 @@ def flat_fixtures(output, extra=None):
 
 
 def native(output):
-    """Public C ABI contracts under UBSan (and ASan where its runtime works on the host)."""
+    """Public C ABI contracts under UBSan (and ASan where its runtime works on the host).
+
+    The contracts use a validation build (test keys trusted, host clock as given). A customer
+    build is checked as well: production keys only, so the core reads the system clock itself.
+    """
     generated = output / 'generated'
     prepare_release(generated)
+    customer = output / 'generated-customer'
+    previous = os.environ.get('FISICA_ENTITLEMENT_KEYS')
+    os.environ['FISICA_ENTITLEMENT_KEYS'] = 'release'
+    try:
+        prepare_release(customer)
+    finally:
+        if previous is None:
+            os.environ.pop('FISICA_ENTITLEMENT_KEYS')
+        else:
+            os.environ['FISICA_ENTITLEMENT_KEYS'] = previous
     vectors = [f'{key}={value}' for key, value in license_vectors().items()]
     sources = sorted((ROOT / 'native/src').glob('*.cpp'))
     frameworks = ['-framework', 'CoreFoundation'] if sys.platform == 'darwin' else []
@@ -103,6 +117,11 @@ def native(output):
                  '-fno-sanitize-recover=all', '-DFISICA_CORE_STATIC', '-I', ROOT / 'native/include', '-I', generated,
                  *sources, ROOT / 'tests' / f'{name}.cpp', *frameworks, '-o', binary])
             run([binary, *arguments], timeout=300)
+        binary = output / f'native_customer_clock-{sanitizer.replace(",", "-")}'
+        run([os.environ.get('CXX', 'c++'), '-std=c++17', '-O1', '-g', '-UNDEBUG', '-ffp-contract=off', f'-fsanitize={sanitizer}',
+             '-fno-sanitize-recover=all', '-DFISICA_CORE_STATIC', '-I', ROOT / 'native/include', '-I', customer,
+             *sources, ROOT / 'tests' / 'native_customer_clock.cpp', *frameworks, '-o', binary])
+        run([binary], timeout=60)
 
 
 def kotlin(output):

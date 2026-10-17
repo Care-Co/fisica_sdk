@@ -167,6 +167,12 @@ class FisicaEntitlementText(IntEnum):
     STATE_NAME = 12
 
 
+class FisicaExchange(IntEnum):
+    NONE = 0
+    ACTIVATE = 1
+    REFRESH = 2
+
+
 # GATT characteristics used by the Scale. BLE_PROFILE_VERIFIED stays False until confirmed on production firmware.
 BLE_PROFILES = {
     'scale': {'write': 'beb5483e-36e1-4688-b7f5-ea07361b26a8', 'notify': 'beb5483e-36e1-4688-b7f5-ea07361b26a8'},

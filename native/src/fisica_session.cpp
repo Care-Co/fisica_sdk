@@ -34,25 +34,34 @@ struct FisicaSession {
     uint64_t full_until_ms = 0, last_frame_ms = 0;
     bool framed = false;
     // Every measurement packet since START, for analysis in any mode.
-    std::deque<std::vector<uint8_t>> received;
+    std::deque<std::array<uint8_t,fisica::packet_size>> received;
 
     void emit(uint32_t kind, uint32_t status=0, uint32_t error=0,
               uint32_t operation=0, const std::vector<uint8_t>& bytes={}) {
-        if (events.size() >= 1024) throw std::overflow_error("Drain session events");
+        if (events.size() >= 1024) {
+            // A host that does not poll loses old frames, never results or state changes.
+            const auto old=std::find_if(events.begin(),events.end(),[](const Event& e) { return e.meta[0]==FISICA_MEASUREMENT; });
+            if (old==events.end()) throw std::overflow_error("Drain session events");
+            events.erase(old);
+        }
         const bool packet = kind != FISICA_MEASUREMENT && bytes.size() >= 3;
         uint32_t header = packet ? bytes[1] : 0;
         uint32_t type = packet ? bytes[2] : 0;
         events.push_back({{kind,state,status,error,operation,header,type,uint32_t(bytes.size())},bytes});
     }
     void transition(uint32_t next) { if (state!=next) { state=next; emit(FISICA_STATE); } }
-    uint32_t open_features() const { return full && now<full_until_ms ? features : 0; }
+    // License times and the basic-mode frame interval use the core's own clock in customer
+    // builds (fisica_license.h), so feeding packets with made-up times does not open them.
+    uint32_t open_features() const { return full && fisica_monotonic_ms(now)<full_until_ms ? features : 0; }
     // Basic mode hands out display grids at a limited rate and never the packet itself.
     void measurement(const std::vector<uint8_t>& packet) {
         if (received.size()>=FISICA_LIMIT_ANALYSIS_FRAMES) received.pop_front();
-        received.push_back(packet);
+        received.emplace_back();
+        std::copy_n(packet.begin(),fisica::packet_size,received.back().begin());
         const uint32_t open=open_features();
-        if (!(open & FISICA_FEATURE_FULL_RATE) && framed && now-last_frame_ms<FISICA_LIMIT_BASIC_FRAME_INTERVAL_MS) return;
-        framed=true; last_frame_ms=now;
+        const uint64_t clock=fisica_monotonic_ms(now);
+        if (!(open & FISICA_FEATURE_FULL_RATE) && framed && clock-last_frame_ms<FISICA_LIMIT_BASIC_FRAME_INTERVAL_MS) return;
+        framed=true; last_frame_ms=clock;
         std::array<double,fisica::raw_cells> raw{}; std::array<double,fisica::display_cells> display{}; std::array<double,2> metrics{};
         fisica::decode_measurement(packet.data(),raw.data(),display.data(),metrics.data());
         std::vector<uint8_t> payload; payload.reserve(8*(1+fisica::display_cells+fisica::raw_cells)+fisica::packet_size);
@@ -84,7 +93,10 @@ struct FisicaSession {
     void clear_pending() { phase=NONE; pending.clear(); }
     void release() {
         if (owned) { transition(FISICA_RELEASING); send(RELEASE,"SET_DEVICE_STOP"); }
-        else { transition(FISICA_DISCONNECTED); emit(FISICA_RESULT,uncertain ? FISICA_TRANSPORT_LOST : FISICA_OK,0,FISICA_CLOSE); }
+        else {
+            closing=false; stop_requested=false;
+            transition(FISICA_DISCONNECTED); emit(FISICA_RESULT,uncertain ? FISICA_TRANSPORT_LOST : FISICA_OK,0,FISICA_CLOSE);
+        }
     }
     void begin() {
         transition(FISICA_STARTING);
@@ -189,7 +201,19 @@ namespace {
 template<class F> int32_t protect(FisicaSession *s, F operation) noexcept {
     if (!s) return FISICA_INVALID_ARGUMENT;
     try { return operation(); }
-    catch (...) { s->events.clear(); s->state=FISICA_FAULT; s->desired=false; s->clear_pending(); return FISICA_INTERNAL_ERROR; }
+    catch (...) {
+        // An internal failure faults the session and says so: the host sees the state change and
+        // the pending operation's result, and a later DISCONNECT is not refused as busy.
+        const uint32_t op=s->phase!=NONE ? s->operation() : 0;
+        s->events.clear(); s->clear_pending();
+        s->state=FISICA_FAULT; s->desired=false; s->closing=false; s->stop_requested=false;
+        s->timer_active=false; s->measurement_deadline=0;
+        try {
+            s->events.push_back({{FISICA_STATE,FISICA_FAULT,0,0,0,0,0,0},{}});
+            if (op) s->events.push_back({{FISICA_RESULT,FISICA_FAULT,FISICA_INTERNAL_ERROR,0,op,0,0,0},{}});
+        } catch (...) {}
+        return FISICA_INTERNAL_ERROR;
+    }
 }
 }
 extern "C" {
@@ -242,7 +266,10 @@ int32_t fisica_core_session_action(FisicaSession *s,uint32_t action,int64_t valu
             const auto op=s->operation(); const bool pending=s->phase!=NONE;
             s->uncertain = s->uncertain || s->owned || s->phase==MODE;
             if (s->state==FISICA_STARTING) s->desired=false;
-            s->clear_pending(); s->input.clear(); s->events.clear(); s->owned=false;
+            // Bytes not sent yet are void; results and frames already produced still count.
+            s->clear_pending(); s->input.clear(); s->owned=false;
+            s->events.erase(std::remove_if(s->events.begin(),s->events.end(),
+                [](const Event& e) { return e.meta[0]==FISICA_TRANSMIT; }),s->events.end());
             if (value) { s->desired=false; s->transition(FISICA_FAULT); }
             else s->transition(FISICA_RECOVERING);
             if (pending) s->emit(FISICA_RESULT,FISICA_TRANSPORT_LOST,0,op);
@@ -264,6 +291,8 @@ int32_t fisica_core_session_command(FisicaSession *s,const char *name,double val
         if (status) return status;
         if (size<8 || bytes[0]!=0x24 || bytes[1]==0x22 || bytes[1]==0x51 || bytes[1]==0x43)
             return FISICA_INVALID_ARGUMENT;
+        // Only commands whose answer the session can recognize (fisica_core.cpp response_packet).
+        if (bytes[1]<0x10 || bytes[1]>0x60 || (bytes[2]!=0x47 && bytes[2]!=0x53)) return FISICA_INVALID_ARGUMENT;
         status=s->advance(now); if (status) return status;
         if (s->phase!=NONE) return FISICA_BUSY;
         if (s->state!=FISICA_IDLE && s->state!=FISICA_MEASURING) return FISICA_INVALID_STATE;
@@ -282,7 +311,9 @@ int32_t fisica_core_session_feed(FisicaSession *s,const uint8_t *bytes,uint32_t 
             s->input.insert(s->input.end(),bytes+offset,bytes+offset+count); offset+=count;
             while (!s->input.empty()) {
                 std::array<uint8_t,4096> packet{}; uint32_t consumed=0,kind=0,size=0;
-                status=fisica_core_next_packet(s->input.data(),s->input.size(),&consumed,&kind,packet.data(),packet.size(),&size);
+                const bool streaming=s->state==FISICA_MEASURING || s->state==FISICA_STOPPING;
+                const uint8_t *expected=s->phase!=NONE && !streaming && s->pending.size()>2 ? s->pending.data()+1 : nullptr;
+                status=fisica::next_packet(s->input.data(),s->input.size(),&consumed,&kind,packet.data(),packet.size(),&size,expected);
                 if (status!=FISICA_OK && status!=FISICA_NO_RESULT) return status;
                 if (!consumed) break;
                 s->input.erase(s->input.begin(),s->input.begin()+consumed);
@@ -308,23 +339,21 @@ int32_t fisica_core_session_poll(FisicaSession *s,uint32_t *event,uint32_t event
 }
 int32_t fisica_core_session_license(FisicaSession *s,FisicaEntitlement *license,uint64_t now_s,uint64_t now_ms) {
     return protect(s,[&]() -> int32_t {
-        if (now_s>(1ull<<53)) return FISICA_INVALID_ARGUMENT;
+        if (now_s>fisica_max_wall_seconds) return FISICA_INVALID_ARGUMENT;
         auto status=s->advance(now_ms); if (status) return status;
+        now_s=fisica_wall_seconds(now_s);
         const FisicaLicenseView view=fisica_license_view(license,now_s);
         s->full=view.mode==FISICA_MODE_FULL && view.until>now_s;
         s->features=s->full ? view.features : 0;
-        s->full_until_ms=s->full ? s->now+std::min(view.until-now_s,max_license_seconds)*1000 : 0;
+        s->full_until_ms=s->full ? fisica_monotonic_ms(s->now)+std::min(view.until-now_s,max_license_seconds)*1000 : 0;
         return FISICA_OK;
     });
 }
 int32_t fisica_core_session_analyze(FisicaSession *s,double *result,uint32_t capacity) {
-    return protect(s,[&]() -> int32_t {
-        if (!result) return FISICA_INVALID_ARGUMENT;
-        if (capacity<5) return FISICA_BUFFER_TOO_SMALL;
-        if (s->received.empty()) return FISICA_NO_RESULT;
-        std::vector<uint8_t> packets; packets.reserve(s->received.size()*fisica::packet_size);
-        for (const auto& packet:s->received) packets.insert(packets.end(),packet.begin(),packet.end());
-        return fisica_core_analyze_packets(packets.data(),uint32_t(s->received.size()),result,capacity);
-    });
+    // Read-only: a failure here is reported and never changes the session.
+    if (!s || !result) return FISICA_INVALID_ARGUMENT;
+    if (capacity<5) return FISICA_BUFFER_TOO_SMALL;
+    if (s->received.empty()) return FISICA_NO_RESULT;
+    return fisica::analyze_packets(uint32_t(s->received.size()),[&](uint32_t i) { return s->received[i].data(); },result,capacity);
 }
 }

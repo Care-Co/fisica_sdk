@@ -146,6 +146,11 @@ abstract final class FisicaEntitlementText {
   static const activationCode = 11;
   static const stateName = 12;
 }
+abstract final class FisicaExchange {
+  static const none = 0;
+  static const activate = 1;
+  static const refresh = 2;
+}
 /// GATT characteristics used by the Scale. `verified` is false until confirmed on production firmware.
 class FisicaBleProfile {
   final String write, notify;

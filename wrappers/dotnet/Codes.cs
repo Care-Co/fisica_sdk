@@ -19,6 +19,7 @@ public enum FisicaBindType : uint { None = 0, App = 1, Pc = 2 }
 public enum FisicaKeyEnvironment : uint { None = 0, Production = 1, Test = 2 }
 [System.Flags] public enum FisicaEntitlementWarning : uint { RenewDue = 1, Grace = 2, FullEnding = 4, ImportRejected = 8, TestKey = 16 }
 public enum FisicaEntitlementText : uint { Company = 1, Contract = 2, Grants = 3, SigningKey = 4, Token = 5, Key = 6, Bind = 7, Target = 8, Features = 9, ActivationRequest = 10, ActivationCode = 11, StateName = 12 }
+public enum FisicaExchange : uint { None = 0, Activate = 1, Refresh = 2 }
 /// <summary>GATT characteristics used by the Scale. Verified is false until confirmed on production firmware.</summary>
 public sealed record FisicaBleProfile(string Write, string Notify) {
     public static readonly FisicaBleProfile Scale = new("beb5483e-36e1-4688-b7f5-ea07361b26a8", "beb5483e-36e1-4688-b7f5-ea07361b26a8");

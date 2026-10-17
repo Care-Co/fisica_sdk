@@ -8,10 +8,12 @@ and reports the status.
 The SDK does not track its own use: nothing here records or reports whether, when or how often
 it is used. The stored state is the signed key and the latest time seen, kept for offline checks.
 """
+import copy
 import json
 import os
 from pathlib import Path
 import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -60,9 +62,15 @@ _times = ('verified_at', 'refresh_by', 'key_until', 'full_until', 'contract_star
 NO_KEY_STATUS = {
     'mode': 'basic', 'reason': 'no_key', 'features': [], 'contract_state': 'unverified', 'contract_kind': None,
     'track': None, 'company': None, 'contract': None, 'key': None, 'grants': [], 'bind_type': None, 'bind': None,
+    'target_type': None, 'target': None,
     **{name: None for name in _times}, 'last_import': None, 'key_environment': None, 'warnings': [],
-    'message': REASON_MESSAGES['no_key'], 'last_sync_error': None,
+    'warning_bits': 0, 'message': REASON_MESSAGES['no_key'], 'activation_code': None, 'last_sync_error': None,
 }
+
+
+def no_key_status():
+    """A fresh status without a key: the same keys as Entitlement.status(), nothing shared."""
+    return copy.deepcopy(NO_KEY_STATUS)
 
 
 def default_storage_directory():
@@ -99,6 +107,7 @@ class Entitlement:
         self._noticed = (None, 0)
         self._sync_thread = None
         self._sync_lock = threading.Lock()  # One exchange with the server at a time.
+        self.released_online = False
         self._next_sync = 0.0
         self.last_sync_error = None
         if file is not None:
@@ -133,9 +142,17 @@ class Entitlement:
             path = path or self._path(self._native.status(self._now()))
             if path:
                 path.parent.mkdir(parents=True, exist_ok=True)
-                temporary = path.with_name(path.name + '.tmp')
-                temporary.write_bytes(self._native.export_state())
-                os.replace(temporary, path)
+                # A temporary file of its own: other processes and wrappers on this PC may save the same seat.
+                handle, temporary = tempfile.mkstemp(dir=path.parent, prefix=path.name + '.', suffix='.tmp')
+                try:
+                    with os.fdopen(handle, 'wb') as file:
+                        file.write(self._native.export_state())
+                        file.flush()
+                        os.fsync(file.fileno())
+                    os.replace(temporary, path)
+                except BaseException:
+                    Path(temporary).unlink(missing_ok=True)
+                    raise
         except OSError as error:
             self.last_sync_error = 'storage: ' + str(error)
 
@@ -189,7 +206,7 @@ class Entitlement:
                 except (OSError, ValueError):
                     pass
                 self._save()
-            self._notify()
+        self._notify()
         if outcome == 1:
             self.sync()
         return IMPORT_OUTCOME[outcome]
@@ -224,6 +241,7 @@ class Entitlement:
         return status
 
     def _notify(self):
+        # Called without holding the lock: an on_status callback may use the SDK.
         status = self.status()
         reason, seen = self._noticed
         new = status['warning_bits'] & ~seen
@@ -271,20 +289,29 @@ class Entitlement:
             return self._native.activation_code()
 
     def release(self):
-        """Release the key activated here: forget it and return the FRC1 code to enter in the developer portal.
+        """Release the key activated here: forget it and return the FRC1 code for the developer portal.
 
-        Online, the seat is also freed when the server next sees the key as released; offline, the
-        code is how the portal learns that this device no longer holds the key.
+        Online (endpoint set), the SDK also tells the server with the key itself, which frees the seat at
+        once; `released_online` says whether that worked. Offline, or when it failed, enter the code at
+        the key in the developer portal.
         """
         with self._lock:
             path = self._path(self._native.status(self._now()))
+            token = self._native.token()
             code = self._native.release()
             try:
                 if path:
                     path.unlink(missing_ok=True)
             except OSError as error:
                 self.last_sync_error = 'storage: ' + str(error)
-            self._notify()
+        self._notify()
+        self.released_online = False
+        if self._online and self._endpoint and token:
+            try:
+                self._post('/sdk/v1/entitlement/release', token, {})
+                self.released_online = True
+            except Exception as error:
+                self.last_sync_error = 'network: ' + str(error)
         return code
 
     def pair(self, on_code=None, timeout=None, cancel=None):
@@ -361,17 +388,14 @@ class Entitlement:
             return json.loads(data) if data else None
 
     def _due(self):
-        """What the server should do now: activate, renew, or nothing."""
+        """What the server should do now, as the core decides it: activate, renew, or nothing."""
         with self._lock:
-            raw = self._native.status(self._now())
+            exchange = self._native.next_exchange(self._now())
             token = self._native.token()
-            request = self._native.activation_request()
-        reason = REASON[raw['reason']]
-        if not token or reason in ('no_key', 'legacy_token', 'other_target', 'no_target', 'revoked'):
-            return None, token, None
-        if reason == 'not_activated':
-            return ('/sdk/v1/entitlement/activate', token, request) if request else (None, token, None)
-        if raw['warning_bits'] & codes.FisicaEntitlementWarning.RENEW_DUE or reason in ('key_expired', 'full_ended', 'not_started'):
+            request = self._native.activation_request() if exchange == codes.FisicaExchange.ACTIVATE else None
+        if exchange == codes.FisicaExchange.ACTIVATE and request:
+            return '/sdk/v1/entitlement/activate', token, request
+        if exchange == codes.FisicaExchange.REFRESH:
             return '/sdk/v1/entitlement/refresh', token, {}
         return None, token, None
 
@@ -393,6 +417,9 @@ class Entitlement:
                 response = self._post(path, token, body)
             except urllib.error.HTTPError as error:
                 # A refused activation (key in use elsewhere, released, trial already used) is reported.
+                # The server's answer will not change within a minute: ask again in an hour.
+                if 400 <= error.code < 500 and error.code != 429:
+                    self._next_sync = time.monotonic() + 3600
                 raise RuntimeError(f"{error.code} {error.read().decode('utf-8', 'replace')[:200]}") from None
             with self._lock:
                 save = self._native.import_token(response['token'], self._now()) == 1
@@ -409,10 +436,10 @@ class Entitlement:
             # A communication failure is not an expiry, a release or a revocation.
             result['error'] = self.last_sync_error = 'network: ' + str(error)
         try:
-            with self._lock:
-                if save:
+            if save:
+                with self._lock:
                     self._save()
-                self._notify()
+            self._notify()
         except Exception:
             pass  # Closed while a background sync was finishing.
         return result

@@ -9,6 +9,7 @@
 #include "third_party/monocypher/monocypher-ed25519.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -158,6 +159,27 @@ bool app_id(const std::string& value) {
     }
     return dotted;
 }
+
+}  // namespace
+namespace fisica {
+bool apk_mapped(const std::string& maps, const std::string& package) {
+    if (package.empty()) return false;
+    const std::string marker = "/" + package + "-";
+    for (size_t begin = 0; begin < maps.size();) {
+        size_t finish = maps.find('\n', begin);
+        if (finish == std::string::npos) finish = maps.size();
+        const std::string line = maps.substr(begin, finish - begin);
+        begin = finish + 1;
+        const size_t at = line.find(marker);
+        if (at == std::string::npos) continue;
+        const size_t slash = line.find('/', at + marker.size());
+        if (slash != std::string::npos && line.compare(slash, std::string::npos, "/base.apk") == 0 &&
+            line.find("/app/") != std::string::npos && line.find("/app/") < at + 1) return true;
+    }
+    return false;
+}
+}  // namespace fisica
+namespace {
 bool pc_hash(const std::string& value) {
     return value.size() == 64 && std::all_of(value.begin(), value.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
 }
@@ -233,14 +255,23 @@ Target read_target() noexcept {
             if (status == ERROR_SUCCESS && type == REG_SZ) return pc_target(trimmed(std::string(value, size)));
         }
 #elif defined(__ANDROID__)
-        // The process name is the package name (":" starts a named secondary process).
+        // The process name can be set to another app's name (android:process in the manifest),
+        // but the installed APK's path is chosen by the system.
+        // So the process name (":" starts a named secondary process) counts only when this process
+        // has that package's own APK mapped: /data/app/[~~<hash>/]<package>-<suffix>/base.apk.
+        std::string name;
         if (FILE *file = std::fopen("/proc/self/cmdline", "rb")) {
             char buffer[256] = {};
             const size_t size = std::fread(buffer, 1, sizeof buffer - 1, file);
             std::fclose(file);
-            std::string name(buffer, strnlen(buffer, size));
+            name = std::string(buffer, strnlen(buffer, size));
             name = name.substr(0, name.find(':'));
-            if (app_id(name)) return {FISICA_BIND_APP, name};
+        }
+        if (FILE *file = std::fopen("/proc/self/maps", "rb")) {
+            std::string maps; char chunk[4096]; size_t size;
+            while ((size = std::fread(chunk, 1, sizeof chunk, file)) > 0 && maps.size() < (16u << 20)) maps.append(chunk, size);
+            std::fclose(file);
+            if (app_id(name) && fisica::apk_mapped(maps, name)) return {FISICA_BIND_APP, name};
         }
 #else
         for (const char *path : {"/etc/machine-id", "/var/lib/dbus/machine-id"}) {
@@ -449,9 +480,29 @@ template<class F> int32_t guarded(FisicaEntitlement *context, F operation) noexc
 }
 }
 
+uint64_t fisica_wall_seconds(uint64_t host_s) noexcept {
+#if FISICA_VALIDATION_BUILD
+    return host_s;
+#else
+    const auto system = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    return std::max<uint64_t>(host_s, system > 0 ? uint64_t(system) : 0);
+#endif
+}
+uint64_t fisica_monotonic_ms(uint64_t host_ms) noexcept {
+#if FISICA_VALIDATION_BUILD
+    return host_ms;
+#else
+    (void)host_ms;
+    return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+#endif
+}
+
 FisicaLicenseView fisica_license_view(FisicaEntitlement *context, uint64_t now_s) noexcept {
     FisicaLicenseView view;
-    if (!context || now_s > max_time) return view;
+    if (!context || now_s > fisica_max_wall_seconds) return view;
+    now_s = fisica_wall_seconds(now_s);
     try {
         const Evaluation result = context->observe(now_s);
         view.mode = result.mode; view.features = result.features; view.until = result.until;
@@ -474,7 +525,8 @@ void fisica_core_entitlement_destroy(FisicaEntitlement *context) { delete contex
 int32_t fisica_core_entitlement_import(FisicaEntitlement *context, const uint8_t *token, uint32_t length,
                                       uint64_t now_s, uint32_t *outcome) {
     return guarded(context, [&]() -> int32_t {
-        if (!token || !outcome || now_s > max_time) return FISICA_INVALID_ARGUMENT;
+        if (!token || !outcome || now_s > fisica_max_wall_seconds) return FISICA_INVALID_ARGUMENT;
+        now_s = fisica_wall_seconds(now_s);
         Token parsed;
         uint32_t result = parse_token(token, length, parsed);
         // A key activated elsewhere never replaces the key this target holds.
@@ -494,8 +546,9 @@ int32_t fisica_core_entitlement_import(FisicaEntitlement *context, const uint8_t
 
 int32_t fisica_core_entitlement_status(FisicaEntitlement *context, uint64_t now_s, uint64_t *status, uint32_t capacity) {
     return guarded(context, [&]() -> int32_t {
-        if (!status || now_s > max_time) return FISICA_INVALID_ARGUMENT;
+        if (!status || now_s > fisica_max_wall_seconds) return FISICA_INVALID_ARGUMENT;
         if (capacity < FISICA_LIMIT_STATUS_FIELDS) return FISICA_BUFFER_TOO_SMALL;
+        now_s = fisica_wall_seconds(now_s);
         std::fill_n(status, FISICA_LIMIT_STATUS_FIELDS, 0);
         const Evaluation result = context->observe(now_s);
         const Token& token = context->current;
@@ -546,6 +599,29 @@ int32_t fisica_core_entitlement_text(FisicaEntitlement *context, uint32_t field,
     });
 }
 
+int32_t fisica_core_entitlement_next_exchange(FisicaEntitlement *context, uint64_t now_s, uint32_t *exchange) {
+    return guarded(context, [&]() -> int32_t {
+        if (!exchange || now_s > fisica_max_wall_seconds) return FISICA_INVALID_ARGUMENT;
+        const Evaluation result = context->observe(fisica_wall_seconds(now_s));
+        *exchange = FISICA_EXCHANGE_NONE;
+        if (!context->verified || context->current.key.empty()) return FISICA_OK;  // no key, or a legacy contract token
+        switch (result.reason) {
+        case FISICA_REASON_NOT_ACTIVATED:
+            if (context->target.type) *exchange = FISICA_EXCHANGE_ACTIVATE;
+            break;
+        case FISICA_REASON_CLOCK_ROLLBACK: case FISICA_REASON_KEY_EXPIRED:
+        case FISICA_REASON_NOT_STARTED: case FISICA_REASON_FULL_ENDED:
+            *exchange = FISICA_EXCHANGE_REFRESH;
+            break;
+        case FISICA_REASON_NONE:
+            if (result.warnings & FISICA_WARN_RENEW_DUE) *exchange = FISICA_EXCHANGE_REFRESH;
+            break;
+        default: break;  // no target, another target, or released: nothing the server can change here
+        }
+        return FISICA_OK;
+    });
+}
+
 int32_t fisica_core_entitlement_release(FisicaEntitlement *context, uint8_t *output, uint32_t capacity, uint32_t *length) {
     return guarded(context, [&]() -> int32_t {
         if (!length) return FISICA_INVALID_ARGUMENT;
@@ -588,7 +664,7 @@ int32_t fisica_core_entitlement_restore(FisicaEntitlement *context, const uint8_
                     if (*c < '0' || *c > '9') { digits = false; break; }
                     value = value * 10 + uint64_t(*c - '0');
                 }
-                if (digits && value <= max_time) latest = value;
+                if (digits && value <= fisica_max_wall_seconds) latest = value;
             }
             cursor = line_end == finish ? finish : line_end + 1;
         }

@@ -516,8 +516,56 @@ def test_license_commands(key_storage, capsys):
     assert main(['license', 'status', '--json']) == 0
     assert json.loads(capsys.readouterr().out)['key'] == 'key_1'
     assert main(['license', 'code']) == 1  # already activated
-    assert main(['license', 'release', '--yes']) == 0
-    code = capsys.readouterr().out.split()[-1]
-    assert read_code(code, 'FRC1') == {'k': 'key_1', 't': 'pc', 'b': here()}
+    assert main(['license', 'release', '--yes', '--endpoint', url]) == 0
+    assert 'seat is free' in capsys.readouterr().out and mock.keys['key_1']['released']  # released online
     assert main(['license', 'status']) == 1 and not list(key_storage.iterdir())
     mock.stop()
+
+
+def test_release_tells_the_server_online_and_falls_back_to_the_code(server, tmp_path):
+    mock, url = server
+    online = quiet(token=key(), endpoint=url, storage=tmp_path / 'state', clock=Clock())
+    code = online.release()
+    assert online.released_online and mock.keys['key_1']['released']
+    assert mock.requests[-1] == ('/sdk/v1/entitlement/release', {})
+    assert read_code(code, 'FRC1') == {'k': 'key_1', 't': 'pc', 'b': here()}
+    offline = quiet(token=key(), endpoint='http://127.0.0.1:9', storage=None, clock=Clock(), timeout=0.5)
+    offline.release()
+    assert not offline.released_online and offline.last_sync_error.startswith('network:')
+
+
+def test_core_decides_when_to_refresh_including_after_a_clock_set_back(server, tmp_path):
+    from fisica_sdk import codes
+    mock, url = server
+    clock = Clock()
+    entitlement = quiet(token=key(), endpoint=url, storage=None, clock=clock)
+    assert entitlement.native.next_exchange(NOW) == codes.FisicaExchange.NONE
+    clock.now = NOW + 40 * DAY  # a clock once set far ahead...
+    entitlement.status()
+    clock.now = NOW + DAY        # ...and corrected: basic mode until a newly signed key arrives
+    assert entitlement.status()['reason'] == 'clock_rollback'
+    assert entitlement.native.next_exchange(clock.now) == codes.FisicaExchange.REFRESH
+    mock.clock.now = NOW + DAY
+    mock.keys['key_1'].update(bind_type='pc', bind=here())
+    entitlement.sync(wait=True)
+    assert ('/sdk/v1/entitlement/refresh', {}) in mock.requests
+    assert entitlement.status()['mode'] == 'full'
+    unbound = quiet(token=key(bound=False), storage=None, clock=Clock())
+    assert unbound.native.next_exchange(NOW) == codes.FisicaExchange.ACTIVATE
+
+
+def test_a_refused_exchange_is_not_retried_every_minute(server, tmp_path):
+    import time as clock_module
+    mock, url = server
+    mock.keys['key_1'].update(bind_type='pc', bind='0' * 64)  # activated elsewhere: the server refuses
+    entitlement = quiet(token=key(bound=False), endpoint=url, storage=None, clock=Clock())
+    result = entitlement.sync(wait=True)
+    assert result['error'].startswith('network: 409')
+    assert entitlement._next_sync > clock_module.monotonic() + 3000
+
+
+def test_times_that_are_not_unix_seconds_are_refused():
+    from fisica_sdk.errors import FisicaArgumentError
+    with NativeEntitlement() as context:
+        with pytest.raises(FisicaArgumentError):
+            context.status(NOW * 1000)  # milliseconds by mistake

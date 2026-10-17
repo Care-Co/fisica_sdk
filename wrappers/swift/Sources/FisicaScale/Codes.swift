@@ -145,6 +145,11 @@ public enum FisicaEntitlementText: UInt32, CaseIterable {
     case activationCode = 11
     case stateName = 12
 }
+public enum FisicaExchange: UInt32, CaseIterable {
+    case none = 0
+    case activate = 1
+    case refresh = 2
+}
 /// GATT characteristics used by the Scale. `verified` is false until confirmed on production firmware.
 public struct FisicaBleProfile: Equatable {
     public let write: String, notify: String
