@@ -267,8 +267,8 @@ class FisicaSDK:
         """Full or basic mode, the reason for basic mode, open features and the key's dates."""
         if self._stored_entitlement():
             return self._entitlement.status()
-        from .entitlement import NO_KEY_STATUS
-        return dict(NO_KEY_STATUS)
+        from .entitlement import no_key_status
+        return no_key_status()
 
     def activation_code(self):
         """Code to enter in the developer portal to activate the loaded key for a device that is never online."""
