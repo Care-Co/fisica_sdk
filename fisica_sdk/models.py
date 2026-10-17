@@ -17,7 +17,7 @@ class MeasurementFrame:
     timestamp: str
     sensor_matrix: List[List[float]]          # processed relative values, not calibrated kPa
     weight: float                             # 측정 시점 체중
-    battery: float
+    battery: Optional[float]                  # None: measurement packets carry no battery field
     raw_data: Optional[List[int]] = None       # 원본 645-byte rawData
     raw_grid: Optional[List[List[float]]] = None
     battery_valid: bool = False

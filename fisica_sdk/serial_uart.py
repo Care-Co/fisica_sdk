@@ -39,12 +39,3 @@ class SerialUART:
 
     def close(self):
         self.ser.close()
-
-    def stream(self):
-        while True:
-            yield self.receive()
-
-    def receive(self):
-        if self.ser.in_waiting:
-            return self.ser.readline().decode('utf-8').strip()
-        return ""
