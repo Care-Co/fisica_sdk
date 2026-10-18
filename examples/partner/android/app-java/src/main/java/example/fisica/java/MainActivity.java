@@ -110,7 +110,7 @@ public class MainActivity extends Activity {
         try {
             core = new FisicaCore(null, message -> { System.err.println(message); return Unit.INSTANCE; });
             // Basic mode without a key: measurement, weight and foot size; one frame a second, no raw data.
-            license = new FisicaEntitlement(core, PORTAL, getFilesDir());
+            license = new FisicaEntitlement(core, PORTAL);  // the key is kept in the app's files by default
             license.setOnStatus(current -> { runOnUiThread(this::showLicense); return Unit.INSTANCE; });
             if (!SDK_KEY.isEmpty()) license.importToken(SDK_KEY);
             showLicense();

@@ -103,8 +103,8 @@ class _ScalePageState extends State<ScalePage> {
       version =
           'Fisica SDK ${platform.sdkVersion} (core ${platform.coreVersion})';
       // One license for the app. Online, a new key is activated for this app
-      // or PC and renewed automatically. Pass storageDirectory (for example
-      // from path_provider) to keep the activated key across launches.
+      // or PC and renewed automatically. The activated key is kept in the
+      // app's storage by default and found again at the next launch.
       final current = entitlement = FisicaEntitlement(
         platform,
         endpoint: licenseEndpoint,

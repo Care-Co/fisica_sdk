@@ -91,7 +91,7 @@ class MainActivity : Activity() {
         try {
             core = FisicaCore()
             // Basic mode without a key: measurement, weight and foot size; one frame a second, no raw data.
-            license = FisicaEntitlement(core, PORTAL, filesDir)
+            license = FisicaEntitlement(core, PORTAL)  // the key is kept in the app's files by default
             license.onStatus = { runOnUiThread { showLicense() } }
             if (SDK_KEY.isNotEmpty()) license.importToken(SDK_KEY)
             showLicense()
