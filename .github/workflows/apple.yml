@@ -37,17 +37,42 @@ jobs:
           ln -sf "$(python3 -c 'import sys; print(sys.executable)')" "$RUNNER_TEMP/bin/python"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/bin/python" --version
+      # QA builds (--validation) go to .build/platforms-validation and their archives end in -validation.
       - run: python tools/build_platforms.py --validation --target apple
       - name: Swift contract (client, entitlement, online exchange with the mock server)
         run: python tools/verify_bindings.py swift
       - run: python tools/build_platforms.py --validation --target macosx_11_0_universal2
-      - name: Audit public Apple artifacts (QA build, test key allowed)
-        run: python tools/audit_artifacts.py --validation $(python tools/build_platforms.py --print-artifacts apple macosx_11_0_universal2)
+      - name: Audit public Apple artifacts (QA build, test key allowed, -validation names)
+        run: python tools/audit_artifacts.py --validation $(python tools/build_platforms.py --validation --print-artifacts apple macosx_11_0_universal2)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         continue-on-error: true  # artifact storage is billed to the account; the checks above are the result
         with:
           name: fisica-apple-binaries-validation  # QA build: trusts the test key, never for customers
           path: |
-            .build/platforms/apple/*.zip
-            .build/platforms/*.zip
+            .build/platforms-validation/apple/*.zip
+            .build/platforms-validation/*.zip
           retention-days: 14
+      - name: Customer macOS wheel and core ZIP (production keys only; universal2 is the macOS default)
+        run: |
+          # python -m build in a throwaway venv; the Mac's own Python stays untouched.
+          python -m venv "$RUNNER_TEMP/release-venv"
+          "$RUNNER_TEMP/release-venv/bin/python" -m pip install -q --disable-pip-version-check build
+          "$RUNNER_TEMP/release-venv/bin/python" tools/build_release.py
+      - name: Audit the customer wheel and core ZIP (no test key, no validation name)
+        run: python tools/audit_artifacts.py .build/releases/*/fisica-*-py3-none-macosx_11_0_universal2.whl .build/releases/*/fisica-core-*-macosx_11_0_universal2.zip
+      - name: Wheel and core ZIP hold an arm64 and an x86_64 core (lipo)
+        run: |
+          cores="$RUNNER_TEMP/cores"
+          rm -rf "$cores" && mkdir -p "$cores/wheel" "$cores/zip"
+          unzip -q .build/releases/*/fisica-*-py3-none-macosx_11_0_universal2.whl fisica_sdk/_native/libfisica_core.dylib -d "$cores/wheel"
+          unzip -q .build/releases/*/fisica-core-*-macosx_11_0_universal2.zip libfisica_core.dylib -d "$cores/zip"
+          for core in "$cores/wheel/fisica_sdk/_native/libfisica_core.dylib" "$cores/zip/libfisica_core.dylib"; do
+            archs="$(lipo -archs "$core")"
+            echo "$core: $archs"
+            for arch in arm64 x86_64; do
+              case " $archs " in *" $arch "*) ;; *) echo "::error::$core has no $arch slice"; exit 1 ;; esac
+            done
+          done
+      - name: Installed customer wheel (runs the arm64 slice; a test-signed key is rejected)
+        # The x86_64 slice is checked by lipo and the audit only: running it needs Rosetta, not required here.
+        run: python tools/verify_wheel.py .build/releases/*/fisica-*-py3-none-macosx_11_0_universal2.whl

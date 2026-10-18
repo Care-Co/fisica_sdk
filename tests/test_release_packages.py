@@ -10,10 +10,11 @@ import zipfile
 from pathlib import Path
 
 import pytest
+from packaging.utils import parse_wheel_filename
 
 from tools import release_packages as packages
-from tools.audit_artifacts import audit_archive
-from tools.native_build import KEY_MODE, ROOT, entitlement_keys, prepare_release, release_metadata
+from tools.audit_artifacts import audit_archive, validation_name, validation_named
+from tools.native_build import KEY_MODE, ROOT, entitlement_keys, prepare_release, release_metadata, wheel_version
 
 pe_dll = runpy.run_path(str(Path(__file__).with_name('test_windows_build.py')))['pe_dll']
 android_elf = runpy.run_path(str(Path(__file__).with_name('test_artifacts.py')))['_android_elf']
@@ -49,25 +50,101 @@ def core_zip(path, release, library=b'\xca\xfe\xba\xbe core'):
 def test_customer_archives_reject_cores_that_trust_the_test_key(tmp_path, monkeypatch):
     release = release_for(tmp_path, monkeypatch, validation=False)
     qa = release_for(tmp_path, monkeypatch, validation=True)
+    assert (release['validation'], qa['validation']) == (False, True)
     assert audit_archive(core_zip(tmp_path / 'release.zip', release)) == 4
     archive = core_zip(tmp_path / 'qa.zip', qa)
     with pytest.raises(ValueError, match='trusts test entitlement keys'):
         audit_archive(archive)
-    assert audit_archive(archive, validation=True) == 4
+    # A QA archive must also say so in its name, or it could pass for a customer package.
+    with pytest.raises(ValueError, match='does not mark it as a validation build: QA packages are named like qa-validation.zip'):
+        audit_archive(archive, validation=True)
+    assert audit_archive(core_zip(tmp_path / 'qa-validation.zip', qa), validation=True) == 4
     # The compiled key table counts, whatever release.json says.
     archive = core_zip(tmp_path / 'hidden.zip', release, library=b'\xca\xfe\xba\xbe' + TEST_KEY)
     with pytest.raises(ValueError, match='trusts the repository test entitlement key'):
         audit_archive(archive)
+    with pytest.raises(ValueError, match=r'\(libfisica_core.dylib\), but its name does not mark it'):
+        audit_archive(archive, validation=True)
     with pytest.raises(ValueError, match='missing release.json'):
         audit_archive(core_zip(tmp_path / 'bare.zip', None))
 
 
+def test_validation_builds_are_named_so(tmp_path, monkeypatch):
+    """A QA build trusts the committed test key: all its file names say validation, a customer one's never do."""
+    release = release_for(tmp_path, monkeypatch, validation=False)
+    qa = release_for(tmp_path, monkeypatch, validation=True)
+    customer = {**packages.package_names(release), 'core': packages.core_name(release, 'win_amd64')}
+    validation = {**packages.package_names(qa), 'core': packages.core_name(qa, 'win_amd64')}
+    assert not any('validation' in name for name in customer.values())
+    for kind, name in customer.items():
+        stem, suffix = name.rsplit('.', 1)
+        assert validation[kind] == f'{stem}-validation.{suffix}' and validation_named(validation[kind]), kind
+        assert not validation_named(name)
+    assert validation['core'] == f"fisica-core-{qa['core_version']}-win_amd64-validation.zip"
+    assert validation['aar'] == f"fisica-scale-{qa['wrappers']['kotlin']['version']}-validation.aar"
+    # Wheels keep name-version-python-abi-platform: the version takes the local label, which pip accepts.
+    version = release['wrappers']['python']['version']
+    assert (wheel_version(release), wheel_version(qa)) == (version, version + '+validation')
+    wheel = f'fisica-{wheel_version(qa)}-py3-none-macosx_11_0_universal2.whl'
+    name, parsed, build, tags = parse_wheel_filename(wheel)
+    assert (name, parsed.public, parsed.local, build) == ('fisica', version, 'validation', ())
+    assert {str(tag) for tag in tags} == {'py3-none-macosx_11_0_universal2'}
+    assert validation_named(wheel) and validation_name(f'fisica-{version}-py3-none-win_amd64.whl') == \
+        f'fisica-{version}+validation-py3-none-win_amd64.whl'
+    assert not validation_named(f'fisica-{version}-py3-none-macosx_11_0_universal2.whl')
+
+
+def wheel_zip(path, release, version=None):
+    version = version or wheel_version(release)
+    return zip_of(path, {
+        'fisica_sdk/_native/libfisica_core.so': b'\x7fELF core', 'fisica_sdk/native.py': b'# public binding',
+        'fisica_sdk/_release.json': json.dumps(release), 'LICENSE': packages.LICENSE.read_bytes(),
+        f'fisica-{version}.dist-info/METADATA':
+            f'Metadata-Version: 2.4\nName: fisica\nVersion: {version}\nLicense-Expression: LicenseRef-Fisica-Scale-SDK\n'})
+
+
+def test_audit_refuses_unmarked_qa_and_marked_packages_in_a_release(tmp_path, monkeypatch):
+    release = release_for(tmp_path, monkeypatch, validation=False)
+    qa = release_for(tmp_path, monkeypatch, validation=True)
+    version = release['wrappers']['python']['version']
+    marked = wheel_zip(tmp_path / f'fisica-{version}+validation-py3-none-linux_x86_64.whl', qa)
+    assert audit_archive(marked, validation=True) == 5
+    # (b) Whatever it holds, a package named validation stays out of a release audit.
+    for path in (marked, core_zip(tmp_path / 'fisica-core-2.0.0-win_amd64-validation.zip', release),
+                 core_zip(tmp_path / 'fisica-core-2.0.0-win_amd64-validation (1).zip', release)):
+        with pytest.raises(ValueError, match='named as a validation \\(QA\\) build'):
+            audit_archive(path)
+    # (a) A core that trusts the test key, or metadata that says validation, needs the marking.
+    unmarked = wheel_zip(tmp_path / f'fisica-{version}-py3-none-linux_x86_64.whl', qa, version=version)
+    with pytest.raises(ValueError, match=rf'named like fisica-{version}\+validation-py3-none-linux_x86_64.whl'):
+        audit_archive(unmarked, validation=True)
+    flagged = core_zip(tmp_path / 'flagged.zip', dict(release, validation=True))
+    with pytest.raises(ValueError, match='says validation: true'):
+        audit_archive(flagged)
+    with pytest.raises(ValueError, match='does not mark it as a validation build'):
+        audit_archive(flagged, validation=True)
+    # A renamed wheel: its metadata keeps the version it was built with.
+    renamed = tmp_path / f'fisica-{version}-py3-none-linux_x86_64.whl'
+    shutil.copyfile(marked, renamed)
+    with pytest.raises(ValueError, match=rf'metadata version {version}\+validation does not match'):
+        audit_archive(renamed, validation=True)
+    # A customer package renamed to validation is not a QA build either.
+    with pytest.raises(ValueError, match='named as a validation build, but release.json is a customer build'):
+        audit_archive(core_zip(tmp_path / 'customer-validation.zip', release), validation=True)
+
+
 def test_cli_audit_needs_validation_for_qa_archives(tmp_path, monkeypatch):
-    archive = core_zip(tmp_path / 'qa.zip', release_for(tmp_path, monkeypatch, validation=True))
+    qa = release_for(tmp_path, monkeypatch, validation=True)
+    archive = core_zip(tmp_path / 'qa.zip', qa)
     result = tool('tools/audit_artifacts.py', archive)
     assert result.returncode != 0 and 'trusts test entitlement keys' in result.stderr
     result = tool('tools/audit_artifacts.py', '--validation', archive)
+    assert result.returncode != 0 and 'does not mark it as a validation build' in result.stderr
+    archive = core_zip(tmp_path / 'qa-validation.zip', qa)
+    result = tool('tools/audit_artifacts.py', '--validation', archive)
     assert result.returncode == 0 and 'test key allowed' in result.stdout
+    result = tool('tools/audit_artifacts.py', archive)
+    assert result.returncode != 0 and 'named as a validation (QA) build' in result.stderr
 
 
 def swift_zip(path, release, xcframework=True):
@@ -202,7 +279,8 @@ def test_package_platforms_writes_exactly_the_expected_packages(tmp_path, platfo
     release = release_metadata()
     assert sorted(path.name for path in directory.iterdir()) == sorted(expected_packages(release) + ['platform-manifest.json'])
     manifest = json.loads((directory / 'platform-manifest.json').read_text())
-    assert sorted(manifest['artifacts']) == expected_packages(release) and manifest['validation_build'] is False
+    assert sorted(manifest['artifacts']) == expected_packages(release) and manifest['validation'] is False
+    assert not any('validation' in name for name in manifest['artifacts'])
     for name in manifest['artifacts']:
         with zipfile.ZipFile(directory / name) as archive:
             entries = archive.namelist()
@@ -225,8 +303,20 @@ def test_package_platforms_checks_every_input_first(tmp_path, platform_inputs):
     assert refused.returncode != 0 and 'trusts test entitlement keys' in refused.stderr and not output.exists()
     accepted = tool('tools/package_platforms.py', '--validation', '--input', qa, '--output', output)
     assert accepted.returncode == 0, accepted.stderr
-    manifest = json.loads((output / release_metadata()['sdk_version'] / 'platform-manifest.json').read_text())
-    assert manifest['validation_build'] is True
+    directory = output / release_metadata()['sdk_version']
+    manifest = json.loads((directory / 'platform-manifest.json').read_text())
+    # Every QA package is named so and refused by a release audit.
+    assert manifest['validation'] is True
+    assert sorted(manifest['artifacts']) == expected_packages(packages.read_release(qa / 'apple' / 'release.json'))
+    for name in manifest['artifacts']:
+        assert validation_named(directory / name) and name.rsplit('.', 1)[0].endswith('-validation'), name
+        assert audit_archive(directory / name, validation=True)
+        with pytest.raises(ValueError, match='named as a validation'):
+            audit_archive(directory / name)
+
+    customer = platform_inputs(validation=False)
+    refused = tool('tools/package_platforms.py', '--validation', '--input', customer, '--output', tmp_path / 'mixed')
+    assert refused.returncode != 0 and 'is a customer build; rebuild the platforms with --validation' in refused.stderr
 
     stale = platform_inputs(validation=False, stale_core=True)
     refused = tool('tools/package_platforms.py', '--input', stale, '--output', tmp_path / 'stale')
@@ -237,10 +327,17 @@ def test_package_platforms_checks_every_input_first(tmp_path, platform_inputs):
     assert refused.returncode != 0 and 'CFisica.xcframework/Info.plist' in refused.stderr and 'win_arm64/fisica_core.dll' in refused.stderr
 
 
-def test_print_artifacts_names_every_package_from_the_release_metadata(tmp_path):
+def test_print_artifacts_names_every_package_from_the_release_metadata(tmp_path, monkeypatch):
     result = tool('tools/build_platforms.py', '--print-artifacts', 'apple', 'android', 'win_amd64', '--output', tmp_path)
     assert result.returncode == 0, result.stderr
-    release = release_metadata()
+    release = release_for(tmp_path, monkeypatch, validation=False)
     names = packages.package_names(release)
     assert result.stdout.split() == [str(tmp_path / 'apple' / names['swift']), str(tmp_path / 'android' / names['aar']),
                                      str(tmp_path / 'android' / names['kotlin']), str(tmp_path / packages.core_name(release, 'win_amd64'))]
+    # QA builds: their own default directory and -validation names.
+    result = tool('tools/build_platforms.py', '--validation', '--print-artifacts', 'apple', 'win_amd64')
+    assert result.returncode == 0, result.stderr
+    qa = release_for(tmp_path, monkeypatch, validation=True)
+    assert result.stdout.split() == ['.build/platforms-validation/apple/' + packages.package_names(qa)['swift'],
+                                     '.build/platforms-validation/' + packages.core_name(qa, 'win_amd64')]
+    assert all(name.rsplit('.', 1)[0].endswith('-validation') for name in result.stdout.split())

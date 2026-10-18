@@ -9,7 +9,9 @@ binaries) all write their archives here. Every package
 - lists only files git tracks plus the binaries it needs, never whatever else is on disk
   (local tool settings with absolute paths, lock files, .DS_Store, stale build output),
 - is audited by tools/audit_artifacts.py as it is written; with validation=False an archive
-  whose core trusts the repository test key fails.
+  whose core trusts the repository test key fails,
+- is named as a validation build ('-validation' before the extension) when its release metadata
+  says validation: true, so a QA package cannot pass for a customer one.
 """
 import json
 import plistlib
@@ -20,11 +22,11 @@ import zipfile
 from pathlib import Path
 
 if __package__:  # imported as tools.release_packages (tests)
-    from .audit_artifacts import ANDROID_ABIS, audit_archive
+    from .audit_artifacts import ANDROID_ABIS, audit_archive, validation_name
     from .native_build import ROOT, release_metadata
     from .partner_samples import PARTNER_SAMPLE_FILES
 else:  # imported by the scripts in tools/
-    from audit_artifacts import ANDROID_ABIS, audit_archive
+    from audit_artifacts import ANDROID_ABIS, audit_archive, validation_name
     from native_build import ROOT, release_metadata
     from partner_samples import PARTNER_SAMPLE_FILES
 
@@ -37,7 +39,9 @@ WINDOWS_ARCHITECTURES = {'win_amd64': 'x64', 'win_arm64': 'arm64'}
 TEST_DIRECTORIES = ('test', 'tests', 'Tests')
 
 
-# File names. They come from the release metadata, so no tool, workflow or document hardcodes a version.
+# File names. They come from the release metadata, so no tool, workflow or document hardcodes a version,
+# and a validation build (release['validation'], its core trusts the test key) is named so:
+# fisica-swift-0.3.0-validation.zip, fisica-core-2.0.0-win_amd64-validation.zip.
 
 def transport_version():
     match = re.search(r'^version:\s*(\S+)', (WRAPPERS / 'flutter_transport' / 'pubspec.yaml').read_text(), re.MULTILINE)
@@ -46,9 +50,13 @@ def transport_version():
     return match[1]
 
 
+def _named(name, release):
+    return validation_name(name) if release.get('validation') else name
+
+
 def package_names(release):
     wrappers = release['wrappers']
-    return {
+    names = {
         'swift': f"fisica-swift-{wrappers['swift']['version']}.zip",
         'aar': f"fisica-scale-{wrappers['kotlin']['version']}.aar",
         'kotlin': f"fisica-kotlin-{wrappers['kotlin']['version']}.zip",
@@ -57,10 +65,11 @@ def package_names(release):
         'flutter_transport': f'fisica-flutter-transports-{transport_version()}.zip',
         'samples': f"fisica-partner-samples-{release['sdk_version']}.zip",
     }
+    return {kind: _named(name, release) for kind, name in names.items()}
 
 
 def core_name(release, target):
-    return f"fisica-core-{release['core_version']}-{target}.zip"
+    return _named(f"fisica-core-{release['core_version']}-{target}.zip", release)
 
 
 def core_library(target):
@@ -105,9 +114,10 @@ def require(paths, hint):
 
 
 def _policy(release):
-    """Everything the core compiles in, except the trusted keys (they differ between release and validation builds)."""
+    """Everything the core compiles in, except what differs between release and validation builds (keys, validation)."""
     policy = json.loads(json.dumps(release))
     policy.get('entitlement', {}).pop('keys', None)
+    policy.pop('validation', None)
     return policy
 
 
@@ -115,13 +125,33 @@ def trusts_test_key(release):
     return any(key.get('environment') != 'production' for key in release.get('entitlement', {}).get('keys', []))
 
 
+def require_build_kind(paths, validation):
+    """Stop unless every existing prebuilt release.json is the kind of build asked for: no test key
+    without validation, and its validation flag (which names the packages) the same as this run's.
+    Checked before the inputs' file names, which differ between the two kinds."""
+    expected = release_metadata()['validation']
+    for path in paths:
+        if not Path(path).is_file():
+            continue
+        release = read_release(path)
+        if trusts_test_key(release) and not validation:
+            raise SystemExit(f'{path} trusts test entitlement keys; rebuild the platforms without --validation')
+        kind = release.get('validation')
+        if kind is not expected:
+            raise SystemExit(f'{path} ' + ('is a validation build; package it with --validation' if kind is True else
+                                           'is a customer build; rebuild the platforms with --validation for QA packages'
+                                           if kind is False else 'predates the validation flag; rebuild it'))
+
+
 def prebuilt_release(paths, validation):
     """The release.json shared by prebuilt inputs.
 
     Every input must come from this checkout's core build: the same core and ABI version and
     the same compiled policy as release_metadata(). Without validation none may trust the test
-    key, and all of them must be identical (one build, not a mix of release and QA cores).
+    key, with validation all must be validation builds (their packages are named so), and all of
+    them must be identical (one build, not a mix of release and QA cores).
     """
+    require_build_kind(paths, validation)
     current = _policy(release_metadata())
     releases = {}
     for path in paths:
@@ -131,8 +161,6 @@ def prebuilt_release(paths, validation):
             versions = ', '.join(f"{key} {release.get(key)}" for key in ('core_version', 'abi_major', 'abi_minor'))
             raise SystemExit(f'{path} is from another core build ({versions}; differs in {", ".join(fields)}); '
                              'rebuild it with tools/build_platforms.py')
-        if trusts_test_key(release) and not validation:
-            raise SystemExit(f'{path} trusts test entitlement keys; rebuild the platforms without --validation')
         releases[str(path)] = release
     if len({json.dumps(release, sort_keys=True) for release in releases.values()}) > 1:
         raise SystemExit('Prebuilt inputs trust different entitlement keys (release and --validation builds mixed): '

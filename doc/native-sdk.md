@@ -84,10 +84,14 @@ python -m pytest -q
 python tools/build_release.py
 ```
 
-`CXX` may select a trusted compiler executable. macOS defaults to a host-architecture
-binary targeting macOS 11.0; set `MACOSX_DEPLOYMENT_TARGET` consistently if needed.
+`CXX` may select a trusted compiler executable. macOS builds a universal2 binary (arm64 and
+x86_64 slices) targeting macOS 11.0 by default, also for the developer build;
+`FISICA_BUILD_PLATFORM=macosx_11_0_arm64` (or `tools/build_release.py --platform macosx_11_0_arm64`,
+likewise `_x86_64`) builds one architecture. The platform tag follows `MACOSX_DEPLOYMENT_TARGET`;
+set it consistently if needed.
 Linux uses a native C++ compiler. Windows builds require an MSVC developer shell.
-macOS arm64 has been executed locally. Windows x64 has a native MSVC build path, PE
+macOS arm64 has been executed locally; the x86_64 slice is checked by `tools/audit_artifacts.py`
+and `lipo` (CI `apple`), and was only loaded under Rosetta locally. Windows x64 has a native MSVC build path, PE
 architecture auditing and explicit trusted cross-build support; its CI is paused until a
 self-hosted Windows runner exists. See [Windows distribution](windows-distribution.md) for
 commands and validation limits.
@@ -116,10 +120,18 @@ wheel and core ZIP there. The core ZIP contains only a binary, public header, re
 and the license. The wheel contains public Python adapters and the compiled core. The Flutter
 package with every platform's core is `fisica-flutter-<version>-platforms.zip` from
 `tools/package_platforms.py`. `tools/audit_artifacts.py` rejects core sources/debug artifacts,
-invalid macOS architecture tags, packages without their binaries, license or `release.json`,
+invalid macOS architecture tags (a universal2 wheel's core must hold exactly arm64 and x86_64),
+packages without their binaries, license or `release.json`,
 and (without `--validation`) cores that trust the test key, checked in `release.json` and in
 the compiled key table. Source distributions intentionally fail; use `build --wheel`, which
 also trusts production keys only.
+
+`--validation` (QA) builds are named so that they cannot pass for customer packages: ZIPs and
+AARs end in `-validation` (`fisica-core-2.0.0-win_amd64-validation.zip`), wheels carry the local
+version `+validation` (`fisica-3.0.0+validation-py3-none-win_amd64.whl`), their `release.json`
+(also compiled into the core's policy) and manifests say `"validation": true`, and the tools write
+them to `.build/*-validation` by default. The audit rejects a test-key archive without that name
+even with `--validation`, and any archive named so without it.
 Keep all build output and source-baseline backups internal. Do not publish `native/`,
 `tools/`, `.build/`, samples or tests. New releases use the Fisica Scale SDK License
 for wrappers and core; rights to previously licensed source are not revoked.

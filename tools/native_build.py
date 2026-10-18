@@ -1,7 +1,6 @@
 """Internal native build tools. Never included in customer wheels/bundles."""
 import json
 import os
-import platform
 import re
 import runpy
 from pathlib import Path
@@ -10,7 +9,9 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-validate_windows_dll = runpy.run_path(str(ROOT / 'tools' / 'audit_artifacts.py'))['validate_windows_dll']
+_audit = runpy.run_path(str(ROOT / 'tools' / 'audit_artifacts.py'))
+validate_windows_dll = _audit['validate_windows_dll']
+MACOS_ARCHITECTURES = _audit['MACOS_WHEEL_ARCHITECTURES']
 
 
 def release_metadata(validate_flutter=True):
@@ -38,9 +39,19 @@ def release_metadata(validate_flutter=True):
     release['license'] = 'Fisica Scale SDK License'
     # One binary per platform/architecture/core version for every company: trusted
     # server keys are the only entitlement data compiled in, never a company or contract.
+    keys = entitlement_keys()
     release['entitlement'] = {'token_format': 'FSE1', 'max_refresh_days': 30,
-                              'keys': [{'kid': key['kid'], 'environment': key['environment']} for key in entitlement_keys()]}
+                              'keys': [{'kid': key['kid'], 'environment': key['environment']} for key in keys]}
+    # A validation (QA or developer) build: its core trusts a test key, whose secret is in this
+    # repository (FISICA_VALIDATION_BUILD). Its packages are named so (tools/audit_artifacts.py).
+    release['validation'] = any(key['environment'] == 'test' for key in keys)
     return release
+
+
+def wheel_version(release):
+    """The Python wheel's version; a validation build's carries the local label '+validation' (tools/audit_artifacts.py)."""
+    version = release['wrappers']['python']['version']
+    return version + '+' + _audit['WHEEL_VALIDATION_LABEL'] if release['validation'] else version
 
 
 # Which keys the core trusts. 'release': production keys only, for customer packages.
@@ -89,15 +100,29 @@ def library_name():
     return 'libfisica_core.dylib' if sys.platform == 'darwin' else 'libfisica_core.so'
 
 
+# Explicit build targets (FISICA_BUILD_PLATFORM, tools/build_release.py --platform); macOS ones
+# take the macOS minimum from MACOSX_DEPLOYMENT_TARGET (default 11.0), e.g. macosx_11_0_arm64.
+def macos_tag(architecture):
+    return 'macosx_' + os.environ.get('MACOSX_DEPLOYMENT_TARGET', '11.0').replace('.', '_') + '_' + architecture
+
+
+def build_targets():
+    return ('win_amd64', 'win_arm64', *(macos_tag(architecture) for architecture in MACOS_ARCHITECTURES))
+
+
 def platform_tag():
+    """The wheel platform tag and core target: FISICA_BUILD_PLATFORM, else the host's.
+
+    macOS builds universal2 by default (one core with arm64 and x86_64); a single-architecture
+    core needs an explicit macosx_11_0_arm64 or macosx_11_0_x86_64.
+    """
     target = os.environ.get('FISICA_BUILD_PLATFORM')
     if target:
-        if target not in ('win_amd64', 'win_arm64', 'macosx_11_0_universal2'):
-            raise ValueError('Unsupported explicit desktop build target')
+        if target not in build_targets():
+            raise ValueError(f'Unsupported explicit build target {target}; use one of {", ".join(build_targets())}')
         return target
     if sys.platform == 'darwin':
-        minimum = os.environ.get('MACOSX_DEPLOYMENT_TARGET', '11.0').replace('.', '_')
-        return 'macosx_' + minimum + '_' + platform.machine()
+        return macos_tag('universal2')
     import sysconfig
     tag = sysconfig.get_platform().replace('-', '_').replace('.', '_')
     if sys.platform == 'win32' and tag not in ('win_amd64','win_arm64'):
@@ -129,7 +154,7 @@ def prepare_release(directory):
     keys = entitlement_keys()
     # Validation builds (test keys trusted) also accept the host's clock as is, so tests can set the time.
     # Customer builds read the system clock themselves (fisica_entitlement.cpp, fisica_session.cpp).
-    header += '#define FISICA_VALIDATION_BUILD ' + ('1' if any(k['environment'] == 'test' for k in keys) else '0') + '\n'
+    header += '#define FISICA_VALIDATION_BUILD ' + ('1' if metadata['validation'] else '0') + '\n'
     header += 'struct FisicaEntitlementKey { const char *kid; unsigned environment; unsigned char public_key[32]; };\n'
     header += 'static const FisicaEntitlementKey fisica_entitlement_keys[] = {\n'
     for key in keys:
@@ -146,6 +171,8 @@ def build_native(output_directory):
     output_directory.mkdir(parents=True, exist_ok=True)
     generated = ROOT / '.build' / 'native-generated'
     target = platform_tag()
+    if target.startswith('macosx_') and sys.platform != 'darwin':
+        raise RuntimeError(f'{target} cores are built on macOS (Xcode or its command line tools)')
     windows = target.startswith('win_')
     machine = 0xaa64 if target == 'win_arm64' else 0x8664
     if windows:
@@ -184,7 +211,9 @@ def build_native(output_directory):
                    '-fvisibility=hidden', '-fvisibility-inlines-hidden', '-ffp-contract=off']
         command += ['-I' + str(path) for path in includes]
         if sys.platform == 'darwin':
-            command += (['-arch','arm64','-arch','x86_64'] if target.endswith('universal2') else ['-arch',platform.machine()])
+            # universal2: one core with both slices; macosx_*_arm64 / _x86_64: that slice only.
+            architectures = next(value for key, value in MACOS_ARCHITECTURES.items() if target.endswith('_' + key))
+            command += [flag for architecture in architectures for flag in ('-arch', architecture)]
             command += ['-dynamiclib', '-Wl,-install_name,@rpath/' + output.name]
             command += ['-mmacosx-version-min=' + os.environ.get('MACOSX_DEPLOYMENT_TARGET', '11.0'), '-framework', 'CoreFoundation']
         else:
