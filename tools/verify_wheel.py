@@ -142,7 +142,8 @@ def verify_wheel(path, extras=None, validation=False):
         venv.EnvBuilder(with_pip=True).create(root / 'venv')
         python = root / 'venv' / ('Scripts/python.exe' if sys.platform == 'win32' else 'bin/python')
         requirement = str(path) + (f'[{extras}]' if extras else '')
-        subprocess.run([str(python),'-m','pip','install','--disable-pip-version-check',requirement],check=True,cwd=root)
+        # Binary wheels first: a dependency built from source tests the host's compiler, not this wheel.
+        subprocess.run([str(python),'-m','pip','install','--disable-pip-version-check','--prefer-binary',requirement],check=True,cwd=root)
         from entitlement_dev import host_pc_vectors
         environment = dict(os.environ)
         # Keys stored for this PC (a paired development Mac) must not leak into the smoke test.
