@@ -146,6 +146,14 @@ Console.WriteLine("C# shared session and processing vectors passed");
     } finally { Directory.Delete(directory,true); }
 }
 {
+    // The default directory is the one the Python SDK uses on this PC (only compared here: nothing is written there).
+    var home=Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+    var expected=OperatingSystem.IsWindows() ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Fisica","sdk")
+        : OperatingSystem.IsMacOS() ? Path.Combine(home,"Library","Application Support","Fisica","sdk")
+        : Path.Combine(Environment.GetEnvironmentVariable("XDG_STATE_HOME") is { Length: >0 } state ? state : Path.Combine(home,".local","state"),"fisica-sdk");
+    Require(FisicaEntitlement.DefaultStorage==expected,$"default storage {FisicaEntitlement.DefaultStorage}, expected {expected}");
+}
+{
     // The session hands out frames by mode: basic at most one per 1000 ms of session time without raw data, full every packet.
     foreach (var mode in new[]{"basic","full"}) {
         using var license=License(mode=="full" ? "full" : null);

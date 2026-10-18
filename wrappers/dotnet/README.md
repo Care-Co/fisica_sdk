@@ -96,7 +96,10 @@ expires (`Sync()` in the background or `await SyncAsync()`); without an endpoint
 network is used. Offline, enter `ActivationCode()` in the developer portal and import the
 file it gives. `Release()` frees the key on this app or PC: it forgets the key, deletes
 the stored key and returns the code to enter in the portal. The activated key is stored
-per company and contract under LocalApplicationData by default (`storage`) and wins over
+per company and contract in `FisicaEntitlement.DefaultStorage` by default (`storage`;
+`null` keeps it in memory only), the per-user directory the Python SDK uses
+(`%LOCALAPPDATA%\Fisica\sdk`, `~/Library/Application Support/Fisica/sdk`,
+`$XDG_STATE_HOME/fisica-sdk` or `~/.local/state/fisica-sdk`), and wins over
 an older original key file. A failed exchange only sets `LastSyncError`; it never changes
 the license or throws. An answer that arrives after `Release()` or after another key was
 imported is dropped: a released key stays released and the newer key stays. `Warning` and

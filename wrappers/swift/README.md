@@ -65,7 +65,8 @@ app's or PC's target, the key's dates (`keyUntil`, `fullUntil`, `refreshBy`, con
   sets `lastSyncError` and never changes the license.
 - Offline: show `activationCode()` (FAC1), enter it in the developer portal, and import the key
   file it gives with `importFile(_:)`; renewal files work the same way.
-- The activated key is stored per seat under Application Support (`storage:`), loaded when the
+- The activated key is stored per seat under Application Support/Fisica/sdk by default
+  (`storage:`, `FisicaEntitlement.defaultStorage`; `nil` keeps it in memory only), loaded when the
   `FisicaEntitlement` is created, and wins over an older original key file imported again.
 - Without a key, `try await license.pair { code in ... }` shows a code that an owner or admin
   approves at the developer portal's `/activate` page (`FisicaEntitlement.defaultEndpoint`); the

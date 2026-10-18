@@ -95,9 +95,11 @@ enum class PairingResult { APPROVED, DENIED, EXPIRED, CANCELLED }
  * activated for this app or PC automatically, and a key is renewed before it expires, in the
  * background (the app needs the INTERNET permission). Without it no network is used: activate
  * offline with [activationCode] and import the file the portal gives, or [pair] without a key.
- * [online] false keeps a configured endpoint unused. [storage]: directory for the license state
- * (for example `context.filesDir`), one file per seat; null keeps it in memory only. The key stored
- * there for this app or PC (paired or imported earlier) is loaded at once.
+ * [online] false keeps a configured endpoint unused. [storage]: directory for the license state,
+ * one file per seat; by default [defaultStorage] (on Android the app's private files directory, on a
+ * desktop JVM the per-user directory every Fisica SDK on the PC uses); null keeps it in memory only,
+ * so a key received with [pair] is gone after a restart and pairing again takes another seat. The
+ * key stored there for this app or PC (paired or imported earlier) is loaded at once.
  * Network and storage failures never change the license; they only set [lastSyncError].
  *
  * SDK use is not tracked: the stored state is the signed key and the latest time seen, and the
@@ -109,7 +111,7 @@ enum class PairingResult { APPROVED, DENIED, EXPIRED, CANCELLED }
 class FisicaEntitlement @JvmOverloads constructor(
     @Suppress("unused") private val core: FisicaCore,
     endpoint: String? = null,
-    private val storage: File? = null,
+    private val storage: File? = defaultStorage(),
     private val online: Boolean = true,
     private val clock: () -> Long = { System.currentTimeMillis() / 1000 },
 ) : AutoCloseable {
@@ -136,6 +138,44 @@ class FisicaEntitlement @JvmOverloads constructor(
     companion object {
         /** The developer portal, for activation, renewal and [pair]. */
         const val DEFAULT_ENDPOINT = "https://developer.fisicahealthcare.com"
+
+        /**
+         * Where the license state is kept unless [storage] says otherwise; null where no such directory
+         * can be found (the state then stays in memory: pass a directory yourself).
+         * - Android: the app's private files directory, `Context.getFilesDir()/fisica-sdk`, found without
+         *   a Context (the framework sets `java.io.tmpdir` to the app's cache directory, a sibling of it).
+         * - Desktop JVM: the per-user directory the Python and C# SDKs use, so every wrapper on the PC
+         *   finds the same seat: Windows `%LOCALAPPDATA%\Fisica\sdk`, macOS
+         *   `~/Library/Application Support/Fisica/sdk`, Linux `$XDG_STATE_HOME/fisica-sdk` or
+         *   `~/.local/state/fisica-sdk`.
+         */
+        @JvmStatic fun defaultStorage(): File? = try {
+            if (System.getProperty("java.vm.name") == "Dalvik" || System.getProperty("java.vendor").orEmpty().contains("Android")) androidStorage()
+            else desktopStorage()
+        } catch (_: Exception) { null }
+
+        private fun environment(name: String) = System.getenv(name)?.ifEmpty { null }
+
+        private fun desktopStorage(): File? {
+            val os = System.getProperty("os.name").orEmpty().lowercase()
+            // The home directory as Python's Path.home() reads it: the environment first.
+            val home = environment(if (os.startsWith("windows")) "USERPROFILE" else "HOME") ?: System.getProperty("user.home")?.ifEmpty { null }
+            return when {
+                os.startsWith("windows") -> File(environment("LOCALAPPDATA")?.let(::File) ?: File(home ?: return null, "AppData/Local"), "Fisica/sdk")
+                os.startsWith("mac") || os.startsWith("darwin") -> File(home ?: return null, "Library/Application Support/Fisica/sdk")
+                else -> File(environment("XDG_STATE_HOME")?.let(::File) ?: File(home ?: return null, ".local/state"), "fisica-sdk")
+            }
+        }
+
+        private fun androidStorage(): File? {
+            // The cache directory the framework gives java.io.tmpdir sits in the app's data directory, which is
+            // named after the package (the process name up to any ':suffix', as the core reads it). Its files/
+            // is Context.getFilesDir(), kept in the app's backup: the key is activated for the package, not the phone.
+            val data = File(System.getProperty("java.io.tmpdir") ?: return null).absoluteFile.parentFile ?: return null
+            val process = File("/proc/self/cmdline").inputStream().use { it.readBytes() }.takeWhile { it != 0.toByte() }.toByteArray()
+            val name = String(process, Charsets.UTF_8).substringBefore(':')
+            return if (name.isNotEmpty() && data.name == name) File(data, "files/fisica-sdk") else null
+        }
     }
 
     /**

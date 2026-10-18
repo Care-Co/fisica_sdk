@@ -15,7 +15,8 @@ marshaler source is public; private algorithm and state sources are absent.
 ```kotlin
 val core = FisicaCore()
 // SDK key from the developer portal; without one the SDK runs in basic mode.
-val license = FisicaEntitlement(core, "https://developer.fisicahealthcare.com", context.filesDir)
+// The activated key is stored in the app's files directory (files/fisica-sdk) by default.
+val license = FisicaEntitlement(core, "https://developer.fisicahealthcare.com")
 license.importToken(sdkKey)                       // activated for this app online, then stored
 val ble = BleTransport(context, bluetoothManager.adapter)
 ble.onDevice = { result ->
@@ -90,9 +91,19 @@ its dates; `onStatus` and `onWarning` report changes. `release()` forgets the ke
 returns the FRC1 code that frees the seat in the portal. An answer that arrives after
 `release()` or after another key was imported is dropped: a released key stays released
 and the newer key stays. Close the `FisicaEntitlement` when done; one dropped without
-`close()` frees its core context once it is collected. Pass `storage` (for example
-`context.filesDir`) to keep the activated key across launches; it is loaded when the
-`FisicaEntitlement` is created and wins over the original key file the app imports again.
+`close()` frees its core context once it is collected. The activated key is kept across
+launches, one file per seat, in `FisicaEntitlement.defaultStorage()` unless `storage` names
+another directory; `storage = null` keeps it in memory only (a paired key is then gone after
+a restart and pairing again takes another seat). The default on Android is the app's files
+directory, `Context.getFilesDir()/fisica-sdk` (found without a Context: the framework points
+`java.io.tmpdir` at the app's cache directory next to it; it is in the app's backup, which is
+fine because the key is activated for the package name, not the phone). On a desktop JVM it
+is the per-user directory the Python and C# SDKs use: `%LOCALAPPDATA%\Fisica\sdk`,
+`~/Library/Application Support/Fisica/sdk`, `$XDG_STATE_HOME/fisica-sdk` or
+`~/.local/state/fisica-sdk`. Where none can be found `defaultStorage()` is null (memory
+only): pass a directory, for example `File(context.filesDir, "fisica-sdk")`. The stored key
+is loaded when the `FisicaEntitlement` is created and wins over the original key file the
+app imports again.
 Without a key, `pair({ code -> ... })` on a worker thread shows a code that an owner or admin
 approves at the portal's `/activate` page; the key arrives activated for this app and is stored. Network and storage failures never change the license and
 only set `lastSyncError`. Online use needs the INTERNET permission in the app; the AAR

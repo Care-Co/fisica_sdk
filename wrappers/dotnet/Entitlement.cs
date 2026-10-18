@@ -52,8 +52,15 @@ internal sealed class EntitlementHandle : SafeHandleZeroOrMinusOneIsInvalid {
 /// it also limits what a session hands out. This class stores the key, activates and renews it online and reports
 /// the status. Nothing records or reports whether, when or how often the SDK is used.</summary>
 public sealed class FisicaEntitlement : IDisposable {
-    /// <summary>Store state per company and contract under the user's local application data.</summary>
+    /// <summary>Store state per company and contract in <see cref="DefaultStorage"/>.</summary>
     public const string AutoStorage="*";
+    /// <summary>The per-user directory every Fisica SDK on the PC uses, so they find the same seat: Windows
+    /// %LOCALAPPDATA%\Fisica\sdk, macOS ~/Library/Application Support/Fisica/sdk, Linux $XDG_STATE_HOME/fisica-sdk
+    /// or ~/.local/state/fisica-sdk.</summary>
+    public static string DefaultStorage => OperatingSystem.IsLinux()
+        ? Path.Combine(Environment.GetEnvironmentVariable("XDG_STATE_HOME") is { Length: >0 } state ? state
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),".local","state"),"fisica-sdk")
+        : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Fisica","sdk");
     // Messages shared by every wrapper (wrappers/license-messages.json, generated into Codes.cs).
     internal static string? Explain(FisicaModeReason reason) => FisicaLicenseMessages.Reason(reason);
     const string Activate="/sdk/v1/entitlement/activate", Refresh="/sdk/v1/entitlement/refresh",
@@ -82,7 +89,7 @@ public sealed class FisicaEntitlement : IDisposable {
     public FisicaEntitlement(FisicaCore core,Func<ulong>? clock=null,string? endpoint=null,string? storage=AutoStorage,bool online=true) {
         owner=core; this.clock=clock ?? (() => (ulong)DateTimeOffset.UtcNow.ToUnixTimeSeconds());
         this.endpoint=endpoint?.TrimEnd('/'); this.online=online;
-        this.storage=storage==AutoStorage ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Fisica","sdk") : storage;
+        this.storage=storage==AutoStorage ? DefaultStorage : storage;
         if (LoadStored()) { Notify(); Sync(); }
     }
     /// <summary>The developer portal, for pairing when no endpoint is given.</summary>

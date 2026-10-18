@@ -21,7 +21,11 @@ void main() {
   final vectors =
       jsonDecode(File(vectorsPath).readAsStringSync()) as Map<String, dynamic>;
   // Decoding grids is raw data: it needs full mode.
-  final full = FisicaEntitlement(core, clock: () => vectors['now'] as int);
+  final full = FisicaEntitlement(
+    core,
+    clock: () => vectors['now'] as int,
+    storageDirectory: null, // memory only: tests never touch the user's folder
+  );
   full.importToken(vectors['full'] as String);
   tearDownAll(full.close);
   test('API deprecation lifecycle uses the wrapper version', () {

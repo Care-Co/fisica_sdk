@@ -124,7 +124,8 @@ Dart 0.6.0이며 서버는 개발자 포털 https://developer.fisicahealthcare.c
 
 - 저장된 키가 있으면 원래 키 파일을 다시 가져와도 바뀌지 않는다(`ignored_older`). 저장된 키가 더 새롭다.
 - 다른 사람이 보내 준 코드를 승인하면 그 사람의 기기가 이 조직의 키를 받는다. 포털 화면이 이를 경고한다.
-- PC의 Python 스크립트·C# 프로그램·Flutter 데스크톱 앱은 대상이 같은 PC 해시라 한 번 연결하면 함께 쓴다.
+- PC의 Python 스크립트·C# 프로그램·Kotlin(JVM) 프로그램·Flutter 데스크톱 앱은 대상이 같은 PC 해시이고 기본 저장 위치도
+  같아서 한 번 연결하면 함께 쓴다.
   앱 ID가 있는 앱(iOS·Android·macOS `.app`)은 앱 안에서 `pair`를 불러 연결한다.
 
 ## 세션과 함수
@@ -185,16 +186,25 @@ python -m fisica_sdk license release   # 키 해제와 해제 코드
 ## Swift·Kotlin·C#·Dart
 
 `FisicaEntitlement`가 Python과 같은 동작을 제공한다: 키·파일 가져오기, 상태, 자동 활성화·갱신, 활성화 코드,
-해제, 저장·복원, 키 없이 연결. 저장 위치가 있으면 만들 때 이 앱·PC의 저장된 키를 바로 읽는다.
+해제, 저장·복원, 키 없이 연결. 모든 언어가 기본으로 키를 저장하고, 만들 때 이 앱·PC의 저장된 키를 토큰 없이 바로 읽는다.
+저장 위치 인자에 디렉터리를 주면 그곳을, `null`/`nil`을 주면 메모리만 쓴다(이때 연결로 받은 키는 재시작하면 사라지고,
+다시 연결하면 좌석을 하나 더 쓴다).
 각 고수준 클라이언트가 세션에 라이선스를 적용하고 기본 모드의 체중·발 크기는 코어 분석을 쓴다.
 
 | 언어 | 온라인 | 키 없이 연결 | 저장 위치 인자 | 기본 저장 위치 | 라이선스 오류 |
 |---|---|---|---|---|---|
 | Swift | `endpoint: URL`, `syncNow()`/`sync()` | `pair(onCode:)` (async), `pairNow` | `storage: URL?` | Application Support/Fisica/sdk | `FisicaLicenseError` |
-| Kotlin | `endpoint: String`, `syncNow()`/`sync()` | `pair(onCode)` (백그라운드 스레드) | `storage: File?` | 없음. 앱이 `filesDir` 등을 전달 | `FisicaLicenseException` |
-| C# | `endpoint`, `SyncAsync()`/`Sync()` | `PairAsync(onCode)` | `storage` | LocalApplicationData/Fisica/sdk | `FisicaLicenseException` |
-| Dart | `endpoint`, `sync()` | `pair(onCode)` | `storageDirectory` | 없음. 앱이 디렉터리를 전달 | `FisicaLicenseError` |
+| Kotlin | `endpoint: String`, `syncNow()`/`sync()` | `pair(onCode)` (백그라운드 스레드) | `storage: File?` | `FisicaEntitlement.defaultStorage()`: Android는 앱의 `filesDir/fisica-sdk`, 데스크톱 JVM은 아래 PC 공용 위치 | `FisicaLicenseException` |
+| C# | `endpoint`, `SyncAsync()`/`Sync()` | `PairAsync(onCode)` | `storage` | `FisicaEntitlement.DefaultStorage`: 아래 PC 공용 위치 | `FisicaLicenseException` |
+| Dart | `endpoint`, `sync()` | `pair(onCode)` | `storageDirectory` | `FisicaEntitlement.defaultStorageDirectory`: 데스크톱은 아래 PC 공용 위치, iOS는 앱의 Application Support/Fisica/sdk, Android는 앱의 `files/fisica-sdk` | `FisicaLicenseError` |
 
+- PC 공용 위치(Python과 같음): Windows `%LOCALAPPDATA%\Fisica\sdk`, macOS `~/Library/Application Support/Fisica/sdk`
+  (샌드박스 앱은 앱 컨테이너 안), Linux `$XDG_STATE_HOME/fisica-sdk` 또는 `~/.local/state/fisica-sdk`. 같은 PC의 래퍼는 코어가
+  정한 같은 파일 이름(`entitlement-<16 hex>.state`)으로 같은 좌석을 찾는다.
+- 모바일은 앱 전용 저장소다. Android(Kotlin·Flutter)는 Context 없이 앱 데이터 디렉터리를 찾는다(Kotlin은 프레임워크가
+  `java.io.tmpdir`에 주는 캐시 디렉터리, Flutter는 `Directory.systemTemp`가 가리키는 코드 캐시의 상위이며 이름이 패키지 이름과
+  같을 때만). 찾지 못하면 기본값이 `null`(메모리만)이므로 디렉터리를 직접 넘긴다. Android 키는 패키지 이름에 활성화되므로
+  앱 백업에 포함되는 `files` 아래에 둔다.
 - 기본 모드 이유·경고 문구는 `wrappers/license-messages.json` 하나에서 `tools/sync_binding_metadata.py`가 각 언어로 생성한다.
 - 해제는 `release()`(온라인이면 서버 알림을 백그라운드로), 기다리려면 C# `ReleaseAsync`, Swift `releaseNow`,
   Kotlin `releaseNow`, Dart `releaseOnline`, Python `release()` 뒤 `released_online`.

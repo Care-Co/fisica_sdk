@@ -110,6 +110,7 @@ void main() {
     final entitlement = FisicaEntitlement(
       core,
       clock: () => vectors['now'] as int,
+      storageDirectory: null, // memory only: tests never touch the user's folder
     );
     contexts.add(entitlement);
     if (name != null) entitlement.importToken(vectors[name] as String);
