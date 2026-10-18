@@ -218,17 +218,25 @@ class FisicaClient {
     _ => throw FisicaArgumentError(FisicaStatus.invalidArgument, 'No result'),
   };
 
+  /// Every call on a closed client fails with this ([FisicaStatus.cancelled],
+  /// the code close gives what it cancels), as a Future error.
+  static FisicaStateError _closedError() =>
+      FisicaStateError(FisicaStatus.cancelled, 'Client is closed');
+
   /// Run [action] and wait for its operation's RESULT. Busy only while the
   /// same operation is pending; the core refuses what cannot run now.
+  /// Failures arrive through the returned Future, never thrown here.
   Future<FisicaSessionEvent> _action(
     int action,
     int value, {
     void Function()? accepted,
   }) {
-    if (_closed) throw StateError('Client is closed');
+    if (_closed) return Future.error(_closedError());
     final operation = _operationOf(action);
     if (_waiters.containsKey(operation)) {
-      throw FisicaStateError(FisicaStatus.busy, 'Another operation is pending');
+      return Future.error(
+        FisicaStateError(FisicaStatus.busy, 'Another operation is pending'),
+      );
     }
     final waiter = Completer<FisicaSessionEvent>();
     _waiters[operation] = waiter;
@@ -276,13 +284,14 @@ class FisicaClient {
   /// fails with [FisicaArgumentError] before anything is sent.
   ///
   /// Also reconnects after a link loss: omit [transport] to connect the same
-  /// one again, or pass a replacement (the previous one is closed).
+  /// one again, or pass a replacement (the previous one is closed). After
+  /// [close] it fails with [FisicaStateError] ([FisicaStatus.cancelled]).
   Future<FisicaSessionEvent> connect({
     int? link,
     @Deprecated('Use link: FisicaLink.ble or FisicaLink.usb') int? profile,
     FisicaTransport? transport,
   }) async {
-    if (_closed) throw StateError('Client is closed');
+    if (_closed) throw _closedError();
     if (_linked || _connecting) throw StateError('Already connected');
     if (link != null && profile != null && link != profile) {
       throw FisicaArgumentError(
@@ -305,7 +314,7 @@ class FisicaClient {
         }
       }
       await next.connect();
-      if (_closed) throw StateError('Client is closed');
+      if (_closed) throw _closedError();
       _clock.start();
       final generation = ++_generation;
       _input = next.received.listen((data) {
@@ -359,8 +368,11 @@ class FisicaClient {
 
   /// Start measuring; [duration] null measures until [stop]. Frames of the
   /// previous measurement are cleared once the core accepts the start. The
-  /// current license is applied to the session first.
+  /// current license is applied to the session first. Like [stop],
+  /// [readBattery] and [connect], it fails with [FisicaStateError]
+  /// ([FisicaStatus.cancelled]) after [close].
   Future<FisicaSessionEvent> start({Duration? duration}) {
+    if (_closed) return Future.error(_closedError());
     entitlement?.checkStatus();
     _applyLicense();
     return _checked(
@@ -379,7 +391,7 @@ class FisicaClient {
   /// a measurement, without interrupting it. A refused or unanswered query
   /// fails only this call; the session carries on.
   Future<int> readBattery() async {
-    if (_closed) throw StateError('Client is closed');
+    if (_closed) throw _closedError();
     const operation = FisicaSessionOperation.request;
     if (_waiters.containsKey(operation)) {
       throw FisicaStateError(FisicaStatus.busy, 'Another query is pending');

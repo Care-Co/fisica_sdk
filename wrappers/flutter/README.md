@@ -72,6 +72,10 @@ Core owns all command ordering, ACK deadlines, duration and recovery decisions.
   `profile:` is the deprecated name of the same value.
 - Only the same operation is busy (a second `start()` while one is pending); the core
   orders the rest, for example a `stop()` sent while `start()` waits for its ACK.
+  Failures arrive as Future errors, never as a synchronous throw.
+- After `close()`, `connect()`, `start()`, `stop()` and `readBattery()` fail with
+  `FisicaStateError` (`FisicaStatus.cancelled`), the code `close()` gives what it
+  cancels, as in every other wrapper.
 - After a link loss the stream emits an error and a `reconnect` event and the session
   is RECOVERING. Call `connect()` again on the same client (optionally with
   `transport:` to replace the transport; the old one is closed): the core resumes a

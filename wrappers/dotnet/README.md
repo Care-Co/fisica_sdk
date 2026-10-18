@@ -28,7 +28,10 @@ await client.CloseAsync();
   `DeviceCode` the Scale's code). `ConnectAsync` completes with the firmware probe; an
   unanswered probe does not prevent use. A transport that never becomes ready fails
   after `timeout` (default 15 s).
-- `CloseAsync` releases resources even when the Scale does not confirm. On `LinkLost`,
+- `CloseAsync` releases resources even when the Scale does not confirm. A second
+  `CloseAsync` while one is pending fails with `Busy`; once closed it completes at once,
+  and `ConnectAsync`, `StartAsync`, `StopAsync` and `ReadBatteryAsync` fail with
+  `Cancelled`, the code `CloseAsync` gives what it cancels. On `LinkLost`,
   reopen the same Scale with `ConnectAsync`. A client dropped without `CloseAsync` is still
   collected, also while its license lives on.
 - `Report()` returns unrounded weight and foot size from the core's analysis of every

@@ -356,14 +356,18 @@ foreach (var (key,at) in new (string?,ulong)[]{(null,now),("unbound",now),("tamp
     Require(!inner.IsOpen,"closed after a throwing Send");
 }
 {
-    // Full mode keeps the analysis after close too; calls after close fail instead of hanging.
+    // Full mode keeps the analysis after close too; every call after close fails with Cancelled instead of hanging.
     using var license=License("full"); var client=new FisicaClient(core,Scale(),license);
     await client.ConnectAsync().WaitAsync(TimeSpan.FromSeconds(5));
     await client.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
     await client.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
     await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
     Require(client.Report() is { Weight: 70.5, FrameCount: 12 },"full report after close");
-    Require(await Failure(client.StartAsync()) is FisicaException && await Failure(client.ConnectAsync()) is FisicaException,"calls after close fail");
+    static bool Cancelled(Exception? error) => error is FisicaException { Code: (int)FisicaStatus.Cancelled };
+    Require(Cancelled(await Failure(client.ConnectAsync())),"connect after close is cancelled");
+    Require(Cancelled(await Failure(client.StartAsync())),"start after close is cancelled");
+    Require(Cancelled(await Failure(client.StopAsync())),"stop after close is cancelled");
+    Require(Cancelled(await Failure(client.ReadBatteryAsync())),"battery after close is cancelled");
     await client.CloseAsync().WaitAsync(TimeSpan.FromSeconds(5));
 }
 {

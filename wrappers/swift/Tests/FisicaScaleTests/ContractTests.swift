@@ -463,7 +463,7 @@ final class ClientTests: XCTestCase {
         XCTAssertTrue(undeclared.sent.contains(try core.command("SET_DEVICE_BLE")))
         waitFor("close ble") { done in other.close { _ in done() } }
     }
-    func testReportAfterCloseInBasicModeWithoutFrames() throws {
+    func testReportAfterCloseInBasicModeAndCallsAfterCloseAreCancelled() throws {
         // The report comes from the core's analysis, not the frames handed out, also after close.
         let core = try FisicaCore(), transport = try scale(core)
         let client = try FisicaClient(core: core, transport: transport)
@@ -474,7 +474,18 @@ final class ClientTests: XCTestCase {
         waitFor("close") { done in client.close { _ in done() } }
         XCTAssertTrue(client.frames.isEmpty)
         XCTAssertEqual(try client.report()?.weight, 70.5)
-        waitFor("start after close") { done in client.start { result in XCTAssertNotNil(self.failure(result)); done() } }
+        // Every call after close fails with cancelled, the code close gives what it cancels.
+        let cancelled = Int32(FisicaStatus.cancelled.rawValue)
+        waitFor("connect after close") { done in client.connect(.usb) { result in
+            XCTAssertEqual((self.failure(result) as? FisicaError)?.code, cancelled); done() } }
+        waitFor("start after close") { done in client.start { result in
+            XCTAssertEqual((self.failure(result) as? FisicaError)?.code, cancelled); done() } }
+        waitFor("stop after close") { done in client.stop { result in
+            XCTAssertEqual((self.failure(result) as? FisicaError)?.code, cancelled); done() } }
+        waitFor("battery after close") { done in client.readBattery { result in
+            if case .failure(let error) = result { XCTAssertEqual((error as? FisicaError)?.code, cancelled) } else { XCTFail("battery after close") }
+            done() } }
+        waitFor("close after close") { done in client.close { result in XCTAssertNil(result); done() } }
     }
     func testClientReleasedMidOperationClosesTheLinkAndCancelsWhatWaits() throws {
         // Only the start in flight holds the client (the transport's callbacks are weak); the Scale never confirms.
