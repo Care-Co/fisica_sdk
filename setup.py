@@ -70,7 +70,9 @@ setup(
     author_email='carencoinc@carenco.kr',
     url='https://github.com/Care-Co/',
     packages=['fisica_sdk'],
-    install_requires=['numpy>=1.21', 'packaging>=21.0', 'pyserial>=3.5', 'bleak>=0.22.3'],
+    install_requires=['numpy>=1.21', 'packaging>=21.0', 'pyserial>=3.5', 'bleak>=0.22.3',
+                      # bleak's PyObjC 12 has no Python 3.9 wheels; its source build fails with current Xcode.
+                      'pyobjc-core<12; platform_system=="Darwin" and python_version<"3.10"'],
     extras_require={
         'visualization': ['opencv-python>=4.5', 'Pillow>=8.0'],
     },
