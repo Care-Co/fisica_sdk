@@ -51,7 +51,11 @@ python tools/verify_wheel.py .\release\3.0.0\fisica-3.0.0-py3-none-win_amd64.whl
 `--output`. Its wheel and core ZIP trust the production portal key only, and `verify_wheel.py`
 checks that an installed release wheel rejects a test-signed key. For QA with test-signed
 keys build with `--validation` and verify with `python tools/verify_wheel.py --validation ...`,
-which checks full mode instead.
+which checks full mode instead. A QA build is named so it cannot pass for a customer one:
+`fisica-3.0.0+validation-py3-none-win_amd64.whl` and `fisica-core-2.0.0-win_amd64-validation.zip`,
+by default in `.build\releases-validation\3.0.0\` (give it an `--output` other than the customer
+build's). `tools/audit_artifacts.py` refuses a test-key archive without that name, and without
+`--validation` any archive named so.
 
 The native build uses `/MT` to link the C++ runtime statically, `/fp:strict` to
 retain the legacy numeric behavior, an x64 linker target and non-debug release
@@ -70,7 +74,8 @@ Removed on 2026-10-17 until a self-hosted Windows runner exists (CI uses only se
 runners; see `doc/platform-support.md`, CI). The workflow below is kept in git history
 (`git show a44754b:.github/workflows/windows-wheel.yml`). It builds with `--validation`, so a
 restored copy must call `tools/verify_wheel.py --validation` and name its artifacts with a
-`-validation` suffix.
+`-validation` suffix. Its wheel and core ZIP are then `fisica-<v>+validation-py3-none-win_amd64.whl`
+and `fisica-core-<core>-win_amd64-validation.zip`; adjust the upload globs to those names.
 
 `.github/workflows/windows-wheel.yml` provided manual and internal PR builds on
 `windows-2022`. It initializes an x64 MSVC environment, builds the core, runs the
@@ -92,9 +97,11 @@ An explicit `win_amd64` target can be built with a Windows x64 cross compiler on
 a trusted non-Windows host. No cross compiler is selected implicitly.
 
 ```sh
-FISICA_BUILD_PLATFORM=win_amd64 CXX=/trusted/toolchain/bin/x86_64-w64-mingw32-clang++ \
-  python tools/build_release.py --output .build/windows-releases
+CXX=/trusted/toolchain/bin/x86_64-w64-mingw32-clang++ \
+  python tools/build_release.py --platform win_amd64 --output .build/windows-releases
 ```
+
+`--platform` sets `FISICA_BUILD_PLATFORM` for the build, which the lower-level tools read directly.
 
 The LLVM MinGW cross build uses a static C++ runtime, no debug output and the same
 floating-point contraction policy as the macOS implementation. Run the resulting
@@ -103,7 +110,7 @@ Windows-native release validation path (CI paused until a Windows runner exists)
 cross-build is not an MSVC test.
 
 `FISICA_PREBUILT_CORE=/trusted/path/fisica_core.dll` can package an already-built
-DLL with `FISICA_BUILD_PLATFORM=win_amd64`. Only that validated DLL and public
+DLL with `--platform win_amd64` (or `FISICA_BUILD_PLATFORM=win_amd64`). Only that validated DLL and public
 metadata are copied, never neighboring sources/sidecars. Use it only for a DLL
 built from the matching private release. Always run `tools/verify_wheel.py` on
 Windows after packaging to confirm runtime compatibility and versions.
@@ -116,14 +123,15 @@ core and Flutter ZIPs also include it. The packaged text is Version 2.0, written
 policy of 2026-10-17 in Korean with an English translation ([review notes](license-review.md)). Third-party libraries retain their own licenses.
 
 ```sh
-python tools/build_release.py --validation --output release
+python tools/build_release.py --validation --output release-validation
 ```
 
 Every company receives the same wheel and DLL: no partner or delivery identifier is
 compiled in, and `artifact-manifest.json` records the artifact hashes. The SDK key
 supplied at runtime ([entitlement](entitlement.md)) decides basic or full mode; basic mode
 keeps connection, measurement, weight and foot size. Without `--validation` the core trusts only the production portal
-key; `--validation` also trusts the test signing key and is for QA, not for customers.
+key; `--validation` also trusts the test signing key and is for QA, not for customers (its files
+are named `+validation` / `-validation`).
 
 ## Runtime and hardware-free checks
 

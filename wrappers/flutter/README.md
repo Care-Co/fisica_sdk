@@ -11,10 +11,11 @@ import 'package:fisica_core/fisica_core.dart';
 
 final core = FisicaCore.platform();
 // SDK key from the developer portal; without one the SDK runs in basic mode.
+// The activated key is stored in the app's private storage (desktop: the per-user
+// Fisica folder), so it is still there after a restart.
 final license = FisicaEntitlement(
   core,
   endpoint: 'https://developer.fisicahealthcare.com',
-  storageDirectory: appSupportDirectory, // keeps the activated key
 )..importToken(sdkKey);
 await license.sync(); // activates a new key for this app or PC
 final client = FisicaClient(core, selectedTransport, entitlement: license);
@@ -71,6 +72,10 @@ Core owns all command ordering, ACK deadlines, duration and recovery decisions.
   `profile:` is the deprecated name of the same value.
 - Only the same operation is busy (a second `start()` while one is pending); the core
   orders the rest, for example a `stop()` sent while `start()` waits for its ACK.
+  Failures arrive as Future errors, never as a synchronous throw.
+- After `close()`, `connect()`, `start()`, `stop()` and `readBattery()` fail with
+  `FisicaStateError` (`FisicaStatus.cancelled`), the code `close()` gives what it
+  cancels, as in every other wrapper.
 - After a link loss the stream emits an error and a `reconnect` event and the session
   is RECOVERING. Call `connect()` again on the same client (optionally with
   `transport:` to replace the transport; the old one is closed): the core resumes a
@@ -115,8 +120,8 @@ The native core decides between two modes and limits what it hands out itself:
 
 `FisicaEntitlement` holds the SDK key. `importToken`/`importFile` take a key from the
 developer portal or a key file it made for a device that is never online (activation
-or renewal file). With a `storageDirectory`, the key stored there for this app or PC is
-loaded at once. Without a key, `await entitlement.pair((code) => ...)` shows a code that an
+or renewal file). The key stored for this app or PC (paired or imported earlier) is
+loaded at once, so after pairing the app needs no key of its own. Without a key, `await entitlement.pair((code) => ...)` shows a code that an
 owner or admin approves at the portal's `/activate` page; the key arrives activated for this
 app or PC and is stored (endpoint `FisicaEntitlement.defaultEndpoint`). `status()` returns the mode, the reason for basic mode (`message`
 explains it), the open `FisicaFeature` bits, company, contract, key, the app ID or PC
@@ -134,6 +139,16 @@ no network is used. A key not activated yet shows an activation code
 (`activationCode()`, FAC1) to enter in the developer portal from another device.
 `release()` frees the key on this app or PC and returns the FRC1 code to enter in the
 portal. An answer that arrives after `release()` or after another key was imported is
-dropped: a released key stays released and the newer key stays. Pass `storageDirectory` (for example the app support directory) to keep the
-activated key and the latest time seen across launches; a stored key wins over an
-older original key file. The SDK does not track its own use; see `doc/entitlement.md`.
+dropped: a released key stays released and the newer key stays. The activated key and
+the latest time seen are kept across launches, one file per seat, in
+`FisicaEntitlement.defaultStorageDirectory` unless `storageDirectory` names another
+directory; `storageDirectory: null` keeps them in memory only (a paired key is then gone
+after a restart and pairing again takes another seat). The default is the per-user
+directory the Python and C# SDKs use on Windows (`%LOCALAPPDATA%\Fisica\sdk`), macOS
+(`~/Library/Application Support/Fisica/sdk`, inside the container of a sandboxed app) and
+Linux (`$XDG_STATE_HOME/fisica-sdk` or `~/.local/state/fisica-sdk`); on iOS the app's
+`Library/Application Support/Fisica/sdk` (as the Swift SDK); on Android the app's files
+directory `files/fisica-sdk` (as the Kotlin SDK), found from the cache directory Flutter
+gives `Directory.systemTemp`, without path_provider. Where none can be found it is null
+(memory only): pass a directory then. A stored key wins over an older original key file.
+The SDK does not track its own use; see `doc/entitlement.md`.

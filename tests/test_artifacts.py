@@ -37,6 +37,44 @@ def test_accept_public_adapters_and_binary(tmp_path):
     assert audit_archive(archive) == 5
 
 
+ARM64, X86_64 = 0x0100000c, 0x01000007
+
+
+def fat_macho(*cpus):
+    """Header of a universal Mach-O file: magic, slice count and one fat_arch entry per slice."""
+    import struct
+    return struct.pack('>II', 0xcafebabe, len(cpus)) + b''.join(
+        struct.pack('>IIIII', cpu, 0, 0x4000 * (index + 1), 0x10, 14) for index, cpu in enumerate(cpus))
+
+
+def thin_macho(cpu):
+    import struct
+    return b'\xcf\xfa\xed\xfe' + struct.pack('<II', cpu, 0) + bytes(20)
+
+
+@pytest.mark.parametrize('tag,library,error', [
+    ('macosx_11_0_universal2', fat_macho(ARM64, X86_64), None),
+    ('macosx_11_0_universal2', fat_macho(X86_64, ARM64), None),
+    ('macosx_11_0_universal2', fat_macho(ARM64), 'holds arm64\\)'),
+    ('macosx_11_0_universal2', thin_macho(ARM64), 'thin Mach-O'),
+    ('macosx_11_0_universal2', b'\xca\xfe\xba\xbe\x00\x00\x00\x05', 'no readable architecture table'),
+    ('macosx_11_0_arm64', thin_macho(ARM64), None),
+    ('macosx_11_0_arm64', thin_macho(X86_64), 'holds x86_64\\)'),
+    ('macosx_11_0_arm64', fat_macho(ARM64, X86_64), 'holds arm64, x86_64'),
+    ('macosx_11_0_x86_64', thin_macho(X86_64), None),
+    ('macosx_11_0_intel', thin_macho(X86_64), 'Unsupported macOS wheel platform tag'),
+])
+def test_macos_wheel_core_holds_the_architectures_of_its_tag(tmp_path, tag, library, error):
+    """universal2 promises one core with both an arm64 and an x86_64 slice."""
+    archive = tmp_path / f'fisica-3.0.0-py3-none-{tag}.whl'
+    make_archive(archive, {'fisica_sdk/_native/libfisica_core.dylib': library})
+    if error is None:
+        assert audit_archive(archive) == 6
+    else:
+        with pytest.raises(ValueError, match=error):
+            audit_archive(archive)
+
+
 def test_wrapper_metadata_stays_synchronized():
     # Also validates pubspec and generated Dart version metadata at build time.
     release = release_metadata()
@@ -81,10 +119,12 @@ def test_customer_packages_trust_only_production_keys(monkeypatch, tmp_path):
     tests = [key['kid'] for key in entitlement_keys(include_test=True) if key['environment'] == 'test']
     assert [key['environment'] for key in release['entitlement']['keys']] == ['production'] * len(production)
     assert all(f'"{kid}"' in header for kid in production) and not any(f'"{kid}"' in header for kid in tests)
+    assert release['validation'] is False and '#define FISICA_VALIDATION_BUILD 0\n' in header
 
     assert require_release_keys(validation=True) is True
     qa = prepare_release(tmp_path / 'qa')
     assert {key['environment'] for key in qa['entitlement']['keys']} == {'production', 'test'}
+    assert qa['validation'] is True and '#define FISICA_VALIDATION_BUILD 1\n' in (tmp_path / 'qa' / 'fisica_release.h').read_text()
     assert all(f'"{kid}"' in (tmp_path / 'qa' / 'fisica_release.h').read_text() for kid in production + tests)
 
 

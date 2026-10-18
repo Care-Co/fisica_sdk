@@ -175,11 +175,12 @@ public sealed class FisicaClient : IAsyncDisposable {
     /// <summary>Open the transport and probe firmware. Completes with the probe result; an unanswered probe is
     /// reported in its Status and does not prevent use. The link defaults to the transport's own Link; a transport
     /// that does not declare one (Link null) must be given it. A missing link, or one other than the transport's,
-    /// fails with InvalidArgument before anything is sent.</summary>
+    /// fails with InvalidArgument before anything is sent. After CloseAsync it fails with Cancelled, like every other operation.</summary>
     public Task<SessionEvent> ConnectAsync(FisicaLink? link=null,TimeSpan? timeout=null) {
         var waiter=Waiter();
         Post(() => {
-            if (closed || linkReady || waiters.ContainsKey(FisicaSessionOperation.Probe)) { waiter.TrySetException(new FisicaException((int)FisicaStatus.Busy,"Already connected or connecting")); return; }
+            if (closed) { waiter.TrySetException(ClosedError()); return; }
+            if (linkReady || waiters.ContainsKey(FisicaSessionOperation.Probe)) { waiter.TrySetException(new FisicaException((int)FisicaStatus.Busy,"Already connected or connecting")); return; }
             var carried=Transport.Link;
             string? problem=(link ?? carried) is not {} chosen ? "This transport does not declare its link: pass FisicaLink.Ble or FisicaLink.Usb"
                 : !Enum.IsDefined(chosen) ? "Use FisicaLink.Ble or FisicaLink.Usb"
@@ -288,11 +289,15 @@ public sealed class FisicaClient : IAsyncDisposable {
         Raise(Event,e);
     }
 
+    // Every operation on a closed client fails with Cancelled, the code CloseAsync gives what it cancels.
+    static FisicaException ClosedError() => new((int)FisicaStatus.Cancelled,"Client closed");
     // Registers the waiter, runs the core call and delivers what it produced; a call the core refuses fails the task.
+    // Busy while the same operation is pending, Cancelled once closed.
     Task<SessionEvent> Request(FisicaSessionOperation waitFor,Action call) {
         var waiter=Waiter();
         Post(() => {
-            if (closed || waiters.ContainsKey(waitFor)) { waiter.TrySetException(new FisicaException((int)FisicaStatus.Busy,"Another operation is pending")); return; }
+            if (closed) { waiter.TrySetException(ClosedError()); return; }
+            if (waiters.ContainsKey(waitFor)) { waiter.TrySetException(new FisicaException((int)FisicaStatus.Busy,"Another operation is pending")); return; }
             waiters[waitFor]=waiter;
             try { call(); } catch (Exception error) { Finish(waitFor,null,error); }
             DeliverQueued();
@@ -343,7 +348,7 @@ public sealed class FisicaClient : IAsyncDisposable {
         // Report() still works after closing: keep the core's analysis of the last measurement.
         try { closedAnalysis=session.Analyze(); } catch (FisicaException) { }
         CloseTransport(); session.Dispose();
-        foreach (var waiter in waiters.Values) waiter.TrySetException(new FisicaException((int)FisicaStatus.Cancelled,"Client closed"));
+        foreach (var waiter in waiters.Values) waiter.TrySetException(ClosedError());
         waiters.Clear();
     }
     public async ValueTask DisposeAsync() { try { await CloseAsync(); } catch (Exception) { /* Resources are already released. */ } }

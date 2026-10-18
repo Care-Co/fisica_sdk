@@ -65,7 +65,8 @@ app's or PC's target, the key's dates (`keyUntil`, `fullUntil`, `refreshBy`, con
   sets `lastSyncError` and never changes the license.
 - Offline: show `activationCode()` (FAC1), enter it in the developer portal, and import the key
   file it gives with `importFile(_:)`; renewal files work the same way.
-- The activated key is stored per seat under Application Support (`storage:`), loaded when the
+- The activated key is stored per seat under Application Support/Fisica/sdk by default
+  (`storage:`, `FisicaEntitlement.defaultStorage`; `nil` keeps it in memory only), loaded when the
   `FisicaEntitlement` is created, and wins over an older original key file imported again.
 - Without a key, `try await license.pair { code in ... }` shows a code that an owner or admin
   approves at the developer portal's `/activate` page (`FisicaEntitlement.defaultEndpoint`); the
@@ -90,7 +91,9 @@ app's or PC's target, the key's dates (`keyUntil`, `fullUntil`, `refreshBy`, con
 - A rejected or unconfirmed command fails with `FisicaCommandError` (`code` is the SDK
   status, `deviceCode` the Scale's own code). `close` releases resources even when the
   Scale does not confirm. A second `close` while one is pending fails with `busy` and
-  leaves the first alone; once closed, `close` completes at once with nil.
+  leaves the first alone; once closed, `close` completes at once with nil, and `connect`,
+  `start`, `stop` and `readBattery` fail with `cancelled`, the code `close` gives what it
+  cancels.
 - On `onLinkLost`, reopen the same Scale with `connect`; the core resumes a measurement
   it still wants.
 - `report()` analyzes the measurement in the core and returns unrounded values from every

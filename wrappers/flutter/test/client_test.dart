@@ -110,6 +110,7 @@ void main() {
     final entitlement = FisicaEntitlement(
       core,
       clock: () => vectors['now'] as int,
+      storageDirectory: null, // memory only: tests never touch the user's folder
     );
     contexts.add(entitlement);
     if (name != null) entitlement.importToken(vectors[name] as String);
@@ -324,7 +325,16 @@ void main() {
     await settle();
     await client.close();
     expect(transport.closed, isTrue);
-    expect(() => client.connect(), throwsStateError);
+    await expectLater(
+      client.connect(),
+      throwsA(
+        isA<FisicaStateError>().having(
+          (e) => e.code,
+          'code',
+          FisicaStatus.cancelled,
+        ),
+      ),
+    );
   });
   test('link comes from the transport; a different one is rejected', () async {
     final usb = LinkedBytes(FisicaLink.usb);
@@ -383,6 +393,28 @@ void main() {
     expect(client.frames, isEmpty);
     expect(client.report()!.weight, 70.5);
     expect(client.report()!.frames, isEmpty);
+  });
+  test('every call after close fails with CANCELLED, as a Future error', () async {
+    final client = await measure(null);
+    await client.close();
+    final cancelled = throwsA(
+      isA<FisicaStateError>().having(
+        (e) => e.code,
+        'code',
+        FisicaStatus.cancelled,
+      ),
+    );
+    // Called outside expectLater: a synchronous throw would fail the test here.
+    final calls = <String, Future<Object?>>{
+      'connect': client.connect(link: FisicaLink.usb),
+      'start': client.start(),
+      'stop': client.stop(),
+      'readBattery': client.readBattery(),
+    };
+    for (final entry in calls.entries) {
+      await expectLater(entry.value, cancelled, reason: entry.key);
+    }
+    await client.close(); // closing again stays a no-op
   });
   test('only the same operation is busy; the core orders the rest', () async {
     final client = FisicaClient(core, MockBytes());

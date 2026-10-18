@@ -333,6 +333,40 @@ void main() {
     expect(reopened.status().isFull, isTrue);
     expect(reopened.status().bind, target);
   });
+  test(
+    'by default the key is stored in the per-user directory and found again',
+    () async {
+      // A child process with a temporary home, so the user's own folder is
+      // never touched.
+      final home = temporary().path;
+      final separator = Platform.pathSeparator;
+      final expected = Platform.isWindows
+          ? '$home${separator}local${separator}Fisica${separator}sdk'
+          : Platform.isMacOS
+          ? '$home/Library/Application Support/Fisica/sdk'
+          : '$home/state/fisica-sdk';
+      final result = await Process.run(
+        Platform.resolvedExecutable,
+        [
+          '--packages=${File('.dart_tool/package_config.json').absolute.path}',
+          'test/support/default_storage.dart',
+        ],
+        environment: {
+          'HOME': home,
+          'USERPROFILE': home,
+          'LOCALAPPDATA': '$home${separator}local',
+          'XDG_STATE_HOME': '$home${separator}state',
+        },
+      );
+      expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+      expect((result.stdout as String).trim().split('\n').last.trim(), expected);
+      expect(
+        Directory(expected).listSync().where((f) => f.path.endsWith('.state')),
+        hasLength(1),
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
   test('only a state file of this PC is loaded', () {
     final directory = temporary();
     File('${directory.path}/entitlement-0000000000000000.state')

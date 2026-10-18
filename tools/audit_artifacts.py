@@ -4,9 +4,12 @@ binaries, license or release metadata, or hold a core that trusts the repository
     python tools/audit_artifacts.py [--validation] ARCHIVE...
 
 --validation accepts QA archives whose core also trusts the test key (tools/*.py --validation).
+Those must be named as validation builds (validation_named), and without --validation any
+archive named so is refused, whatever it holds.
 """
 from pathlib import Path
 import plistlib
+import re
 import zipfile
 import json
 import runpy
@@ -69,6 +72,62 @@ def validate_android_library(data, abi):
     for kind, vaddr, memsz, _ in headers:
         if kind == 0x6474e552 and (vaddr + memsz) % ANDROID_PAGE_SIZE:
             raise ValueError(f'Android library RELRO segment does not end on a 16 KB boundary ({abi}); rebuild with {ANDROID_PAGE_FLAGS}')
+
+
+# A validation (QA) build trusts the repository test key, whose secret is committed: shipped by
+# mistake, it would let anyone sign full-mode keys. So its file names say what it is. Archives
+# end in '-validation' before the extension (fisica-core-2.0.0-win_amd64-validation.zip,
+# fisica-scale-0.3.0-validation.aar). A wheel's name is name-version-python-abi-platform, so its
+# version carries the local label '+validation' instead (fisica-3.0.0+validation-py3-none-win_amd64.whl):
+# pip installs it, `pip list` shows it and PyPI refuses to host it. The build tools also write
+# validation builds to their own default directories (.build/*-validation).
+VALIDATION_MARK = '-validation'
+WHEEL_VALIDATION_LABEL = 'validation'
+
+
+def wheel_version(path):
+    """The version field of a wheel file name (name-version[-build]-python-abi-platform.whl), or None."""
+    path = Path(path)
+    parts = path.stem.split('-')
+    return parts[1] if path.suffix == '.whl' and len(parts) in (5, 6) else None
+
+
+def validation_named(path):
+    """Whether the file name marks a validation build: a '+validation' wheel version, a '-validation' archive name."""
+    path = Path(path)
+    if path.suffix == '.whl':
+        version = wheel_version(path)
+        return version is not None and version.partition('+')[2] == WHEEL_VALIDATION_LABEL
+    return path.stem.endswith(VALIDATION_MARK)
+
+
+def validation_name(name):
+    """The file name of the validation build of the package `name`."""
+    path = Path(name)
+    if path.suffix == '.whl':
+        parts = path.stem.split('-')
+        parts[1] += '+' + WHEEL_VALIDATION_LABEL
+        return '-'.join(parts) + path.suffix
+    return path.stem + VALIDATION_MARK + path.suffix
+
+
+# Mach-O CPU types (mach/machine.h) of the macOS cores, and what each macOS wheel tag must hold.
+MACHO_CPU_TYPES = {0x0100000c: 'arm64', 0x01000007: 'x86_64'}
+MACOS_WHEEL_ARCHITECTURES = {'universal2': ('arm64', 'x86_64'), 'arm64': ('arm64',), 'x86_64': ('x86_64',)}
+
+
+def macho_architectures(data):
+    """Architectures of a 64-bit Mach-O binary: every slice of a universal (fat) file, or the one of a thin file."""
+    magic = data[:4]
+    if magic in (b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf'):
+        entry = 20 if magic == b'\xca\xfe\xba\xbe' else 32
+        count = struct.unpack_from('>I', data, 4)[0] if len(data) >= 8 else 0
+        if not count or 8 + count * entry > len(data):
+            raise ValueError('Universal Mach-O binary has no readable architecture table')
+        return sorted(MACHO_CPU_TYPES.get(struct.unpack_from('>I', data, 8 + i * entry)[0], 'unknown') for i in range(count))
+    if magic == b'\xcf\xfa\xed\xfe' and len(data) >= 8:
+        return [MACHO_CPU_TYPES.get(struct.unpack_from('<I', data, 4)[0], 'unknown')]
+    raise ValueError('macOS core is not a 64-bit Mach-O binary')
 
 
 NATIVE_LIBRARIES = ('.dylib', '.so', '.dll', '.a')
@@ -149,7 +208,7 @@ def require_binaries(kind, archive, names):
 
 
 def audit_release(path, kind, archive, names, validation):
-    """The release.json a package carries, and the entitlement keys its core trusts."""
+    """The release.json a package carries, the entitlement keys its core trusts and whether its name says so."""
     if kind == 'samples':
         return
     name = 'fisica_sdk/_release.json' if kind == 'wheel' else 'release.json'
@@ -162,21 +221,39 @@ def audit_release(path, kind, archive, names, validation):
         raise ValueError(f'{name} is not release metadata')
     if kind != 'wheel' and (not isinstance(release.get('core_version'), str) or not isinstance(keys, list) or not keys):
         raise ValueError(f'{name} lacks the core version or the trusted entitlement keys')
-    if validation:
-        return
-    advice = 'customer archives trust production keys only; pass --validation for a QA archive'
-    if any(not isinstance(key, dict) or key.get('environment') != 'production' for key in keys or []):
-        raise ValueError(f'{path.name} trusts test entitlement keys ({name}): {advice}')
+    listed = any(not isinstance(key, dict) or key.get('environment') != 'production' for key in keys or [])
     # The compiled key table, whatever the metadata says.
     test_keys = repository_test_keys()
-    for entry in names:
-        if entry.endswith(NATIVE_LIBRARIES) and any(key in archive.read(entry) for key in test_keys):
-            raise ValueError(f'{entry} in {path.name} trusts the repository test entitlement key: {advice}')
+    compiled = next((entry for entry in names if entry.endswith(NATIVE_LIBRARIES)
+                     and any(key in archive.read(entry) for key in test_keys)), None)
+    flagged = release.get('validation') is True
+    if not validation:
+        advice = ('customer archives trust production keys only; a QA archive is named as a validation build '
+                  'and audited with --validation')
+        if listed:
+            raise ValueError(f'{path.name} trusts test entitlement keys ({name}): {advice}')
+        if compiled:
+            raise ValueError(f'{compiled} in {path.name} trusts the repository test entitlement key: {advice}')
+        if flagged:
+            raise ValueError(f'{path.name} is a validation build ({name} says validation: true): {advice}')
+        return
+    marked = validation_named(path)
+    if (listed or compiled or flagged) and not marked:
+        reason = (f'trusts the test entitlement key ({name if listed else compiled})' if listed or compiled
+                  else f'is a validation build ({name} says validation: true)')
+        raise ValueError(f'{path.name} {reason}, but its name does not mark it as a validation build: '
+                         f'QA packages are named like {validation_name(path.name)}')
+    if marked and release.get('validation') is False:
+        raise ValueError(f'{path.name} is named as a validation build, but {name} is a customer build (validation: false)')
 
 
 def audit_archive(path, validation=False):
     """Audit one customer archive; validation=True accepts cores that also trust the test key (QA builds)."""
     path = Path(path)
+    # Any name that says validation stays out of a release, also a copy a browser renamed to '... (1).zip'.
+    if not validation and 'validation' in path.name.lower():
+        raise ValueError(f'{path.name} is named as a validation (QA) build, whose core may trust the repository '
+                         'test key: customer releases never include one; audit QA packages with --validation')
     with zipfile.ZipFile(path) as archive:
         names = archive.namelist()
         kind = package_kind(path, names)
@@ -226,16 +303,18 @@ def audit_archive(path, validation=False):
                 if len(wheel_metadata) != 1 or 'Tag: py3-none-' + ('win_arm64' if path.stem.endswith('win_arm64') else 'win_amd64') not in archive.read(wheel_metadata[0]).decode():
                     raise ValueError('Windows wheel metadata does not match its filename')
             if 'macosx_' in path.name:
-                libraries = [name for name in names if name.endswith('.dylib')]
-                for name in libraries:
-                    header = archive.read(name)[:8]
-                    if 'universal2' in path.name and header[:4] not in (b'\xca\xfe\xba\xbe',b'\xca\xfe\xba\xbf'):
+                tag = path.stem.rsplit('-', 1)[-1]
+                wanted = next((list(value) for key, value in MACOS_WHEEL_ARCHITECTURES.items() if tag.endswith('_' + key)), None)
+                if wanted is None:
+                    raise ValueError(f'Unsupported macOS wheel platform tag {tag}')
+                for name in [name for name in names if name.endswith('.dylib')]:
+                    data = archive.read(name)
+                    if tag.endswith('_universal2') and data[:4] not in (b'\xca\xfe\xba\xbe',b'\xca\xfe\xba\xbf'):
                         raise ValueError('Universal wheel contains a thin Mach-O binary')
-                    if header[:4] == b'\xcf\xfa\xed\xfe':
-                        cpu = struct.unpack('<I',header[4:8])[0]
-                        expected = 0x100000c if path.stem.endswith('arm64') else 0x1000007
-                        if cpu != expected:
-                            raise ValueError('Wheel architecture does not match its native binary')
+                    found = macho_architectures(data)
+                    if found != wanted:
+                        raise ValueError(f'Wheel architecture does not match its native binary ({tag}: {name} holds '
+                                         + ', '.join(found) + ')')
         elif path.stem.endswith(('win_amd64','win_arm64')):
             if 'fisica_core.dll' not in names:
                 raise ValueError('Windows native bundle is missing the core DLL')
@@ -247,6 +326,10 @@ def audit_archive(path, validation=False):
             metadata = [name for name in names if name.endswith('.dist-info/METADATA')]
             if len(metadata) != 1 or 'License-Expression: LicenseRef-Fisica-Scale-SDK' not in archive.read(metadata[0]).decode():
                 raise ValueError('Wheel license metadata does not match the SDK license')
+            # pip refuses such a wheel as well: a renamed validation wheel does not pass for a customer one.
+            declared = re.search(r'^Version: *(\S+)', archive.read(metadata[0]).decode(), re.MULTILINE)
+            if declared and wheel_version(path) and declared[1].replace('-', '_') != wheel_version(path):
+                raise ValueError(f'Wheel metadata version {declared[1]} does not match its file name {path.name}')
         require_binaries(kind, archive, names)
         audit_release(path, kind, archive, names, validation)
     return len(names)

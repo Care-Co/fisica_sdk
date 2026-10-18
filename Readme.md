@@ -14,11 +14,14 @@ python -m pip install /path/to/fisica-3.0.0-py3-none-PLATFORM.whl
 ```
 
 Use a wheel for your OS/architecture. Python 3.9+ is required. Wheels are built for macOS
-universal2 and Windows x64/ARM64 (MSVC or a trusted cross compiler). The Windows CI build and
+universal2 (`macosx_11_0_universal2`: one core for Apple Silicon and Intel) and Windows x64/ARM64
+(MSVC or a trusted cross compiler). The Windows CI build and
 Python installation matrix are paused until a self-hosted Windows runner exists; see
 [Windows distribution](doc/windows-distribution.md) for commands and verification limits.
 Python packages for Linux/mobile are not supplied (CI builds a Linux wheel only to test the
-packaging). Source distributions are intentionally disabled.
+packaging). Source distributions are intentionally disabled. A file whose name contains
+`validation` (`fisica-3.0.0+validation-...whl`, `...-validation.zip`) is an internal QA build:
+do not install or pass it on, and tell Care&Co if you received one.
 
 [Partner installation guide](doc/partner-quickstart.md) covers every language and
 [minimal applications](examples/partner/README.md). Use the supplied binary packages;
@@ -98,7 +101,10 @@ trusts the repository test key. Every customer build path trusts production keys
 `tools/package_platforms.py` and the CMake build (`tools/native_build.py --metadata-only`).
 
 `tools/build_release.py` empties `.build/releases/<sdk-version>/` and writes this host's wheel
-and native core ZIP there. Native core ZIPs contain only compiled libraries, public C headers,
+and native core ZIP there. On macOS both are universal2 by default: one core with an arm64 and
+an x86_64 slice, `fisica-3.0.0-py3-none-macosx_11_0_universal2.whl`. `--platform macosx_11_0_arm64`
+(or `macosx_11_0_x86_64`) builds one architecture, `--platform win_amd64`/`win_arm64` a Windows
+cross-build ([Windows distribution](doc/windows-distribution.md)). Native core ZIPs contain only compiled libraries, public C headers,
 release metadata and the license. Python wheels include public adapters plus the binary; core
 implementation sources, tests, sample data and debug artifacts are excluded and audited. The
 Swift, Kotlin, C#, Flutter and sample packages come from `tools/build_platforms.py` and
@@ -156,9 +162,16 @@ python tools/build_release.py --validation
 The trusted builder produces the same binary for every company, includes the license
 and release metadata in each archive and writes a SHA-256 `artifact-manifest.json`. Customer
 builds (no `--validation`) trust only the production portal key; `--validation` builds also trust
-the repository test key for QA with test-signed tokens. `tools/audit_artifacts.py` and
-`tools/verify_wheel.py` reject an archive whose core trusts the test key unless they also run
-with `--validation`.
+the repository test key for QA with test-signed tokens. Because that key's secret is in this
+repository, a QA package must never pass for a customer one: `--validation` builds go to their
+own directories (`.build/releases-validation`, `.build/platforms-validation`,
+`.build/multiplatform-releases-validation`), every ZIP and AAR ends in `-validation`
+(`fisica-core-2.0.0-macosx_11_0_universal2-validation.zip`), the wheel's version carries the local
+label `+validation` (`fisica-3.0.0+validation-py3-none-macosx_11_0_universal2.whl`, which pip
+installs, `pip list` shows and PyPI refuses), and `release.json` and the manifests say
+`"validation": true`. `tools/audit_artifacts.py` and `tools/verify_wheel.py` reject an archive
+whose core trusts the test key unless they also run with `--validation`, reject such an archive
+without the validation name even then, and without `--validation` reject any archive named so.
 Read `sdk.version_info()` for release information and
 `sdk.get_device_info()` for queried firmware and its verification state. Unverified
 firmware warns and continues without an opt-in flag.

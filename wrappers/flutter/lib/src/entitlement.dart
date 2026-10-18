@@ -175,20 +175,23 @@ class FisicaEntitlement implements Finalizable {
 
   /// [endpoint]: server base URL for activation, renewal and [pair]; without
   /// it no network is used. [storageDirectory]: directory for the stored
-  /// state (for example the app's support directory), one file per seat;
-  /// null keeps it in memory only, so an online app activates its key again
-  /// after each launch. The key stored there for this app or PC (paired or
+  /// state, one file per seat; by default ([autoStorage])
+  /// [defaultStorageDirectory]. null keeps it in memory only, so a key
+  /// received with [pair] is gone after a restart and pairing again takes
+  /// another seat. The key stored there for this app or PC (paired or
   /// imported earlier) is loaded at once. [clock]: wall-clock Unix seconds.
   FisicaEntitlement(
     this.core, {
     int Function()? clock,
     String? endpoint,
-    String? storageDirectory,
+    String? storageDirectory = autoStorage,
     this.online = true,
     this.timeout = const Duration(seconds: 5),
   }) : _clock = clock ?? (() => DateTime.now().millisecondsSinceEpoch ~/ 1000),
        _endpoint = endpoint?.replaceAll(RegExp(r'/+$'), ''),
-       _storageDirectory = storageDirectory {
+       _storageDirectory = storageDirectory == autoStorage
+           ? defaultStorageDirectory
+           : storageDirectory {
     _handle = _create();
     _finalizer = NativeFinalizer(
       core._library.lookup<NativeFinalizerFunction>('fisica_core_entitlement_destroy'),
@@ -203,6 +206,84 @@ class FisicaEntitlement implements Finalizable {
 
   /// The developer portal, for [pair].
   static const defaultEndpoint = 'https://developer.fisicahealthcare.com';
+
+  /// `storageDirectory` value for [defaultStorageDirectory], the default.
+  static const autoStorage = '*';
+
+  /// Where the key is stored unless `storageDirectory` says otherwise; null
+  /// where no such directory is known (the state then stays in memory: pass
+  /// a directory yourself).
+  /// - Windows, macOS, Linux: the per-user directory the Python and C# SDKs
+  ///   use, so every wrapper on the PC finds the same seat:
+  ///   `%LOCALAPPDATA%\Fisica\sdk`, `~/Library/Application Support/Fisica/sdk`
+  ///   (inside the app's container when the app is sandboxed), and
+  ///   `$XDG_STATE_HOME/fisica-sdk` or `~/.local/state/fisica-sdk`.
+  /// - iOS: the app's `Library/Application Support/Fisica/sdk`, as the Swift
+  ///   SDK keeps it.
+  /// - Android: the app's private files directory
+  ///   (`Context.getFilesDir()/fisica-sdk`, as the Kotlin SDK keeps it),
+  ///   found next to the cache directory Flutter gives `Directory.systemTemp`.
+  static String? get defaultStorageDirectory {
+    try {
+      return _defaultStorageDirectory();
+    } on Object catch (_) {
+      return null;
+    }
+  }
+
+  static String? _defaultStorageDirectory() {
+    String? variable(String name) {
+      final value = Platform.environment[name];
+      return value == null || value.isEmpty ? null : value;
+    }
+
+    String join(String base, List<String> parts) =>
+        [base, ...parts].join(Platform.pathSeparator);
+    // The home directory as Python's Path.home() reads it.
+    final home = variable(Platform.isWindows ? 'USERPROFILE' : 'HOME');
+    if (Platform.isWindows) {
+      final local =
+          variable('LOCALAPPDATA') ??
+          (home == null ? null : join(home, ['AppData', 'Local']));
+      return local == null ? null : join(local, ['Fisica', 'sdk']);
+    }
+    if (Platform.isMacOS || Platform.isIOS) {
+      // HOME is the app's container on iOS and in a sandboxed macOS app.
+      return home == null
+          ? null
+          : join(home, ['Library', 'Application Support', 'Fisica', 'sdk']);
+    }
+    if (Platform.isAndroid) return _androidStorageDirectory();
+    if (Platform.isLinux) {
+      final state =
+          variable('XDG_STATE_HOME') ??
+          (home == null ? null : join(home, ['.local', 'state']));
+      return state == null ? null : join(state, ['fisica-sdk']);
+    }
+    return null;
+  }
+
+  /// The app's files directory. Flutter points Directory.systemTemp at the
+  /// app's code cache, and Android TMPDIR at its cache: both sit in the app's
+  /// private data directory, which is named after the package (the process
+  /// name up to any ':suffix', as the core reads it).
+  static String? _androidStorageDirectory() {
+    final process = File('/proc/self/cmdline').readAsBytesSync();
+    final end = process.indexOf(0);
+    final package = utf8
+        .decode(end < 0 ? process : process.sublist(0, end))
+        .split(':')
+        .first;
+    if (package.isEmpty) return null;
+    for (final cache in [Directory.systemTemp.path, Platform.environment['TMPDIR']]) {
+      if (cache == null || cache.isEmpty) continue;
+      final data = Directory(cache).absolute.parent;
+      if (data.uri.pathSegments.lastWhere((s) => s.isNotEmpty, orElse: () => '') == package) {
+        return '${data.path}/files/fisica-sdk';
+      }
+    }
+    return null;
+  }
 
   Pointer<Void> _create() {
     final output = calloc<Pointer<Void>>();

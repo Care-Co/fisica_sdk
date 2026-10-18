@@ -19,7 +19,10 @@ Swift/Kotlin/C# 0.3.0 기준. 설치는 회사가 제공한 **바이너리 패�
   좌석 하나이므로, 휴대폰 한 대를 연결해도 다른 설치에는 키가 가지 않는다.
 - 코어는 컴파일된 DLL/dylib/so/정적 라이브러리로 제공한다. 고객 앱은 코어 소스를
   받거나 컴파일하지 않는다. 공개 래퍼·샘플은 수정할 수 있다.
-- Windows x64와 ARM64 파일을 구분한다. macOS는 Intel/Apple Silicon universal2다.
+- Windows x64와 ARM64 파일을 구분한다. macOS는 Intel/Apple Silicon universal2다
+  (wheel `fisica-3.0.0-py3-none-macosx_11_0_universal2.whl`, core ZIP `-macosx_11_0_universal2.zip`).
+- 파일 이름에 `validation`이 들어간 패키지(`fisica-3.0.0+validation-...whl`, `...-validation.zip`,
+  `...-validation.aar`)는 내부 QA용이다. 받았다면 쓰거나 재배포하지 말고 Care&Co에 알린다.
 - 설치/빌드 도구와 외부 의존성을 처음 받는 단계에는 인터넷이 필요할 수 있다.
   설치된 앱의 기본 측정·분석에는 인터넷이 필요 없다.
 - BLE 기본 UUID와 양산 2.0.1의 측정 경로는 실기기 확인 전이다. `verified=false`를

@@ -130,12 +130,14 @@ CI는 요청할 때만 수동으로 돌린다. 자체 호스팅 러너로 옮긴
 | 휠과 샘플 | 설치한 휠에서 release(운영 키만)는 테스트 서명 키를 거절, `--validation`은 같은 키로 전체 모드. Python·C·C++ 샘플과 C# 샘플(소스 ZIP + core ZIP)이 Mock으로 70.5kg | 로컬 macOS(2026-10-17). CI `linux`(Linux 휠·코어는 검사용이며 배포하지 않음) |
 | Windows x64 MSVC | 코어 빌드, 전체 테스트, 휠 감사, Python 3.9/3.11/3.13/3.14 설치 검증 | 2026-10-17까지 GitHub `windows-2022`. 지금은 실행하는 곳 없음(Windows 러너 대기) |
 | Windows ARM64 MSVC | 코어·휠 교차 빌드와 감사 | 2026-10-17까지 GitHub Actions. ARM64 실행은 안 함. 지금은 실행하는 곳 없음 |
-| Apple | 코어 빌드, 테스트, XCFramework, universal2 | 로컬 macOS. CI `apple`(자체 호스팅 Mac). 2026-10-17까지 GitHub `macos-15` |
+| Apple | 코어 빌드, 테스트, XCFramework, universal2. 고객용 universal2 휠·core ZIP의 코어에 arm64·x86_64가 모두 있음(감사와 `lipo -archs`), 설치 검증은 arm64로 실행 | 로컬 macOS(2026-10-18, x86_64 조각은 Rosetta로 불러오기만 함). CI `apple`(자체 호스팅 Mac, x86_64는 실행 안 함). 2026-10-17까지 GitHub `macos-15` |
 
 재현: `python tools/verify_bindings.py native swift kotlin dotnet dart`,
 `python tools/build_platforms.py --validation --target android`,
-`python tools/build_release.py --output .build/releases`와
-`python tools/verify_wheel.py .build/releases/3.0.0/fisica-3.0.0-py3-none-PLATFORM.whl`.
+`python tools/build_release.py`와
+`python tools/verify_wheel.py .build/releases/3.0.0/fisica-3.0.0-py3-none-PLATFORM.whl`
+(QA: `python tools/build_release.py --validation`과
+`python tools/verify_wheel.py --validation .build/releases-validation/3.0.0/fisica-3.0.0+validation-py3-none-PLATFORM.whl`).
 
 검증하지 않은 것:
 
@@ -154,6 +156,21 @@ CI는 요청할 때만 수동으로 돌린다. 자체 호스팅 러너로 옮긴
 ## 빌드
 
 고객용 빌드(플래그 없음)는 운영 서명 키만 신뢰한다. QA용은 모든 명령에 `--validation`을 붙인다(테스트 서명 키도 신뢰).
+테스트 키의 비밀키가 이 저장소에 있으므로 QA 패키지는 고객용과 섞이지 않게 구분한다.
+
+- 기본 출력 위치가 따로 있다: `.build/releases-validation`, `.build/platforms-validation`,
+  `.build/multiplatform-releases-validation`.
+- 파일 이름이 QA임을 밝힌다. ZIP·AAR은 확장자 앞에 `-validation`(`fisica-swift-0.3.0-validation.zip`,
+  `fisica-core-2.0.0-win_amd64-validation.zip`, `fisica-scale-0.3.0-validation.aar`). 휠은 이름 형식이
+  정해져 있어 로컬 버전 `+validation`을 쓴다(`fisica-3.0.0+validation-py3-none-macosx_11_0_universal2.whl`).
+  pip은 설치하고 `pip list`에 `3.0.0+validation`으로 보이며, PyPI는 로컬 버전을 받지 않는다.
+- `release.json`(코어 정책에도 컴파일됨)과 `artifact-manifest.json`·`platform-manifest.json`에
+  `"validation": true`가 들어간다. 고객용은 `false`.
+- `tools/audit_artifacts.py`는 테스트 키를 신뢰하는데 이름에 표시가 없는 파일을 `--validation`이 있어도
+  거절하고, `--validation` 없이는 이름에 `validation`이 들어간 파일을 내용과 관계없이 거절한다.
+
+macOS에서 `tools/build_release.py`는 기본으로 universal2 휠과 core ZIP을 만든다(코어 하나에 arm64·x86_64).
+한 아키텍처만 필요하면 `--platform macosx_11_0_arm64` 또는 `--platform macosx_11_0_x86_64`.
 
 ```
 python tools/sync_flutter_metadata.py
@@ -166,10 +183,12 @@ CXX=/trusted/x64-cross-compiler python tools/build_platforms.py --target win_amd
 python tools/package_platforms.py
 ```
 
-`build_platforms.py`는 한 번에 한 대상을 `.build/platforms/`에 빌드하고, 시작할 때 그 대상의 출력을 비운다.
+`build_platforms.py`는 한 번에 한 대상을 `.build/platforms/`(QA: `.build/platforms-validation/`)에 빌드하고,
+시작할 때 그 대상의 출력을 비운다.
 `package_platforms.py`는 다섯 대상의 출력이 모두 있어야 하며, 쓰기 전에 입력을 모두 확인한다: 빠진 입력은
 한꺼번에 알리고, 각 입력의 `release.json`이 지금 체크아웃의 코어 빌드(코어·ABI 버전과 정책)와 다르거나
-`--validation` 없이 테스트 키를 신뢰하면 멈춘다. 그다음 `.build/multiplatform-releases/<sdk-version>/`을 비우고
+`--validation` 없이 테스트 키를 신뢰하거나 `--validation`인데 고객용 빌드이면 멈춘다. 그다음
+`.build/multiplatform-releases/<sdk-version>/`(QA: `.build/multiplatform-releases-validation/<sdk-version>/`)을 비우고
 정해진 패키지만 쓴다: 플랫폼별 core ZIP, Swift ZIP(XCFramework 포함), AAR과 Kotlin 소스 ZIP, C# 소스 ZIP,
 Flutter 플랫폼 ZIP과 transport ZIP, 샘플 ZIP, 해시 목록 `platform-manifest.json`. 모든 패키지는
 `tools/release_packages.py`의 한 함수가 만들고, 샘플 ZIP을 뺀 모든 패키지에 라이선스와 코어의 `release.json`이
@@ -219,7 +238,11 @@ GitHub 호스팅 러너를 쓰지 않는다. 포털(developer-portal)의 빌드�
 - `android`: `--validation` AAR·Kotlin ZIP 빌드와 감사, Kotlin 계약. Android command-line tools(SHA-1, Google이
   `repository2-3.xml`에 공개하는 값)와 Gradle 8.14(SHA-256)는 고정한 체크섬으로 받을 때와 캐시에서 쓸 때마다 확인하고
   매번 컨테이너에 새로 푼다.
-- `apple`: `--validation` XCFramework·Swift ZIP·universal2 core ZIP 빌드와 감사, Swift 계약.
+- `apple`: `--validation` XCFramework·Swift ZIP·universal2 core ZIP 빌드와 감사, Swift 계약. 이어서 고객용
+  (운영 키만) universal2 휠과 core ZIP을 `build_release.py`로 빌드해(임시 venv에 `build`만 설치) 감사하고,
+  `lipo -archs`로 두 코어에 arm64·x86_64가 모두 있는지 확인한 뒤 `verify_wheel.py`로 설치 검증한다. 러너가
+  ARM64라 실행 검증은 arm64 조각만이다(x86_64 실행에는 Rosetta가 필요하며 요구하지 않는다). 고객용 휠은
+  올리지 않는다.
 - 올리는 아티팩트는 QA 빌드라 이름이 `-validation`으로 끝난다(`fisica-android-validation`,
   `fisica-apple-binaries-validation`). 고객에게 주지 않는다.
 
@@ -227,7 +250,9 @@ Windows CI(x64 휠 빌드와 Python 3.9~3.14 설치 확인, ARM64 교차 빌드)
 2026-10-17에 뺐다. 러너가 생기면 `git show a44754b:.github/workflows/windows-wheel.yml`과
 `platform-builds.yml`의 `windows-arm64` 작업을 되살리고 `runs-on`을 `[self-hosted, Windows, X64, carenco]`로 바꾼다.
 그 워크플로는 `build_release.py --validation`으로 빌드하므로 `verify_wheel.py`에 `--validation`을 붙이고,
-아티팩트 이름에 `-validation`을 붙인다(`fisica-windows-x64-validation` 등). 러너에 필요한 것:
+아티팩트 이름에 `-validation`을 붙인다(`fisica-windows-x64-validation` 등). 휠과 core ZIP의 파일 이름도
+`fisica-3.0.0+validation-py3-none-win_amd64.whl`, `fisica-core-2.0.0-win_amd64-validation.zip`이 되므로
+업로드 경로의 glob을 그에 맞춘다(`--output`이 없으면 `.build/releases-validation/`). 러너에 필요한 것:
 
 - Windows 10/11 또는 Server 2022, x64. Care-Co 조직에 러너로 등록하고 라벨 `carenco`를 붙인다. 서비스로 실행.
 - Visual Studio 2022 Build Tools: "C++를 사용한 데스크톱 개발", MSVC v143 x64/x86 도구, MSVC v143 ARM64 도구,

@@ -147,12 +147,14 @@ public final class FisicaClient {
     /// unanswered probe is reported in its `status` and does not prevent use.
     /// `link` defaults to the transport's own `link`; a transport that does not declare one
     /// must be given it. A missing link, or one other than the transport's, fails with
-    /// `invalidArgument` before anything is sent.
+    /// `invalidArgument` before anything is sent. After `close` it fails with `cancelled`,
+    /// like every other operation.
     public func connect(_ link: FisicaLink? = nil, timeout: TimeInterval = 15, completion: @escaping Completion) {
         queue.async { [weak self] in
             guard let self else { return }
             let probe = self.operation(.probe)
-            guard !self.closed, !self.linkReady, self.waiters[probe] == nil else {
+            guard !self.closed else { completion(.failure(FisicaClient.closedError)); return }
+            guard !self.linkReady, self.waiters[probe] == nil else {
                 completion(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Already connected or connecting"))); return
             }
             let carried = self.transport.link
@@ -259,11 +261,14 @@ public final class FisicaClient {
                          prepare: (() -> Void)? = nil, accepted: (() -> Void)? = nil, completion: @escaping Completion) {
         queue.async { self.begin(action, value: value, waitFor: waitFor, prepare: prepare, accepted: accepted, completion: completion) }
     }
-    /// On `queue`: wait for `waitFor` after the core call; busy while that operation is pending.
+    /// Every operation on a closed client fails with this: `cancelled`, the code `close` gives what it cancels.
+    private static var closedError: FisicaError { FisicaError(code: Int32(FisicaStatus.cancelled.rawValue), message: "Client closed") }
+    /// On `queue`: wait for `waitFor` after the core call; busy while that operation is pending, cancelled once closed.
     private func begin(_ action: FisicaSessionAction, value: Int64, waitFor: FisicaSessionOperation,
                        prepare: (() -> Void)? = nil, accepted: (() -> Void)? = nil, completion: @escaping Completion) {
         let key = operation(waitFor)
-        guard !closed, waiters[key] == nil else {
+        guard !closed else { completion(.failure(FisicaClient.closedError)); return }
+        guard waiters[key] == nil else {
             completion(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Another operation is pending"))); return
         }
         waiters[key] = completion
@@ -289,7 +294,8 @@ public final class FisicaClient {
     public func readBattery(completion: @escaping (Result<Int, Error>) -> Void) {
         queue.async { [self] in
             let key = self.operation(.request)
-            guard !self.closed, self.waiters[key] == nil else {
+            guard !self.closed else { completion(.failure(FisicaClient.closedError)); return }
+            guard self.waiters[key] == nil else {
                 completion(.failure(FisicaError(code: Int32(FisicaStatus.busy.rawValue), message: "Another operation is pending"))); return
             }
             self.waiters[key] = { [weak self] result in
@@ -330,7 +336,7 @@ public final class FisicaClient {
         finalAnalysis = try? session.analyze()
         transport.close(); session.close()
         let pending = waiters; waiters.removeAll()
-        for waiter in pending.values { waiter(.failure(FisicaError(code: Int32(FisicaStatus.cancelled.rawValue), message: "Client closed"))) }
+        for waiter in pending.values { waiter(.failure(FisicaClient.closedError)) }
     }
 
     /// Weight and foot size of the current measurement; nil without a stable measurement.

@@ -28,7 +28,10 @@ await client.CloseAsync();
   `DeviceCode` the Scale's code). `ConnectAsync` completes with the firmware probe; an
   unanswered probe does not prevent use. A transport that never becomes ready fails
   after `timeout` (default 15 s).
-- `CloseAsync` releases resources even when the Scale does not confirm. On `LinkLost`,
+- `CloseAsync` releases resources even when the Scale does not confirm. A second
+  `CloseAsync` while one is pending fails with `Busy`; once closed it completes at once,
+  and `ConnectAsync`, `StartAsync`, `StopAsync` and `ReadBatteryAsync` fail with
+  `Cancelled`, the code `CloseAsync` gives what it cancels. On `LinkLost`,
   reopen the same Scale with `ConnectAsync`. A client dropped without `CloseAsync` is still
   collected, also while its license lives on.
 - `Report()` returns unrounded weight and foot size from the core's analysis of every
@@ -96,7 +99,10 @@ expires (`Sync()` in the background or `await SyncAsync()`); without an endpoint
 network is used. Offline, enter `ActivationCode()` in the developer portal and import the
 file it gives. `Release()` frees the key on this app or PC: it forgets the key, deletes
 the stored key and returns the code to enter in the portal. The activated key is stored
-per company and contract under LocalApplicationData by default (`storage`) and wins over
+per company and contract in `FisicaEntitlement.DefaultStorage` by default (`storage`;
+`null` keeps it in memory only), the per-user directory the Python SDK uses
+(`%LOCALAPPDATA%\Fisica\sdk`, `~/Library/Application Support/Fisica/sdk`,
+`$XDG_STATE_HOME/fisica-sdk` or `~/.local/state/fisica-sdk`), and wins over
 an older original key file. A failed exchange only sets `LastSyncError`; it never changes
 the license or throws. An answer that arrives after `Release()` or after another key was
 imported is dropped: a released key stays released and the newer key stays. `Warning` and

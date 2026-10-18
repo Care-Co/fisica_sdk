@@ -67,9 +67,33 @@ fun readCode(code: String, prefix: String): String {
     return String(Base64.getUrlDecoder().decode(parts[1]), Charsets.UTF_8)
 }
 
+/**
+ * Run in a JVM whose home, LOCALAPPDATA and XDG_STATE_HOME point at a temporary folder: without a storage
+ * argument the key goes to the default directory, and a new instance without a key loads it.
+ */
+fun defaultStorage(core: FisicaCore, values: Properties) {
+    val now = values.getProperty("now").toLong()
+    val directory = FisicaEntitlement.defaultStorage() ?: error("no default storage on this desktop JVM")
+    FisicaEntitlement(core) { now }.use { first ->
+        check(first.status().reason == FisicaModeReason.NO_KEY) { "nothing stored yet" }
+        check(first.importToken(values.getProperty("full")) == FisicaEntitlementOutcome.ACCEPTED && first.lastSyncError == null) { "${first.lastSyncError}" }
+    }
+    val stored = directory.listFiles().orEmpty().filter { it.name.startsWith("entitlement-") && it.name.endsWith(".state") }
+    check(stored.size == 1) { "expected one state file in $directory, found ${stored.map { it.name }}" }
+    FisicaEntitlement(core) { now }.use { later -> check(later.status().isFull && later.status().key == "key_test_1") { "not found again: ${later.status()}" } }
+    // null keeps the key in memory only: nothing is read or written.
+    FisicaEntitlement(core, null, null) { now }.use { memory ->
+        check(memory.status().reason == FisicaModeReason.NO_KEY)
+        check(memory.importToken(values.getProperty("full")) == FisicaEntitlementOutcome.ACCEPTED)
+    }
+    check(directory.listFiles().orEmpty().map { it.name } == stored.map { it.name }) { "memory-only license wrote to $directory" }
+    println(directory.path)
+}
+
 fun main(args: Array<String>) {
     val values = Properties().apply { File(args[1]).inputStream().use { load(it) } }
     val core = FisicaCore(args[0]) { System.err.println(it) }
+    if (args.getOrNull(2) == "default-storage") return defaultStorage(core, values)
     val packet = hex(values.getProperty("packet"))
     val now = values.getProperty("now").toLong()
     // Command-line programs are bound to the PC; the core reads its hash itself.
@@ -406,6 +430,28 @@ fun main(args: Array<String>) {
         check(reopened.status().isFull && reopened.status().bind == target)
         check(reopened.importToken(vector("unbound_older")) == FisicaEntitlementOutcome.IGNORED_OLDER && reopened.status().isFull)
         original.close(); reopened.close()
+    }
+    // Stored by default in the per-user directory the Python and C# SDKs use on this PC. A child JVM gets a
+    // temporary home (HOME, USERPROFILE, LOCALAPPDATA, XDG_STATE_HOME), so the user's own folder is never touched.
+    run {
+        val home = File(temporary, "home")
+        val os = System.getProperty("os.name").lowercase()
+        val expected = when {
+            os.startsWith("windows") -> File(home, "local/Fisica/sdk")
+            os.startsWith("mac") -> File(home, "Library/Application Support/Fisica/sdk")
+            else -> File(home, "state/fisica-sdk")
+        }
+        val child = ProcessBuilder(File(System.getProperty("java.home"), "bin/java").path, "-cp", System.getProperty("java.class.path"),
+            "Kotlin_clientKt", args[0], args[1], "default-storage").redirectErrorStream(true)
+        child.environment().apply {
+            put("HOME", home.path); put("USERPROFILE", home.path)
+            put("LOCALAPPDATA", File(home, "local").path); put("XDG_STATE_HOME", File(home, "state").path)
+        }
+        val process = child.start()
+        val output = process.inputStream.bufferedReader().readText()
+        check(process.waitFor() == 0) { "default storage: $output" }
+        check(output.trim().lines().last() == expected.path) { "default storage is not $expected: $output" }
+        check(expected.listFiles().orEmpty().count { it.name.endsWith(".state") } == 1) { "nothing stored in $expected" }
     }
     // A renewal that reports the key released or revoked: the device lets go of it.
     run {

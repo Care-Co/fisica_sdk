@@ -4,7 +4,9 @@
 win_amd64. All inputs are checked before anything is written: each must exist, its
 release.json must match this checkout's core build, and without --validation trust production
 keys only. --output/<sdk-version>/ is emptied first and then holds exactly the packages listed
-in platform-manifest.json.
+in platform-manifest.json. --validation packages QA builds (tools/build_platforms.py
+--validation): from .build/platforms-validation to .build/multiplatform-releases-validation,
+every archive named -validation and the manifest saying validation: true.
 """
 import argparse
 import hashlib
@@ -18,11 +20,15 @@ import release_packages as packages
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--input', type=Path, default=ROOT / '.build/platforms',
-                        help='tools/build_platforms.py --output of every target')
-    parser.add_argument('--output', type=Path, default=ROOT / '.build/multiplatform-releases')
+    parser.add_argument('--input', type=Path, help='tools/build_platforms.py --output of every target '
+                        '(default: .build/platforms, with --validation .build/platforms-validation)')
+    parser.add_argument('--output', type=Path, help='default: .build/multiplatform-releases, '
+                        'with --validation .build/multiplatform-releases-validation')
     parser.add_argument('--validation', action='store_true', help='QA packages whose cores may trust the test entitlement key')
     args = parser.parse_args()
+    suffix = '-validation' if args.validation else ''
+    args.input = args.input or ROOT / '.build' / ('platforms' + suffix)
+    args.output = args.output or ROOT / '.build' / ('multiplatform-releases' + suffix)
     require_release_keys(args.validation)
     release = release_metadata()
     names = packages.package_names(release)
@@ -33,6 +39,7 @@ def main():
     cores = [source / packages.core_name(release, target) for target in packages.DESKTOP_TARGETS]
     windows = {target: source / target / 'fisica_core.dll' for target in packages.WINDOWS_ARCHITECTURES}
     metadata = [source / name / 'release.json' for name in ('apple', 'android', *packages.DESKTOP_TARGETS)]
+    packages.require_build_kind(metadata, args.validation)
     packages.require([xcframework / 'Info.plist', aar, *cores, *windows.values(), *metadata,
                       *(jni / abi / 'libfisica_core.so' for abi in packages.ANDROID_ABIS)],
                      f'run tools/build_platforms.py{" --validation" if args.validation else ""} --target TARGET for every target')
@@ -52,7 +59,7 @@ def main():
     ]
     manifest = {'sdk_version': release['sdk_version'], 'core_version': release['core_version'],
                 'abi_minor': release['abi_minor'], 'entitlement': built['entitlement'],
-                'validation_build': packages.trusts_test_key(built),
+                'validation': built['validation'],
                 'artifacts': {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(artifacts)}}
     (output / 'platform-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print('Platform packages:', output)

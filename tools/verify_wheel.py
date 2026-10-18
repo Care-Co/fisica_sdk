@@ -1,8 +1,10 @@
 """Install a wheel into a temporary environment and test the shipped SDK.
 
 A release wheel trusts production keys only: a test-signed key for this PC must be rejected and
-basic mode stay. A --validation wheel (tools/build_release.py --validation) also trusts the test
-key, so the same key must open full mode; pass --validation to verify one.
+basic mode stay. A --validation wheel (tools/build_release.py --validation, version
+<v>+validation) also trusts the test key, so the same key must open full mode; pass --validation
+to verify one. The installed version must say which of the two it is. A universal2 wheel runs
+with this Python's architecture only (arm64 on Apple Silicon unless started under Rosetta).
 """
 import argparse
 import json
@@ -31,6 +33,10 @@ socket.socket.connect=offline_connect
 from fisica_sdk import NativeCore,FisicaSDK,FisicaLicenseError
 from fisica_sdk.models import MeasurementFrame
 from fisica_sdk import MockTransport,FisicaFirmwareWarning
+from importlib.metadata import version as installed_version
+# pip list shows a validation (QA) wheel as <v>+validation, a customer wheel as <v>.
+installed=installed_version('fisica')
+assert installed.endswith('+validation')==(os.environ['FISICA_VERIFY_FULL']=='1'),installed
 core=NativeCore()
 sdk=FisicaSDK()
 assert 'cv2' not in sys.modules and 'PIL' not in sys.modules
@@ -107,7 +113,7 @@ sdk.set_metadata(id='installed-wheel-smoke',name='fixture')
 sdk._session.frames=frames
 assert sdk.analyze().weight==70.5
 assert 'distribution' not in core.version_info()
-print('Installed wheel verified:',core.version_info())
+print('Installed wheel verified:',installed,core.version_info())
 print('Test-signed key:',status['mode'],'mode',status['last_import'])
 if os.environ.get('FISICA_VERIFY_VISUALIZATION')=='1':
     from fisica_sdk import VisualOptions
