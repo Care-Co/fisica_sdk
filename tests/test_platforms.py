@@ -8,10 +8,35 @@ import runpy
 from pathlib import Path
 pe_dll=runpy.run_path(str(Path(__file__).with_name('test_windows_build.py')))['pe_dll']
 
-@pytest.mark.parametrize('target',['win_arm64','win_amd64','macosx_11_0_universal2'])
+@pytest.mark.parametrize('target',['win_arm64','win_amd64','macosx_11_0_universal2','macosx_11_0_arm64','macosx_11_0_x86_64'])
 def test_explicit_desktop_targets(target,monkeypatch):
+    monkeypatch.delenv('MACOSX_DEPLOYMENT_TARGET',raising=False)
     monkeypatch.setenv('FISICA_BUILD_PLATFORM',target)
     assert native_build.platform_tag()==target
+
+
+def test_macos_builds_universal2_unless_one_architecture_is_named(monkeypatch,tmp_path):
+    """The documented macosx_11_0_universal2 wheel: arm64 and x86_64 in one core, on any Mac."""
+    monkeypatch.setattr(native_build.sys,'platform','darwin')
+    monkeypatch.delenv('FISICA_BUILD_PLATFORM',raising=False)
+    monkeypatch.delenv('MACOSX_DEPLOYMENT_TARGET',raising=False)
+    assert native_build.platform_tag()=='macosx_11_0_universal2'
+    monkeypatch.setenv('MACOSX_DEPLOYMENT_TARGET','12.0')
+    assert native_build.platform_tag()=='macosx_12_0_universal2'
+    # An explicit tag must match the deployment target the core is compiled for.
+    monkeypatch.setenv('FISICA_BUILD_PLATFORM','macosx_11_0_arm64')
+    with pytest.raises(ValueError,match='Unsupported explicit build target'):
+        native_build.platform_tag()
+    monkeypatch.delenv('MACOSX_DEPLOYMENT_TARGET')
+    assert native_build.platform_tag()=='macosx_11_0_arm64'
+    monkeypatch.setenv('FISICA_BUILD_PLATFORM','macosx_11_0_intel')
+    with pytest.raises(ValueError):
+        native_build.platform_tag()
+    # A macOS core is never built off macOS (it would be an ELF library with a macOS tag).
+    monkeypatch.setattr(native_build.sys,'platform','linux')
+    monkeypatch.setenv('FISICA_BUILD_PLATFORM','macosx_11_0_universal2')
+    with pytest.raises(RuntimeError,match='built on macOS'):
+        native_build.build_native(tmp_path)
 
 
 def test_arm64_pe_is_not_mislabeled_as_x64():

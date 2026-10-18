@@ -37,11 +37,13 @@ assertion과 테스트 종료는 정상 통과했다. 사용자가 눈으로 UI�
   `fisica-core-2.0.0-<platform>.zip`, 그리고 해시 목록 `platform-manifest.json`.
 
 입력은 `tools/build_platforms.py`로 다섯 대상(`apple`, `android`, `macosx_11_0_universal2`, `win_arm64`,
-`win_amd64`)을 모두 빌드한 `.build/platforms/`다. QA 패키지는 모든 명령에 `--validation`을 붙인다.
+`win_amd64`)을 모두 빌드한 `.build/platforms/`다. QA 패키지는 모든 명령에 `--validation`을 붙이며,
+`.build/platforms-validation/`에서 `.build/multiplatform-releases-validation/`으로 가고 파일 이름이
+`-validation`으로 끝난다(예: `fisica-swift-0.3.0-validation.zip`).
 
 ```sh
 python tools/package_platforms.py --validation
-python tools/audit_artifacts.py --validation .build/multiplatform-releases/3.0.0/*.zip .build/multiplatform-releases/3.0.0/*.aar
+python tools/audit_artifacts.py --validation .build/multiplatform-releases-validation/3.0.0/*.zip .build/multiplatform-releases-validation/3.0.0/*.aar
 python -m pytest tests -q
 cd wrappers/flutter_transport
 flutter pub get

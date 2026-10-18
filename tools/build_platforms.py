@@ -9,7 +9,9 @@ One run builds one target into --output (default .build/platforms):
 
 A run first empties its target's output, so nothing from an earlier build is packaged.
 tools/package_platforms.py makes the partner packages from these; both write every archive
-with tools/release_packages.py.
+with tools/release_packages.py. --validation builds (the cores also trust the repository test
+key) go to .build/platforms-validation and their archives end in -validation
+(fisica-swift-<v>-validation.zip); --print-artifacts takes --validation as well.
 """
 import argparse
 import os
@@ -189,17 +191,19 @@ def main():
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('--target', choices=TARGETS)
     group.add_argument('--print-artifacts', nargs='+', choices=TARGETS, metavar='TARGET')
-    parser.add_argument('--output', type=Path, default=ROOT / '.build/platforms')
+    parser.add_argument('--output', type=Path, help='default: .build/platforms, with --validation .build/platforms-validation')
     parser.add_argument('--ndk', type=Path, default=Path(os.environ.get(
         'FISICA_ANDROID_NDK', Path.home() / 'Library/Android/sdk/ndk/26.3.11579264')))
     parser.add_argument('--validation', action='store_true', help='QA-only build that may trust test entitlement keys')
     args = parser.parse_args()
+    args.output = args.output or ROOT / '.build' / ('platforms-validation' if args.validation else 'platforms')
+    # The key choice also decides the package names (-validation).
+    require_release_keys(args.validation)
     if args.print_artifacts:
         cwd = Path.cwd()
         print(' '.join(path.relative_to(cwd).as_posix() if path.is_relative_to(cwd) else str(path)
                        for path in artifact_paths(args.output, args.print_artifacts)))
         return
-    require_release_keys(args.validation)
     args.output.mkdir(parents=True, exist_ok=True)
     if args.target == 'apple':
         apple(args.output / 'apple', args.validation)

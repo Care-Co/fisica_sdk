@@ -58,9 +58,11 @@ jobs:
         env:
           DOTNET_CLI_TELEMETRY_OPTOUT: '1'
       - name: Linux wheel and core ZIP, release and --validation (a CI check; no Linux package is supplied)
+        # Default outputs: .build/releases, and .build/releases-validation for fisica-<v>+validation-*.whl
+        # and fisica-core-<core>-<platform>-validation.zip.
         run: |
-          python tools/build_release.py --output .build/releases
-          python tools/build_release.py --validation --output .build/releases-validation
+          python tools/build_release.py
+          python tools/build_release.py --validation
       - name: Installed wheels (release rejects a test-signed key; validation opens full mode with it)
         run: |
           python tools/verify_wheel.py .build/releases/*/fisica-*.whl
@@ -172,9 +174,10 @@ jobs:
       - name: Python is python3
         run: mkdir -p /opt/bin && ln -sf "$(command -v python3)" /opt/bin/python && echo /opt/bin >> "$GITHUB_PATH"
       - name: Android libraries for 16 KB pages (LOAD alignment and RELRO end checked), and the AAR
+        # QA build: .build/platforms-validation/android, archives named -validation.
         run: python tools/build_platforms.py --validation --target android
       - name: Audit public Android artifacts (16 KB LOAD and RELRO checks included; QA build, test key allowed)
-        run: python tools/audit_artifacts.py --validation $(python tools/build_platforms.py --print-artifacts android)
+        run: python tools/audit_artifacts.py --validation $(python tools/build_platforms.py --validation --print-artifacts android)
       - name: Kotlin contract (client, link check, entitlement, mock server)
         run: python tools/verify_bindings.py kotlin
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -182,6 +185,6 @@ jobs:
         with:
           name: fisica-android-validation  # QA build: trusts the test key, never for customers
           path: |
-            .build/platforms/android/*.aar
-            .build/platforms/android/*.zip
+            .build/platforms-validation/android/*.aar
+            .build/platforms-validation/android/*.zip
           retention-days: 14

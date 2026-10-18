@@ -60,7 +60,9 @@ class NoSourceDistribution(sdist):
 
 setup(
     name='fisica',
-    version=release['wrappers']['python']['version'],
+    # A validation (QA) wheel, whose core trusts the test key, is version <v>+validation:
+    # fisica-<v>+validation-py3-none-<platform>.whl, shown by pip list, refused by PyPI.
+    version=builder['wheel_version'](release),
     description='Care&Co Fisica Scale Python wrapper with a shared native core',
     long_description=(ROOT / 'Readme.md').read_text(encoding='utf-8'),
     long_description_content_type='text/markdown',

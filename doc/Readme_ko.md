@@ -26,6 +26,11 @@ python -m pip install /path/to/fisica-3.0.0-py3-none-PLATFORM.whl
 python -m pip install '/path/to/fisica-3.0.0-py3-none-PLATFORM.whl[visualization]'
 ```
 
+PLATFORM은 Windows x64는 `win_amd64`, ARM64는 `win_arm64`, macOS는 `macosx_11_0_universal2`
+(Apple Silicon·Intel 공용)입니다. 파일 이름에 `validation`이 들어간 wheel·ZIP
+(예: `fisica-3.0.0+validation-py3-none-...whl`)은 내부 QA용이므로 설치하거나 재배포하지 말고
+Care&Co에 알려 주세요.
+
 필수 의존성은 numpy, pyserial, bleak, packaging이며 wheel 설치 때 함께 설치됩니다.
 SDK 자체 GUI는 3.0.0부터 없습니다. 렌더링한 이미지는 앱에서 표시합니다.
 
