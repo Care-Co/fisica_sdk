@@ -16,7 +16,7 @@ jobs:
     # (mac-host-runner1-3, colima VMs): every step runs in a fresh Ubuntu container, so nothing is
     # installed on the runner itself; downloaded toolchains stay in the fisica-sdk-ci-cache Docker volume.
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, carenco]
+    runs-on: [self-hosted, carenco, Linux]
     container:
       image: ubuntu:24.04
       volumes: [fisica-sdk-ci-cache:/cache]
@@ -120,7 +120,7 @@ jobs:
     # fisica-sdk-ci-cache volume and checked against pinned checksums on every run; sdkmanager
     # installs the NDK 26.3 (the version verified locally) and android-35 there.
     if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
-    runs-on: [self-hosted, carenco]
+    runs-on: [self-hosted, carenco, Linux]
     container:
       image: ubuntu:24.04
       volumes: [fisica-sdk-ci-cache:/cache]
