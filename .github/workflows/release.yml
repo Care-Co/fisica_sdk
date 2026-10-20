@@ -1,0 +1,207 @@
+name: Release SDK packages to the CDN
+# Manual only: Actions > Release SDK packages > Run workflow. Never runs on a push, so S3 gets new files
+# only when someone releases. Without "publish" it builds, packages and audits everything and prints what
+# it would upload (a dry run). With it, the customer packages go to s3://carenco-prod/public/sdk/<version>/
+# (https://cdn.carencoinc.com/public/sdk/<version>/), files already published are never replaced, and
+# public/sdk/latest.json points the developer portal's downloads page to the new release.
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Upload to the CDN (only from main). Off = dry run.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+concurrency:
+  group: sdk-release
+  cancel-in-progress: false  # never stop a release halfway through its uploads
+jobs:
+  apple:
+    if: github.event.repository.private
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 45
+    steps:
+      - name: Company-Mac hours (weekends, or weekdays from 20:00 KST)
+        run: |
+          day="$(TZ=Asia/Seoul date +%u)"; hour="$(TZ=Asia/Seoul date +%H)"
+          if [ "$day" -le 5 ] && [ "$hour" -lt 20 ]; then
+            echo "::error::The Mac runner is another employee's Mac: run releases on weekends or after 20:00 KST"; exit 1
+          fi
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - name: Xcode on this runner
+        run: |
+          developer="$(xcode-select -p)"
+          case "$developer" in
+            *.app/Contents/Developer) ;;
+            *) developer="$(ls -d /Applications/Xcode*.app 2>/dev/null | sort | tail -1)/Contents/Developer" ;;
+          esac
+          test -x "$developer/usr/bin/xcodebuild" || { echo "::error::No Xcode on this runner"; exit 1; }
+          { echo "DEVELOPER_DIR=$developer"; echo "FISICA_XCODE_DEVELOPER=$developer"; } >> "$GITHUB_ENV"
+      - name: Python in a throwaway venv (the Mac's own Python stays untouched)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install -q --disable-pip-version-check build
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+      # Customer builds: production keys only.
+      - run: python tools/build_platforms.py --target apple
+      - run: python tools/build_platforms.py --target macosx_11_0_universal2
+      - run: python tools/build_release.py --output wheels/macos
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-apple
+          path: |
+            .build/platforms/apple/CFisica.xcframework
+            .build/platforms/apple/release.json
+            .build/platforms/apple/*.zip
+            .build/platforms/macosx_11_0_universal2
+            .build/platforms/fisica-core-*-macosx_11_0_universal2.zip
+            wheels/macos/**/*.whl
+          if-no-files-found: error
+          include-hidden-files: true  # .build is a dot folder
+          retention-days: 1
+
+  android:
+    if: github.event.repository.private
+    runs-on: [self-hosted, carenco, Linux]
+    container:
+      image: ubuntu:24.04
+      volumes: [fisica-sdk-ci-cache:/cache]
+    timeout-minutes: 40
+    env:
+      CXX: clang++
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+    steps:
+      - name: Build tools (Ubuntu packages)
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            ca-certificates git curl unzip clang python3 openjdk-17-jdk-headless >/dev/null
+          echo "$JAVA_HOME/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - name: Android NDK, android-35 and Gradle's Kotlin compiler (cached, checksums pinned as in platform-builds.yml)
+        run: |
+          fetch() {
+            file="/cache/downloads/${1##*/}"
+            mkdir -p /cache/downloads
+            if ! echo "$3  $file" | "${2}sum" --check --status 2>/dev/null; then
+              part="$(mktemp "$file.XXXXXX")"
+              curl -fsSL -o "$part" "$1"
+              if ! echo "$3  $part" | "${2}sum" --check --status; then
+                rm -f "$part"; echo "::error::$1 does not match its pinned checksum" >&2; exit 1
+              fi
+              mv "$part" "$file"
+            fi
+            echo "$file"
+          }
+          tools_zip="$(fetch https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip \
+            sha1 d313adb7aedccf6cf0cfca51ec180f0059f5f8f8)"
+          gradle_zip="$(fetch https://services.gradle.org/distributions/gradle-8.14-bin.zip \
+            sha256 61ad310d3c7d3e5da131b76bbf22b5a4c0786e9d892dae8c1658d4b484de3caa)"
+          rm -rf /cache/android-sdk/cmdline-tools /cache/gradle-8.14
+          unzip -q "$tools_zip" -d /opt/android-cmdline-tools
+          unzip -q "$gradle_zip" -d /opt
+          sdk=/cache/android-sdk; tools=/opt/android-cmdline-tools/cmdline-tools/bin; gradle=/opt/gradle-8.14
+          yes | "$tools/sdkmanager" --sdk_root="$sdk" --licenses >/dev/null
+          "$tools/sdkmanager" --sdk_root="$sdk" "platforms;android-35" "ndk;26.3.11579264" >/dev/null
+          { echo "FISICA_ANDROID_NDK=$sdk/ndk/26.3.11579264"; echo "ANDROID_SDK_ROOT=$sdk"; echo "FISICA_GRADLE_LIB=$gradle/lib"; } >> "$GITHUB_ENV"
+      - name: Python is python3
+        run: mkdir -p /opt/bin && ln -sf "$(command -v python3)" /opt/bin/python && echo /opt/bin >> "$GITHUB_PATH"
+      - run: python tools/build_platforms.py --target android
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-android
+          path: |
+            .build/platforms/android/jni
+            .build/platforms/android/classes.jar
+            .build/platforms/android/release.json
+            .build/platforms/android/*.aar
+            .build/platforms/android/*.zip
+          if-no-files-found: error
+          include-hidden-files: true  # .build is a dot folder
+          retention-days: 1
+
+  windows:
+    if: github.event.repository.private
+    runs-on: [self-hosted, Windows]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - name: Python in a throwaway venv
+        run: |
+          python -m venv "$env:RUNNER_TEMP\venv"
+          "$env:RUNNER_TEMP\venv\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$env:RUNNER_TEMP\venv\Scripts\python" -m pip install -q --disable-pip-version-check build
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with: {arch: x64}
+      - run: python tools/build_platforms.py --target win_amd64
+      - run: python tools/build_release.py --platform win_amd64 --output wheels/win_amd64
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with: {arch: amd64_arm64}
+      - run: python tools/build_platforms.py --target win_arm64
+      - run: python tools/build_release.py --platform win_arm64 --output wheels/win_arm64
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-windows
+          path: |
+            .build/platforms/win_amd64
+            .build/platforms/win_arm64
+            .build/platforms/fisica-core-*-win_amd64.zip
+            .build/platforms/fisica-core-*-win_arm64.zip
+            wheels/win_amd64/**/*.whl
+            wheels/win_arm64/**/*.whl
+          if-no-files-found: error
+          include-hidden-files: true  # .build is a dot folder
+          retention-days: 1
+
+  publish:
+    needs: [apple, android, windows]
+    if: github.event.repository.private
+    runs-on: [self-hosted, carenco, Linux]
+    container:
+      image: ubuntu:24.04
+    timeout-minutes: 20
+    steps:
+      - name: Tools (Ubuntu packages)
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            ca-certificates git python3 python3-venv >/dev/null
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - name: Python in a venv (boto3 for the upload)
+        run: |
+          python3 -m venv /opt/venv
+          /opt/venv/bin/python -m pip install -q --disable-pip-version-check boto3
+          echo /opt/venv/bin >> "$GITHUB_PATH"
+      # An artifact keeps paths below the deepest folder its files share: Apple and Windows include wheels/ and
+      # unpack at the top, Android has only .build/platforms/android.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with: {name: release-apple, path: .}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with: {name: release-windows, path: .}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with: {name: release-android, path: .build/platforms/android}
+      - name: Inputs every partner package needs
+        run: find .build/platforms -maxdepth 2 | sort; find wheels -name '*.whl' | sort
+      - name: Partner packages from every platform's core (customer builds)
+        run: python tools/package_platforms.py
+      - name: Upload plan (always) and upload (publish from main only)
+        env:
+          PUBLISH: ${{ inputs.publish && github.ref == 'refs/heads/main' }}
+          AWS_ACCESS_KEY_ID: ${{ inputs.publish && secrets.SDK_RELEASE_AWS_ACCESS_KEY_ID || '' }}
+          AWS_SECRET_ACCESS_KEY: ${{ inputs.publish && secrets.SDK_RELEASE_AWS_SECRET_ACCESS_KEY || '' }}
+          AWS_DEFAULT_REGION: ap-northeast-2
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          version="$(python -c 'import sys; sys.path.insert(0, "tools"); from native_build import release_metadata; print(release_metadata()["sdk_version"])')"
+          set -- --release "$version" --packages ".build/multiplatform-releases/$version" --wheels wheels
+          if [ "$PUBLISH" = "true" ]; then
+            python tools/publish_packages.py "$@" --publish
+          else
+            python tools/publish_packages.py "$@"
+          fi
