@@ -26,7 +26,7 @@ public sealed record FisicaBleProfile(string Write, string Notify) {
     public static readonly FisicaBleProfile NordicUart = new("6e400002-b5a3-f393-e0a9-e50e24dcca9e", "6e400003-b5a3-f393-e0a9-e50e24dcca9e");
     public static readonly IReadOnlyList<FisicaBleProfile> Known = [Scale, NordicUart];
     public const string NameContains = "Fisica Scale";
-    public const bool Verified = false;
+    public const bool Verified = true;
 }
 /// <summary>License messages: why the SDK is in basic mode and what each warning means.</summary>
 public static class FisicaLicenseMessages {

@@ -158,7 +158,7 @@ public struct FisicaBleProfile: Equatable {
     public static let nordicUart = FisicaBleProfile(write: "6e400002-b5a3-f393-e0a9-e50e24dcca9e", notify: "6e400003-b5a3-f393-e0a9-e50e24dcca9e")
     public static let known: [FisicaBleProfile] = [.scale, .nordicUart]
     public static let nameContains = "Fisica Scale"
-    public static let verified = false
+    public static let verified = true
 }
 public extension FisicaModeReason {
     /// Why the SDK is in basic mode and what to do; nil for `.none` (full mode).

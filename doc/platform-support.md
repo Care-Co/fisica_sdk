@@ -147,12 +147,18 @@ CI는 요청할 때만 수동으로 돌린다. 자체 호스팅 러너로 옮긴
 - C# 샘플(`usb /dev/cu.usbserial-0001`, macOS .NET 8, PR #27의 `SerialTransport`): 연결, 펌웨어 확인, 배터리, 측정, 정지,
   닫기를 세 번 연속 오류 없이 반복(포트를 다시 열 수 있음).
 - 압력 격자가 비어 있으면(책이 압력 센서에 닿지 않을 때, 무게만 3.6kg) 분석 결과는 없다(`None`, 샘플은 "No stable
-  result"). 발 압력이 있는 측정의 분석은 사람이 올라서야 확인할 수 있다.
+  result").
+
+실기기 BLE 확인(2026-10-20, Mac, `2.0.2-RC1`, 사람이 올라선 상태; Bluetooth 권한이 있는 사용자 셸에서 실행):
+
+- Python 샘플(`--ble`): 검색(RSSI -52), 연결, 배터리 100%, 5초 측정, 해제. 62.9kg, 왼발 24.3×9.4cm,
+  오른발 25.0×9.9cm, 기본 모드 프레임 5장.
+- `tools/ble_probe.py`: GATT·MTU 515·연속 측정이 BLE에서 동작함을 확인([BLE 측정 경로](ble-measurement-path.md)).
 
 검증하지 않은 것:
 
-- 사람이 올라선 실측 분석(발 길이·너비), USB 연결이 끊겼다가 다시 이어지는 경우, Windows COM 포트.
-- BLE 실기기: GATT UUID, MTU, BLE 연속 측정 허용 여부, 양산 2.0.1.
+- USB 연결이 끊겼다가 다시 이어지는 경우, Windows COM 포트, 양산 펌웨어 `2.0.1`.
+- BLE 실기기: Android·iOS·Windows에서의 BLE, 양산 2.0.1 (Mac의 `2.0.2-RC1`은 위에서 확인).
 - Android·iOS 기기 실행, 권한 흐름, iOS 앱 링크·서명.
 - 실제 Windows의 USB 드라이버·COM 포트·BLE, C# `SerialTransport`·`BleTransport`의 실제 기기 입출력.
 - Windows ARM64 실행.

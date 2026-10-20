@@ -1,9 +1,17 @@
 {
-  "verified": false,
-  "source": "Existing Python SDK characteristic selection (fisica_sdk/bluetooth_handler.py) and scan filter (port_scanner.py). Not yet confirmed on production firmware 2.0.1.",
+  "verified": true,
+  "source": "Confirmed on Scale firmware 2.0.2-RC1 with tools/ble_probe.py on 2026-10-20 (doc/ble-probe/ble-2.0.2-RC1.json): service 4fafc201-1fb5-459e-8fcc-c5c9c331914b with one characteristic for write and notify (read, write, notify), MTU 515, continuous measurement over BLE acknowledged. Production 2.0.1 speaks the same protocol but was not probed.",
   "name_contains": "Fisica Scale",
   "profiles": [
-    {"name": "scale", "write": "beb5483e-36e1-4688-b7f5-ea07361b26a8", "notify": "beb5483e-36e1-4688-b7f5-ea07361b26a8"},
-    {"name": "nordic_uart", "write": "6e400002-b5a3-f393-e0a9-e50e24dcca9e", "notify": "6e400003-b5a3-f393-e0a9-e50e24dcca9e"}
+    {
+      "name": "scale",
+      "write": "beb5483e-36e1-4688-b7f5-ea07361b26a8",
+      "notify": "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+    },
+    {
+      "name": "nordic_uart",
+      "write": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
+      "notify": "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+    }
   ]
 }
