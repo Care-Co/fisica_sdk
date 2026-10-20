@@ -159,7 +159,7 @@ class FisicaBleProfile {
   static const nordicUart = FisicaBleProfile('6e400002-b5a3-f393-e0a9-e50e24dcca9e', '6e400003-b5a3-f393-e0a9-e50e24dcca9e');
   static const known = [scale, nordicUart];
   static const nameContains = 'Fisica Scale';
-  static const verified = false;
+  static const verified = true;
 }
 /// Why the SDK is in basic mode, by [FisicaModeReason], and what each [FisicaEntitlementWarning] bit means.
 const fisicaLicenseBasicMode = "Basic mode keeps connection, measurement, weight and foot size; raw data and full-rate frames need full mode.";

@@ -158,7 +158,7 @@ data class FisicaBleProfile(val write: String, val notify: String) {
         @JvmField val NORDIC_UART = FisicaBleProfile("6e400002-b5a3-f393-e0a9-e50e24dcca9e", "6e400003-b5a3-f393-e0a9-e50e24dcca9e")
         @JvmField val KNOWN = listOf(SCALE, NORDIC_UART)
         const val NAME_CONTAINS = "Fisica Scale"
-        const val VERIFIED = false
+        const val VERIFIED = true
     }
 }
 /** License messages: why the SDK is in basic mode (by FisicaModeReason) and each FisicaEntitlementWarning bit. */

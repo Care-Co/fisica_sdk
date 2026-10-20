@@ -21,8 +21,25 @@
   스스로 끝나는지, 끝날 때 무엇을 보내는지는 문서에 없다.
 - 오류 코드 6: 측정 제어를 설정된 연결 디바이스가 아닌 쪽에서 하면 제어 오류.
 
-실기기 근거는 한 건뿐이다: Mac USB, `2.0.2-RC1`, USB 설정 + 연속 측정에서 ACK와 645-byte 프레임 확인
-([세션 코어 검증](session-core-verification.md)). BLE 근거는 없다.
+실기기 근거: Mac USB, `2.0.2-RC1`, USB 설정 + 연속 측정에서 ACK와 645-byte 프레임 확인
+([세션 코어 검증](session-core-verification.md)), 그리고 아래 2026-10-20 BLE 실측.
+
+## 실측 결과 (2026-10-20, `2.0.2-RC1`, Mac, 사람이 올라선 상태)
+
+기록: [ble-probe/ble-2.0.2-RC1.json](ble-probe/ble-2.0.2-RC1.json)
+
+| 항목 | 결과 |
+|---|---|
+| 광고 이름 | `FISICA SCALE` (대소문자 무시 필터 `Fisica Scale`과 일치), 광고 서비스 `4fafc201-1fb5-459e-8fcc-c5c9c331914b` |
+| GATT | 그 서비스에 characteristic 하나 `beb5483e-36e1-4688-b7f5-ea07361b26a8` (read, write, notify). 기본 `scale` 프로필과 같음. `nordic_uart`는 없음 |
+| MTU | 515 |
+| 쓰기 | 응답 있는 쓰기(write)만 있음. 응답 없는 쓰기(write without response)는 없음 |
+| 연속 측정(코어 시퀀스: BLE 설정 → 0x51 → 종료 → 해제) | 시작 ACK, 5초에 프레임 13장(간격 357~420ms, USB와 같은 약 2.7장/초), 종료·해제 ACK |
+| 문서의 단일 측정(BLE 설정 → 0x50 8-byte 시작 → 0x50 종료 → 해제) | 시작에 ACK가 오지 않음(3초 대기). 프레임 2장(간격 1140ms, 카운트 인덱스 1, 2), 종료·해제는 ACK |
+
+판정: 표의 첫 줄에 해당한다. 이 펌웨어는 문서와 달리 BLE에서도 연속 측정을 받아들이므로 코어는 바꾸지 않고,
+`wrappers/ble-profile.json`을 검증됨으로 바꿨다. 같은 날 Python 샘플(`--ble`)로 BLE 연결·배터리·5초 측정(62.9kg,
+발 길이·너비)·해제도 확인했다. 양산 `2.0.1`은 같은 프로토콜이지만 아직 실측하지 않았다.
 
 ## 코어를 지금 바꾸지 않은 이유
 

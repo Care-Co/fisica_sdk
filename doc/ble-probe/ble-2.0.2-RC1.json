@@ -1,0 +1,210 @@
+{
+  "name_filter": "Fisica Scale",
+  "devices_seen": 35,
+  "scales": [
+    {
+      "name": "FISICA SCALE",
+      "address": "55576888-0A31-5A55-5D0A-18E0BDDC79D2",
+      "rssi": -55,
+      "services": [
+        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+      ]
+    }
+  ],
+  "address": "55576888-0A31-5A55-5D0A-18E0BDDC79D2",
+  "mtu": 515,
+  "gatt": [
+    {
+      "service": "4fafc201-1fb5-459e-8fcc-c5c9c331914b",
+      "characteristic": "beb5483e-36e1-4688-b7f5-ea07361b26a8",
+      "properties": [
+        "read",
+        "write",
+        "notify"
+      ]
+    }
+  ],
+  "default_profile_matches": true,
+  "profile": {
+    "write": "beb5483e-36e1-4688-b7f5-ea07361b26a8",
+    "notify": "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+  },
+  "continuous": {
+    "firmware": "2.0.2-RC1",
+    "continuous_start_accepted": true,
+    "frames": 13,
+    "frame_interval_ms": {
+      "min": 357,
+      "max": 420
+    },
+    "final_state": "DISCONNECTED",
+    "log": [
+      {
+        "t_ms": 0,
+        "event": "STATE",
+        "state": "IDLE"
+      },
+      {
+        "t_ms": 0,
+        "event": "TRANSMIT",
+        "state": "IDLE",
+        "bytes": "244347000000fff0"
+      },
+      {
+        "t_ms": 56,
+        "event": "RESULT",
+        "state": "IDLE",
+        "operation": "PROBE",
+        "status": "OK",
+        "device_code": 0,
+        "response": "24434701322e302e322d524331fff0"
+      },
+      {
+        "t_ms": 56,
+        "event": "STATE",
+        "state": "STARTING"
+      },
+      {
+        "t_ms": 56,
+        "event": "TRANSMIT",
+        "state": "STARTING",
+        "bytes": "242253000001fff0"
+      },
+      {
+        "t_ms": 146,
+        "event": "TRANSMIT",
+        "state": "STARTING",
+        "bytes": "245153000001fff0"
+      },
+      {
+        "t_ms": 208,
+        "event": "STATE",
+        "state": "MEASURING"
+      },
+      {
+        "t_ms": 208,
+        "event": "RESULT",
+        "state": "MEASURING",
+        "operation": "BEGIN",
+        "status": "OK",
+        "device_code": 0,
+        "response": "245153010000fff0"
+      },
+      {
+        "t_ms": 5213,
+        "event": "STATE",
+        "state": "STOPPING"
+      },
+      {
+        "t_ms": 5213,
+        "event": "TRANSMIT",
+        "state": "STOPPING",
+        "bytes": "245153000000fff0"
+      },
+      {
+        "t_ms": 5277,
+        "event": "STATE",
+        "state": "IDLE"
+      },
+      {
+        "t_ms": 5277,
+        "event": "RESULT",
+        "state": "IDLE",
+        "operation": "END",
+        "status": "OK",
+        "device_code": 0,
+        "response": "245153010000fff0"
+      },
+      {
+        "t_ms": 5277,
+        "event": "STATE",
+        "state": "RELEASING"
+      },
+      {
+        "t_ms": 5277,
+        "event": "TRANSMIT",
+        "state": "RELEASING",
+        "bytes": "242253000000fff0"
+      },
+      {
+        "t_ms": 5366,
+        "event": "STATE",
+        "state": "DISCONNECTED"
+      },
+      {
+        "t_ms": 5366,
+        "event": "RESULT",
+        "state": "DISCONNECTED",
+        "operation": "CLOSE",
+        "status": "OK",
+        "device_code": 0,
+        "response": "242253010000fff0"
+      }
+    ]
+  },
+  "single": {
+    "mode_accepted": true,
+    "single_start_accepted": false,
+    "frames": 2,
+    "count_index_values": [
+      1,
+      2
+    ],
+    "frame_interval_ms": {
+      "min": 1140,
+      "max": 1140
+    },
+    "stop_accepted": true,
+    "release_accepted": true,
+    "log": [
+      {
+        "t_ms": 0,
+        "event": "TRANSMIT",
+        "step": "mode_ble",
+        "bytes": "242253000001fff0"
+      },
+      {
+        "t_ms": 91,
+        "event": "RESPONSE",
+        "header": 34,
+        "accepted": true,
+        "device_code": 0,
+        "bytes": "242253010000fff0"
+      },
+      {
+        "t_ms": 91,
+        "event": "TRANSMIT",
+        "step": "single_start",
+        "bytes": "245053000101fff0"
+      },
+      {
+        "t_ms": 3152,
+        "event": "TRANSMIT",
+        "step": "single_stop",
+        "bytes": "245053000000fff0"
+      },
+      {
+        "t_ms": 3210,
+        "event": "RESPONSE",
+        "header": 80,
+        "accepted": true,
+        "device_code": 0,
+        "bytes": "245053010000fff0"
+      },
+      {
+        "t_ms": 3210,
+        "event": "TRANSMIT",
+        "step": "release",
+        "bytes": "242253000000fff0"
+      },
+      {
+        "t_ms": 3299,
+        "event": "RESPONSE",
+        "header": 34,
+        "accepted": true,
+        "device_code": 0,
+        "bytes": "242253010000fff0"
+      }
+    ]
+  }
+}

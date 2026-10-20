@@ -179,7 +179,7 @@ BLE_PROFILES = {
     'nordic_uart': {'write': '6e400002-b5a3-f393-e0a9-e50e24dcca9e', 'notify': '6e400003-b5a3-f393-e0a9-e50e24dcca9e'},
 }
 BLE_NAME_CONTAINS = 'Fisica Scale'
-BLE_PROFILE_VERIFIED = False
+BLE_PROFILE_VERIFIED = True
 
 # License messages: why the SDK is in basic mode (by reason name) and each warning.
 LICENSE_BASIC_MODE = 'Basic mode keeps connection, measurement, weight and foot size; raw data and full-rate frames need full mode.'
