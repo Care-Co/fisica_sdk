@@ -1,8 +1,25 @@
 # 타사 앱 적용 가이드
 
 SDK/Python 3.0.0, core 2.0.0(C ABI 2.0), Flutter core 0.6.0, Flutter transport 0.1.0,
-Swift/Kotlin/C# 0.3.0 기준. 설치는 회사가 제공한 **바이너리 패키지**로 한다.
-현재 패키지를 공개 레지스트리에서 내려받는 명령은 제공하지 않는다.
+Swift/Kotlin/C# 0.3.0 기준. 설치는 Care&Co가 공개하는 **바이너리 패키지**로 한다.
+
+## 다운로드
+
+패키지는 `https://cdn.carencoinc.com/public/sdk/3.0.0/`에 있고, 개발자 포털의
+[다운로드 페이지](https://developer.fisicahealthcare.com/docs/downloads)가 최신 릴리스의 파일·크기·SHA-256을 보여준다.
+파일 목록은 [manifest.json](https://cdn.carencoinc.com/public/sdk/3.0.0/manifest.json)에도 있다. 모든 고객에게 같은 파일이다.
+
+| 언어 | 파일 |
+|---|---|
+| Python | [Windows x64](https://cdn.carencoinc.com/public/sdk/3.0.0/python/fisica-3.0.0-py3-none-win_amd64.whl), [Windows ARM64](https://cdn.carencoinc.com/public/sdk/3.0.0/python/fisica-3.0.0-py3-none-win_arm64.whl), [macOS universal2](https://cdn.carencoinc.com/public/sdk/3.0.0/python/fisica-3.0.0-py3-none-macosx_11_0_universal2.whl) |
+| C/C++ (core) | [Windows x64](https://cdn.carencoinc.com/public/sdk/3.0.0/core/fisica-core-2.0.0-win_amd64.zip), [Windows ARM64](https://cdn.carencoinc.com/public/sdk/3.0.0/core/fisica-core-2.0.0-win_arm64.zip), [macOS universal2](https://cdn.carencoinc.com/public/sdk/3.0.0/core/fisica-core-2.0.0-macosx_11_0_universal2.zip) |
+| Swift | [fisica-swift-0.3.0.zip](https://cdn.carencoinc.com/public/sdk/3.0.0/swift/fisica-swift-0.3.0.zip) |
+| Kotlin/Java (Android) | [fisica-scale-0.3.0.aar](https://cdn.carencoinc.com/public/sdk/3.0.0/android/fisica-scale-0.3.0.aar), [Kotlin 소스 fisica-kotlin-0.3.0.zip](https://cdn.carencoinc.com/public/sdk/3.0.0/android/fisica-kotlin-0.3.0.zip) |
+| C# | [fisica-dotnet-0.3.0.zip](https://cdn.carencoinc.com/public/sdk/3.0.0/dotnet/fisica-dotnet-0.3.0.zip) + 위 core ZIP |
+| Flutter | [fisica-flutter-0.6.0-platforms.zip](https://cdn.carencoinc.com/public/sdk/3.0.0/flutter/fisica-flutter-0.6.0-platforms.zip), [fisica-flutter-transports-0.1.0.zip](https://cdn.carencoinc.com/public/sdk/3.0.0/flutter/fisica-flutter-transports-0.1.0.zip) |
+| 샘플 | [fisica-partner-samples-3.0.0.zip](https://cdn.carencoinc.com/public/sdk/3.0.0/samples/fisica-partner-samples-3.0.0.zip) |
+
+받은 파일은 manifest의 SHA-256과 비교할 수 있다. 릴리스 절차는 [SDK 릴리스](release.md)에 있다.
 
 ## 공통 설치 원칙
 
@@ -25,8 +42,8 @@ Swift/Kotlin/C# 0.3.0 기준. 설치는 회사가 제공한 **바이너리 패�
   `...-validation.aar`)는 내부 QA용이다. 받았다면 쓰거나 재배포하지 말고 Care&Co에 알린다.
 - 설치/빌드 도구와 외부 의존성을 처음 받는 단계에는 인터넷이 필요할 수 있다.
   설치된 앱의 기본 측정·분석에는 인터넷이 필요 없다.
-- BLE 기본 UUID와 양산 2.0.1의 측정 경로는 실기기 확인 전이다. `verified=false`를
-  유지한다. 샘플 성공이나 Mock 결과를 펌웨어 검증으로 취급하지 않는다.
+- BLE 기본 UUID·MTU·측정 경로는 펌웨어 2.0.2-RC1 실기기로 확인했다(`verified=true`,
+  [BLE 측정 경로](ble-measurement-path.md)). 양산 2.0.1은 같은 프로토콜이지만 아직 실측하지 않았다.
 - 모바일은 BLE 어댑터만 제공한다. USB는 Windows/macOS 가상 Serial 포트다.
   Wi-Fi, Web, Linux/MCU 전용 패키지는 제공하지 않는다.
 
@@ -47,14 +64,13 @@ Swift/Kotlin/C# 0.3.0 기준. 설치는 회사가 제공한 **바이너리 패�
 
 ## Python: Windows/macOS
 
-새 가상환경을 만들고 회사에서 받은 OS별 wheel을 설치한다. 아래 파일명의 PLATFORM은
-Windows x64의 `win_amd64`, ARM64의 `win_arm64`, macOS의 `macosx_11_0_universal2` 등
-실제로 받은 파일명으로 바꾼다. 코어 소스가 있는 저장소를 설치하지 않는다.
+새 가상환경을 만들고 OS별 wheel을 주소로 바로 설치한다. PLATFORM은 Windows x64의 `win_amd64`,
+ARM64의 `win_arm64`, macOS의 `macosx_11_0_universal2`다(위 다운로드 표). 코어 소스가 있는 저장소를 설치하지 않는다.
 
 ```sh
 python -m venv .venv
 # Windows: .venv\Scripts\activate / macOS: source .venv/bin/activate
-python -m pip install /path/to/fisica-3.0.0-py3-none-PLATFORM.whl
+python -m pip install https://cdn.carencoinc.com/public/sdk/3.0.0/python/fisica-3.0.0-py3-none-PLATFORM.whl
 python python/main.py --mock scale-mock.json
 python python/main.py --list
 python python/main.py --usb COM7

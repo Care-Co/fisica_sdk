@@ -187,4 +187,5 @@ jobs:
           path: |
             .build/platforms-validation/android/*.aar
             .build/platforms-validation/android/*.zip
+          include-hidden-files: true  # .build is a dot folder
           retention-days: 14

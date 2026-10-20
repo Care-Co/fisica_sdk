@@ -51,6 +51,7 @@ jobs:
           path: |
             .build/platforms-validation/apple/*.zip
             .build/platforms-validation/*.zip
+          include-hidden-files: true  # .build is a dot folder
           retention-days: 14
       - name: Customer macOS wheel and core ZIP (production keys only; universal2 is the macOS default)
         run: |

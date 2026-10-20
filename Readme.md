@@ -9,8 +9,12 @@ without one the SDK runs in **basic mode** (see below). No device firmware chang
 
 ## Install a binary Python release
 
+Packages for every language are on the CDN (`https://cdn.carencoinc.com/public/sdk/3.0.0/`, listed on the developer
+portal's [downloads page](https://developer.fisicahealthcare.com/docs/downloads) and in
+[doc/partner-quickstart.md](doc/partner-quickstart.md)). PLATFORM is `win_amd64`, `win_arm64` or `macosx_11_0_universal2`:
+
 ```sh
-python -m pip install /path/to/fisica-3.0.0-py3-none-PLATFORM.whl
+python -m pip install https://cdn.carencoinc.com/public/sdk/3.0.0/python/fisica-3.0.0-py3-none-PLATFORM.whl
 ```
 
 Use a wheel for your OS/architecture. Python 3.9+ is required. Wheels are built for macOS
@@ -30,7 +34,7 @@ there is no need to build private core sources.
 Optional image rendering (`sdk.render()`, OpenCV and Pillow):
 
 ```sh
-python -m pip install '/path/to/fisica-3.0.0-py3-none-PLATFORM.whl[visualization]'
+python -m pip install 'fisica[visualization] @ https://cdn.carencoinc.com/public/sdk/3.0.0/python/fisica-3.0.0-py3-none-PLATFORM.whl'
 ```
 
 ## Python measurement API
