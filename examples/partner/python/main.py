@@ -97,7 +97,9 @@ def run():
         transport = mock_transport(args.mock)
     else:
         requested = args.usb or args.ble
-        device = next((item for item in sdk.scan_devices() if item['id'] == requested), None)
+        # Scan only the link asked for: a USB run never needs Bluetooth (or its permission prompt).
+        found = sdk.scan_devices(transport='Serial' if args.usb else 'Bluetooth')
+        device = next((item for item in found if item['id'] == requested), None)
         if device is None:
             parser.error('Device not found; run --list and use the exact reported ID')
     try:

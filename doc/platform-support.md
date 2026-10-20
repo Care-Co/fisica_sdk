@@ -139,10 +139,19 @@ CI는 요청할 때만 수동으로 돌린다. 자체 호스팅 러너로 옮긴
 (QA: `python tools/build_release.py --validation`과
 `python tools/verify_wheel.py --validation .build/releases-validation/3.0.0/fisica-3.0.0+validation-py3-none-PLATFORM.whl`).
 
+실기기 USB 확인(2026-10-20, Mac, `/dev/cu.usbserial-0001`, 펌웨어 `2.0.2-RC1`, Scale 위에 책 3.6kg):
+
+- Python 샘플(`--usb`): 연결, 펌웨어 확인, 배터리 100%, 5초 측정, 정지, 연결 해제. 기본 모드 프레임 5장(초당 1장).
+- Python 전체 모드(테스트 키, 개발 코어): 원본 패킷 645바이트, 내보내기에 전체 프레임 포함. 프레임 간격 345~390ms(평균
+  약 367ms, 초당 약 2.7장)로 고르다. SDK는 10ms마다 읽으므로 이 값이 이 펌웨어의 전송 속도다.
+- C# 샘플(`usb /dev/cu.usbserial-0001`, macOS .NET 8, PR #27의 `SerialTransport`): 연결, 펌웨어 확인, 배터리, 측정, 정지,
+  닫기를 세 번 연속 오류 없이 반복(포트를 다시 열 수 있음).
+- 압력 격자가 비어 있으면(책이 압력 센서에 닿지 않을 때, 무게만 3.6kg) 분석 결과는 없다(`None`, 샘플은 "No stable
+  result"). 발 압력이 있는 측정의 분석은 사람이 올라서야 확인할 수 있다.
+
 검증하지 않은 것:
 
-- 실제 Scale 연결 전부(이번 작업 중 USB·BLE 기기가 연결돼 있지 않았다). 직전 기록은
-  [세션 코어 검증](session-core-verification.md)의 Mac USB `2.0.2-RC1`뿐이다.
+- 사람이 올라선 실측 분석(발 길이·너비), USB 연결이 끊겼다가 다시 이어지는 경우, Windows COM 포트.
 - BLE 실기기: GATT UUID, MTU, BLE 연속 측정 허용 여부, 양산 2.0.1.
 - Android·iOS 기기 실행, 권한 흐름, iOS 앱 링크·서명.
 - 실제 Windows의 USB 드라이버·COM 포트·BLE, C# `SerialTransport`·`BleTransport`의 실제 기기 입출력.
