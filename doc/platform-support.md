@@ -238,13 +238,14 @@ ZIP의 ABI별 `.so`, Flutter의 Windows DLL)와 `release.json`이 없으면 실�
 
 ## CI (자체 호스팅 러너)
 
-두 워크플로(`platform-builds.yml`, `apple.yml`)는 요청할 때만 수동으로 실행하고(workflow_dispatch),
+세 워크플로(`platform-builds.yml`, `apple.yml`, `windows.yml`)는 요청할 때만 수동으로 실행하고(workflow_dispatch),
 GitHub 호스팅 러너를 쓰지 않는다. 포털(developer-portal)의 빌드·배포도 자체 호스팅 러너만 쓴다.
 
 | 작업 | 러너 라벨 | 러너 | 준비 |
 |---|---|---|---|
 | `linux`, `android` | `self-hosted, carenco` | mac-host-runner1~3 (Linux X64, colima) | 없음. 매번 새 `ubuntu:24.04` 컨테이너에서 apt로 도구(CMake, make 포함)를 깔고, .NET 8 SDK는 Microsoft 8.0.425 tarball을 체크섬 확인 후 받아 두고, Flutter·Android SDK·NDK 26.3·Gradle 8.14·pip·pub 캐시는 Docker 볼륨 `fisica-sdk-ci-cache`에 둔다 |
 | `apple` | `self-hosted, macOS` | Company-Mac (ARM64) | Xcode(iOS SDK 포함). 첫 단계에서 찾고 없으면 실패한다. 다른 직원의 Mac이라 주말과 평일 20시(KST) 이후에만 실행한다 |
+| `windows-x64`, `windows-arm64` | `self-hosted, Windows, carenco` | windows-host-runner1 (Windows 11 x64 노트북, `C:\actions-runner`, 서비스 `NETWORK SERVICE`) | 2026-10-20 설치: Visual Studio 2022 Build Tools(MSVC x64·ARM64, Windows 11 SDK 22621), .NET 8 SDK, Git, CMake, Python 3.13(기기 전체). 전원 연결 시 잠자기·최대 절전 안 함, 덮개를 닫아도 동작. 러너 폴더는 사용자 폴더 밖이어야 한다(서비스 계정이 `C:\Users\<이름>`을 읽지 못해 시작 직후 멈춘다) |
 
 - `linux`: 개발 빌드와 pytest, C ABI 계약(UBSan), C# 계약(net8.0), Linux 휠·core ZIP을 release와 `--validation`으로
   빌드해 설치 검증(release는 테스트 서명 키 거절, validation은 전체 모드), 설치한 release 휠로 Python 샘플,
@@ -261,16 +262,8 @@ GitHub 호스팅 러너를 쓰지 않는다. 포털(developer-portal)의 빌드�
 - 올리는 아티팩트는 QA 빌드라 이름이 `-validation`으로 끝난다(`fisica-android-validation`,
   `fisica-apple-binaries-validation`). 고객에게 주지 않는다.
 
-Windows CI(x64 휠 빌드와 Python 3.9~3.14 설치 확인, ARM64 교차 빌드)는 자체 호스팅 Windows 러너가 없어
-2026-10-17에 뺐다. 러너가 생기면 `git show a44754b:.github/workflows/windows-wheel.yml`과
-`platform-builds.yml`의 `windows-arm64` 작업을 되살리고 `runs-on`을 `[self-hosted, Windows, X64, carenco]`로 바꾼다.
-그 워크플로는 `build_release.py --validation`으로 빌드하므로 `verify_wheel.py`에 `--validation`을 붙이고,
-아티팩트 이름에 `-validation`을 붙인다(`fisica-windows-x64-validation` 등). 휠과 core ZIP의 파일 이름도
-`fisica-3.0.0+validation-py3-none-win_amd64.whl`, `fisica-core-2.0.0-win_amd64-validation.zip`이 되므로
-업로드 경로의 glob을 그에 맞춘다(`--output`이 없으면 `.build/releases-validation/`). 러너에 필요한 것:
-
-- Windows 10/11 또는 Server 2022, x64. Care-Co 조직에 러너로 등록하고 라벨 `carenco`를 붙인다. 서비스로 실행.
-- Visual Studio 2022 Build Tools: "C++를 사용한 데스크톱 개발", MSVC v143 x64/x86 도구, MSVC v143 ARM64 도구,
-  Windows 11 SDK (10.0.22621).
-- .NET 8 SDK (`dotnet`이 PATH에 있어야 한다)와 Git for Windows.
-- Python은 `actions/setup-python`이 러너 도구 캐시에 받는다.
+- `windows-x64`: MSVC로 개발 빌드와 pytest, C# 계약(Windows), `--validation` 휠·core ZIP 빌드와 설치 검증,
+  고객용(운영 키만) 휠·core ZIP 빌드·감사·설치 검증(테스트 키 거절). Python은 기기의 Python 3.13으로 만든 임시 venv를
+  쓴다. 예전 GitHub 호스팅 워크플로가 하던 Python 3.9~3.14 설치 확인은 아직 없다(러너 도구 캐시 설치는 확인 전).
+- `windows-arm64`: 같은 러너에서 MSVC ARM64 도구로 교차 빌드(QA와 고객용)와 감사. ARM64 실행은 하지 않는다.
+- QA 아티팩트 이름은 `fisica-windows-x64-validation`, `fisica-windows-arm64-validation`이다.

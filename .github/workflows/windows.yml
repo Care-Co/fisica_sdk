@@ -1,0 +1,87 @@
+name: Windows core, wheels and C# wrapper
+# Manual only (Actions > Run workflow, or gh workflow run): wrappers and platform builds are checked
+# when someone asks for it. Verify locally with tools/verify_bindings.py and pytest first.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  # A newer run on the same branch replaces the one in progress.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  windows-x64:
+    if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # Self-hosted Windows runner (x64 laptop, service account): Visual Studio 2022 Build Tools with the x64 and
+    # ARM64 MSVC tools and the Windows 11 SDK, the .NET 8 SDK, Git and Python 3.13 are installed machine-wide.
+    runs-on: [self-hosted, Windows, carenco]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with: {arch: x64}
+      - name: Python in a throwaway venv (the machine's Python stays untouched)
+        run: |
+          python -m venv "$env:RUNNER_TEMP\venv"
+          "$env:RUNNER_TEMP\venv\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$env:RUNNER_TEMP\venv\Scripts\python" -m pip install -q --disable-pip-version-check --upgrade build pytest numpy packaging pyserial bleak
+          & "$env:RUNNER_TEMP\venv\Scripts\python" --version
+      - name: Build and test the native core
+        run: |
+          python tools/native_build.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest -q
+      - name: C# binding, client and serial transport on Windows
+        run: python tools/verify_bindings.py dotnet
+      # QA build (--validation): trusts the test key; the wheel carries +validation, archives end in -validation.
+      - run: python tools/build_release.py --validation --output release
+      - name: Install and test the QA wheel outside the source tree
+        run: |
+          $wheel = Get-ChildItem release -Recurse -Filter '*-win_amd64.whl'
+          if ($wheel.Count -ne 1) { throw 'Expected exactly one Windows x64 wheel' }
+          python tools/verify_wheel.py --validation $wheel.FullName
+      - name: Customer wheel and core ZIP (production keys only)
+        run: |
+          python tools/build_release.py --output customer
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $wheel = Get-ChildItem customer -Recurse -Filter '*-win_amd64.whl'
+          if ($wheel.Count -ne 1) { throw 'Expected exactly one Windows x64 wheel' }
+          python tools/verify_wheel.py $wheel.FullName
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        continue-on-error: true  # artifact storage is billed to the account; the checks above are the result
+        with:
+          name: fisica-windows-x64-validation  # QA build: trusts the test key, never for customers
+          path: |
+            release/**/*-win_amd64.whl
+            release/**/fisica-core-*-win_amd64-validation.zip
+            release/**/artifact-manifest.json
+          retention-days: 14
+
+  windows-arm64:
+    if: github.event.repository.private && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    # Cross-built on the x64 runner with the MSVC ARM64 tools; ARM64 code is not run here.
+    runs-on: [self-hosted, Windows, carenco]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with: {persist-credentials: false}
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with: {arch: amd64_arm64}
+      - name: Python in a throwaway venv
+        run: |
+          python -m venv "$env:RUNNER_TEMP\venv"
+          "$env:RUNNER_TEMP\venv\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          & "$env:RUNNER_TEMP\venv\Scripts\python" -m pip install -q --disable-pip-version-check --upgrade build
+      - run: python tools/build_release.py --validation --platform win_arm64 --output release
+      - run: python tools/build_release.py --platform win_arm64 --output customer
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        continue-on-error: true
+        with:
+          name: fisica-windows-arm64-validation
+          path: |
+            release/**/*-win_arm64.whl
+            release/**/fisica-core-*-win_arm64-validation.zip
+            release/**/artifact-manifest.json
+          retention-days: 14
