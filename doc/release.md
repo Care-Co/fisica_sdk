@@ -1,8 +1,10 @@
 # SDK 릴리스: CDN 배포
 
-고객용 패키지는 `https://cdn.carencoinc.com/public/sdk/<버전>/`에서 받는다. 개발자 포털의 다운로드 페이지
-(`/docs/downloads`)는 `latest.json`이 가리키는 릴리스의 파일 목록을 보여준다. 새 릴리스를 올리면 포털을 다시 배포하지
-않아도 링크가 바뀐다.
+고객용 패키지는 `https://cdn.carencoinc.com/public/sdk/<버전>/`에 있고, 개발자 포털에 로그인한 사람만 받는다.
+CloudFront의 `/public/sdk/*` 동작은 서명된 주소만 열고(신뢰할 수 있는 키 그룹 `fisica-sdk-download`), 포털이 로그인을
+확인한 뒤 몇 분짜리 서명 주소로 보낸다. 포털은 `FDP_SDK_CDN_KEY_PAIR_ID`·`FDP_SDK_CDN_PRIVATE_KEY`(운영 Secret
+`fisica-developer-env`)로 서명하고, 누가 받았는지는 기록하지 않는다. 다운로드 페이지(`/docs/downloads`)는 `latest.json`이
+가리키는 릴리스의 파일 목록을 보여주므로, 새 릴리스를 올리면 포털을 다시 배포하지 않아도 목록이 바뀐다.
 
 ## 주소와 파일
 
@@ -10,7 +12,7 @@ S3 `carenco-prod` 버킷(서울)의 `public/sdk/`를 CloudFront(`cdn.carencoinc.
 
 | 경로 | 내용 | 캐시 |
 |---|---|---|
-| `public/sdk/latest.json` | 최신 릴리스 번호와 그 manifest 주소 | 5분 |
+| `public/sdk/latest.json` | 최신 릴리스 번호와 그 manifest 주소 (포털이 서명해 읽음) | 5분 |
 | `public/sdk/<버전>/manifest.json` | 파일마다 분류·이름·주소·크기·SHA-256·플랫폼, 커밋, 게시 시각 | 1년, 바뀌지 않음 |
 | `public/sdk/<버전>/python/` | `fisica-<버전>-py3-none-<플랫폼>.whl` (macOS universal2, Windows x64, Windows ARM64) | 1년, 바뀌지 않음 |
 | `public/sdk/<버전>/core/` | `fisica-core-<코어>-<플랫폼>.zip` (C/C++) | 〃 |
