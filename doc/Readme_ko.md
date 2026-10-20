@@ -18,14 +18,14 @@
 
 ### wheel로 설치
 
-Care&Co가 CDN에 공개한 바이너리 wheel을 주소로 바로 설치합니다. PLATFORM은 `win_amd64`, `win_arm64`,
-`macosx_11_0_universal2`입니다. 다른 언어 패키지와 파일 목록은 개발자 포털의
-[다운로드 페이지](https://developer.fisicahealthcare.com/docs/downloads)에 있습니다. 소스 설치는 제공하지 않습니다.
+개발자 포털의 [다운로드 페이지](https://developer.fisicahealthcare.com/docs/downloads)에서 Fisica 계정으로 로그인한 뒤
+OS별 바이너리 wheel을 받아 설치합니다. PLATFORM은 `win_amd64`, `win_arm64`, `macosx_11_0_universal2`입니다.
+다른 언어 패키지도 같은 페이지에 있습니다. 소스 설치는 제공하지 않습니다.
 
 ```bash
-python -m pip install https://cdn.carencoinc.com/public/sdk/3.0.0/python/fisica-3.0.0-py3-none-PLATFORM.whl
+python -m pip install ./fisica-3.0.0-py3-none-PLATFORM.whl
 # 이미지 렌더링(sdk.render)을 쓸 때: OpenCV·Pillow 포함
-python -m pip install 'fisica[visualization] @ https://cdn.carencoinc.com/public/sdk/3.0.0/python/fisica-3.0.0-py3-none-PLATFORM.whl'
+python -m pip install './fisica-3.0.0-py3-none-PLATFORM.whl[visualization]'
 ```
 
 PLATFORM은 Windows x64는 `win_amd64`, ARM64는 `win_arm64`, macOS는 `macosx_11_0_universal2`
