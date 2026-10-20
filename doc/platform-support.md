@@ -245,7 +245,7 @@ GitHub 호스팅 러너를 쓰지 않는다. 포털(developer-portal)의 빌드�
 |---|---|---|---|
 | `linux`, `android` | `self-hosted, carenco` | mac-host-runner1~3 (Linux X64, colima) | 없음. 매번 새 `ubuntu:24.04` 컨테이너에서 apt로 도구(CMake, make 포함)를 깔고, .NET 8 SDK는 Microsoft 8.0.425 tarball을 체크섬 확인 후 받아 두고, Flutter·Android SDK·NDK 26.3·Gradle 8.14·pip·pub 캐시는 Docker 볼륨 `fisica-sdk-ci-cache`에 둔다 |
 | `apple` | `self-hosted, macOS` | Company-Mac (ARM64) | Xcode(iOS SDK 포함). 첫 단계에서 찾고 없으면 실패한다. 다른 직원의 Mac이라 주말과 평일 20시(KST) 이후에만 실행한다 |
-| `windows-x64`, `windows-arm64` | `self-hosted, Windows, carenco` | windows-host-runner1 (Windows 11 x64 노트북, `C:\actions-runner`, 서비스 `NETWORK SERVICE`) | 2026-10-20 설치: Visual Studio 2022 Build Tools(MSVC x64·ARM64, Windows 11 SDK 22621), .NET 8 SDK, Git, CMake, Python 3.13(기기 전체). 전원 연결 시 잠자기·최대 절전 안 함, 덮개를 닫아도 동작. 러너 폴더는 사용자 폴더 밖이어야 한다(서비스 계정이 `C:\Users\<이름>`을 읽지 못해 시작 직후 멈춘다) |
+| `windows-x64`, `windows-arm64` | `self-hosted, Windows` | windows-host-runner1 (Windows 11 x64 노트북, `C:\actions-runner`, 서비스 `NETWORK SERVICE`) | 2026-10-20 설치: Visual Studio 2022 Build Tools(MSVC x64·ARM64, Windows 11 SDK 22621), .NET 8 SDK, Git, CMake, Python 3.13(기기 전체). 전원 연결 시 잠자기·최대 절전 안 함, 덮개를 닫아도 동작. 러너 폴더는 사용자 폴더 밖이어야 한다(서비스 계정이 `C:\Users\<이름>`을 읽지 못해 시작 직후 멈춘다). `carenco` 라벨은 붙이지 않는다: Linux 작업과 포털 배포가 `[self-hosted, carenco]`로 러너를 고른다 |
 
 - `linux`: 개발 빌드와 pytest, C ABI 계약(UBSan), C# 계약(net8.0), Linux 휠·core ZIP을 release와 `--validation`으로
   빌드해 설치 검증(release는 테스트 서명 키 거절, validation은 전체 모드), 설치한 release 휠로 Python 샘플,
